@@ -1,0 +1,128 @@
+# =============================================================================
+# deploy/docker-compose.yml
+# 开发/研发环境：训练子系统 + 测试子系统 + 授权子系统
+# 不包含生产推理服务（生产使用 docker-compose.prod.yml）
+#
+# 使用方法：
+#   docker-compose up -d
+#   docker-compose logs -f train
+#
+# 前置条件：
+#   宿主机已创建 /data/ai_platform/ 目录结构（见 mount_template/）
+# =============================================================================
+
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# 公共配置（使用 YAML anchors 避免重复）
+# ---------------------------------------------------------------------------
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+# ---------------------------------------------------------------------------
+# 服务定义
+# ---------------------------------------------------------------------------
+services:
+
+  # ─── 授权管理子系统 ───────────────────────────────────────────────────────
+  license:
+    image: agilestar/ai-license-mgr:latest
+    container_name: ai-license-mgr
+    <<: *default-restart
+    ports:
+      - "8003:8003"
+    volumes:
+      - /data/ai_platform/licenses:/data/licenses:rw
+      - /data/ai_platform/logs/license:/app/logs:rw
+    environment:
+      - TZ=Asia/Shanghai
+      - AI_LICENSE_DB=/data/licenses/license.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging: *default-logging
+
+  # ─── 训练子系统 ──────────────────────────────────────────────────────────
+  train:
+    image: agilestar/ai-train:latest
+    container_name: ai-train
+    <<: *default-restart
+    ports:
+      - "8001:8001"
+    volumes:
+      - /data/ai_platform/datasets:/workspace/datasets:ro
+      - /data/ai_platform/models:/workspace/models:rw
+      - /data/ai_platform/logs/train:/workspace/logs:rw
+    environment:
+      - TZ=Asia/Shanghai
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  # ─── 测试子系统 ──────────────────────────────────────────────────────────
+  test:
+    image: agilestar/ai-test:latest
+    container_name: ai-test
+    <<: *default-restart
+    ports:
+      - "8002:8002"
+    volumes:
+      - /data/ai_platform/models:/workspace/models:ro
+      - /data/ai_platform/datasets:/workspace/datasets:ro
+      - /data/ai_platform/logs/test:/workspace/logs:rw
+    environment:
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging: *default-logging
+
+  # ─── Redis（训练任务消息队列）────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ai-redis
+    <<: *default-restart
+    ports:
+      - "127.0.0.1:6379:6379"   # 仅宿主机本地可访问，不对外暴露
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+# ---------------------------------------------------------------------------
+# 数据卷
+# ---------------------------------------------------------------------------
+volumes:
+  redis-data:
+    driver: local
