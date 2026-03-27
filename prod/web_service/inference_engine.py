@@ -124,6 +124,67 @@ class ProdInferenceEngine:
                 })
             return {"face_detected": bool(dets), "detections": dets, "count": len(dets)}
 
+        # ── Auto-generated capability postprocessing stubs ──────────────────────────
+
+        elif cap == "face_liveness_silent" or cap == "deepfake_detect" or cap == "image_tamper_detect" or cap == "voice_liveness" or cap == "eseal_verify" or cap == "bill_verify" or cap == "video_tamper_detect":
+            out = outputs[0].flatten()
+            if len(out) >= 2:
+                exp = np.exp(out - out.max()); prob = exp / exp.sum()
+                s0, s1 = float(prob[0]), float(prob[1])
+            else:
+                s1 = float(1 / (1 + np.exp(-out[0]))); s0 = 1.0 - s1
+            return {"is_positive": s1 > threshold, "score_positive": round(s1, 4), "score_negative": round(s0, 4)}
+
+        elif cap == "face_verify" or cap == "face_quality" or cap == "crowd_count" or cap == "voiceprint_verify" or cap == "text_similarity" or cap == "signature_compare":
+            raw = float(outputs[0].flatten()[0])
+            score = float(1 / (1 + np.exp(-raw))) if abs(raw) > 1 else max(0.0, min(1.0, raw))
+            return {"score": round(score, 4), "label": "positive" if score > threshold else "negative"}
+
+        elif cap == "face_recognition" or cap == "person_reid" or cap == "image_retrieval" or cap == "voiceprint_search" or cap == "audio_fingerprint" or cap == "entity_link":
+            vec = outputs[0].flatten()
+            norm = float(np.linalg.norm(vec))
+            if norm > 1e-8:
+                vec = vec / norm
+            return {"embedding": [round(float(v), 6) for v in vec.tolist()], "dim": len(vec)}
+
+        elif cap == "face_landmark" or cap == "pose_estimate":
+            pts = outputs[0].reshape(-1, 3) if outputs[0].ndim >= 2 else outputs[0].reshape(-1, 2)
+            kps = [{"x": round(float(r[0]),4), "y": round(float(r[1]),4),
+                    **({"conf": round(float(r[2]),4)} if r.shape[0]>2 else {})} for r in pts]
+            return {"keypoints": kps, "count": len(kps)}
+
+        elif cap == "person_detect" or cap == "object_detect" or cap == "scene_text_detect" or cap == "vehicle_detect" or cap == "id_card_front_detect" or cap == "id_card_back_detect" or cap == "seal_recognize" or cap == "eseal_detect" or cap == "contract_sign_locate" or cap == "contract_seal_detect":
+            raw = outputs[0].flatten()
+            dets = []
+            for i in range(0, len(raw) - 4, 5):
+                conf = float(1 / (1 + np.exp(-raw[i + 4])))
+                if conf > threshold:
+                    dets.append({"label": "object", "confidence": round(conf, 4),
+                                 "bbox": [round(float(v), 4) for v in raw[i:i+4]]})
+            return {"count": len(dets), "detections": dets}
+
+        elif cap == "plate_recognize" or cap == "ocr_general" or cap == "ocr_print" or cap == "ocr_handwriting" or cap == "ocr_signature" or cap == "ocr_table" or cap == "ocr_invoice" or cap == "ocr_bank_card" or cap == "ocr_business_license" or cap == "ocr_vehicle_license" or cap == "ocr_driver_license" or cap == "id_card_ocr" or cap == "passport_cn_ocr" or cap == "passport_intl_ocr" or cap == "household_register_ocr" or cap == "social_security_ocr" or cap == "hk_macao_permit_ocr" or cap == "form_extract":
+            raw = outputs[0].flatten().tolist()
+            return {"text_blocks": [{"text": "TODO", "confidence": round(float(max(raw)) if raw else 0.0, 4)}]}
+
+        elif cap == "semantic_segment" or cap == "instance_segment" or cap == "panoptic_segment":
+            mask = outputs[0]
+            pred = int(np.argmax(mask, axis=0).flatten()[0]) if mask.ndim>=3 and mask.shape[0]>1 else 0
+            return {"dominant_class": pred, "mask_shape": list(mask.shape)}
+
+        elif cap == "face_beautify" or cap == "face_swap" or cap == "face_desensitize" or cap == "face_3d_reconstruct" or cap == "image_super_res" or cap == "image_dehaze" or cap == "image_denoise" or cap == "image_inpaint" or cap == "image_enhance" or cap == "watermark_extract" or cap == "doc_rectify":
+            return {"output_shape": list(outputs[0].shape), "note": "enhancement — image tensor output"}
+
+        elif cap == "asr" or cap == "tts" or cap == "audio_denoise" or cap == "vocal_separate" or cap == "asr_punct_restore" or cap == "speaker_diarize":
+            return {"result": "TODO", "note": "audio capability stub"}
+
+        elif cap == "face_liveness_action" or cap == "face_attribute" or cap == "action_recognize" or cap == "gesture_recognize" or cap == "body_action_recognize" or cap == "image_classify" or cap == "logo_recognize" or cap == "product_recognize" or cap == "vehicle_attribute" or cap == "doc_classify" or cap == "language_identify" or cap == "speech_emotion" or cap == "text_segment" or cap == "pos_tag" or cap == "ner" or cap == "sentiment_analyze" or cap == "text_classify" or cap == "keyword_extract" or cap == "text_summarize" or cap == "text_correct" or cap == "sensitive_detect" or cap == "content_compliance" or cap == "intent_recognize" or cap == "slot_fill" or cap == "text_extract" or cap == "contract_extract" or cap == "doc_classify_rpa" or cap == "liveness_anti_attack" or cap == "video_frame_extract" or cap == "video_track" or cap == "video_condense" or cap == "video_summarize" or cap == "contract_summary" or cap == "contract_amount" or cap == "contract_party":
+            out  = outputs[0].flatten()
+            exp  = np.exp(out - out.max()); prob = (exp / exp.sum()).tolist()
+            top  = sorted(enumerate(prob), key=lambda x: x[1], reverse=True)
+            return {"top_class": top[0][0], "top_score": round(top[0][1], 4),
+                    "all_scores": [round(p, 4) for p in prob]}
+
         else:
             # Generic classification
             out  = outputs[0].flatten()
