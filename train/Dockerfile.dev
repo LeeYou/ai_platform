@@ -1,0 +1,37 @@
+# =============================================================================
+# train/Dockerfile.dev
+# 训练子系统轻量版镜像（无 CUDA，用于本地开发/验证）
+# 生产使用 train/Dockerfile（含 CUDA）
+# =============================================================================
+
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY train/backend/requirements.txt train/backend/requirements.txt
+RUN pip install --no-cache-dir -r train/backend/requirements.txt
+
+COPY train/frontend/ train/frontend/
+RUN cd train/frontend && npm install && npm run build
+
+COPY train/backend/ train/backend/
+
+ENV PYTHONUNBUFFERED=1 \
+    DATASETS_ROOT=/workspace/datasets \
+    MODELS_ROOT=/workspace/models \
+    REDIS_URL=redis://redis:6379/0
+
+EXPOSE 8001
+
+WORKDIR /app/train/backend
+CMD ["sh", "-c", \
+    "celery -A tasks.celery_app worker --loglevel=info --detach --logfile=/tmp/celery.log 2>/dev/null || true && \
+     uvicorn main:app --host 0.0.0.0 --port 8001"]
