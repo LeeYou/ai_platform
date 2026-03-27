@@ -165,7 +165,11 @@ private:
                             &tm_exp.tm_year, &tm_exp.tm_mon, &tm_exp.tm_mday) == 3) {
                 tm_exp.tm_year -= 1900;
                 tm_exp.tm_mon  -= 1;
-                time_t exp_t    = timegm(&tm_exp);
+#ifdef _WIN32
+                time_t exp_t = _mkgmtime(&tm_exp);
+#else
+                time_t exp_t = timegm(&tm_exp);
+#endif
                 time_t now_t    = time(nullptr);
                 int64_t diff    = static_cast<int64_t>(exp_t) - static_cast<int64_t>(now_t);
                 cached_.days_remaining = static_cast<int32_t>(diff / 86400);

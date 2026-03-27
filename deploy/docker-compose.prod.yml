@@ -26,6 +26,9 @@ services:
   # ─── 生产推理服务 ─────────────────────────────────────────────────────────
   prod:
     image: agilestar/ai-prod:latest
+    build:
+      context: ..
+      dockerfile: prod/Dockerfile
     container_name: ai-prod
     restart: always
     ports:
