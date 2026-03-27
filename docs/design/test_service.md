@@ -21,6 +21,7 @@
 | 后端框架 | Python FastAPI |
 | 前端框架 | Vue3 + Element Plus |
 | 推理后端 | ONNXRuntime（CPU/GPU 自动选择） |
+| License 校验 | **不需要**（测试子系统为内部研发工具，仅在公司内网使用，无需授权控制） |
 
 ### 挂载目录
 

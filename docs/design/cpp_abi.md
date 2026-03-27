@@ -142,10 +142,15 @@ AI_EXPORT int32_t AiReload(AiHandle handle, const char* new_model_dir);
 /**
  * 获取能力和模型信息（JSON 字符串）。
  *
+ * 与 snprintf 行为一致：
+ *   - 成功时返回实际写入字节数（不含 '\0'）
+ *   - buf_len 不足时返回所需缓冲区大小（正整数，不含 '\0'），调用方可据此分配更大缓冲区再次调用
+ *   - handle 无效或其他错误时返回负数（对应 AiErrorCode 取负，如 -5001）
+ *
  * @param handle    实例 Handle
- * @param info_buf  调用方分配的缓冲区
- * @param buf_len   缓冲区长度（字节）
- * @return 实际写入字节数（不含 \0），若 buf_len 不足返回所需长度（负值）
+ * @param info_buf  调用方分配的缓冲区，可传 NULL 配合 buf_len=0 查询所需大小
+ * @param buf_len   缓冲区长度（字节），传 0 时仅返回所需大小
+ * @return 见上述说明
  */
 AI_EXPORT int32_t AiGetInfo(AiHandle handle, char* info_buf, int32_t buf_len);
 
