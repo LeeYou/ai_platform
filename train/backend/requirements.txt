@@ -5,5 +5,5 @@ celery==5.4.0
 redis==5.0.8
 websockets==13.0
 pydantic==2.9.0
-python-multipart==0.0.12
+python-multipart==0.0.22
 aiofiles==24.1.0
