@@ -54,6 +54,9 @@ services:
   # ─── 训练子系统 ──────────────────────────────────────────────────────────
   train:
     image: agilestar/ai-train:latest
+    build:
+      context: ..
+      dockerfile: train/Dockerfile
     container_name: ai-train
     <<: *default-restart
     ports:
@@ -64,7 +67,9 @@ services:
       - /data/ai_platform/logs/train:/workspace/logs:rw
     environment:
       - TZ=Asia/Shanghai
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
+      - DATASETS_ROOT=/workspace/datasets
+      - MODELS_ROOT=/workspace/models
     depends_on:
       - redis
     deploy:
