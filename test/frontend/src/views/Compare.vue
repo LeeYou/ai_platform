@@ -26,7 +26,7 @@
         <el-divider />
         <p style="margin-bottom:12px;color:#606266;">
           共对比 <b>{{ result.count }}</b> 个样本：
-          版本 <el-tag size="small">{{ result.version_a }}</el-tag> vs
+          版本 <el-tag size="small">{{ result.version_a }}</el-tag> 对比
           <el-tag size="small" type="success">{{ result.version_b }}</el-tag>
         </p>
         <el-table :data="result.comparisons" style="width:100%" size="small">

@@ -110,12 +110,12 @@ const chartData = ref({ epochs: [], loss: [], accuracy: [] })
 
 const chartOption = computed(() => ({
   tooltip: { trigger: 'axis' },
-  legend: { data: ['Loss', 'Accuracy'] },
-  xAxis: { type: 'category', data: chartData.value.epochs, name: 'Epoch' },
+  legend: { data: ['损失值', '准确率'] },
+  xAxis: { type: 'category', data: chartData.value.epochs, name: '轮次' },
   yAxis: { type: 'value' },
   series: [
-    { name: 'Loss', type: 'line', data: chartData.value.loss, smooth: true },
-    { name: 'Accuracy', type: 'line', data: chartData.value.accuracy, smooth: true },
+    { name: '损失值', type: 'line', data: chartData.value.loss, smooth: true },
+    { name: '准确率', type: 'line', data: chartData.value.accuracy, smooth: true },
   ]
 }))
 

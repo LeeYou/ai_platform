@@ -15,7 +15,7 @@
       >
         <el-menu-item index="/">
           <el-icon><Odometer /></el-icon>
-          <span>Dashboard</span>
+          <span>仪表盘</span>
         </el-menu-item>
         <el-menu-item index="/datasets">
           <el-icon><FolderOpen /></el-icon>
