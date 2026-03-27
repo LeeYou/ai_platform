@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.26)
 
 # Runtime 库（libai_runtime.so）
 # 职责：动态加载能力 SO、管理实例池、License 校验缓存、模型包验证
-# Phase 3 实现，此处为骨架占位
 add_library(ai_runtime SHARED
+    ai_runtime.cpp
     capability_loader.cpp
     instance_pool.cpp
     license_checker.cpp
@@ -27,6 +27,13 @@ set_target_properties(ai_runtime PROPERTIES
 # Linux：-ldl 用于 dlopen/dlsym/dlclose
 if(UNIX AND NOT APPLE)
     target_link_libraries(ai_runtime PRIVATE dl)
+endif()
+
+# OpenSSL for SHA-256 in model_loader (optional but preferred)
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+    target_link_libraries(ai_runtime PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(ai_runtime PRIVATE AI_HAVE_OPENSSL=1)
 endif()
 
 ai_target_apply_flags(ai_runtime)
