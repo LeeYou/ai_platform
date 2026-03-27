@@ -1,0 +1,388 @@
+"""Test Management API — single sample test, batch test, version compare.
+
+Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agilestar.cn
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import os
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import numpy as np
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+MODELS_ROOT   = os.getenv("MODELS_ROOT",   "/workspace/models")
+DATASETS_ROOT = os.getenv("DATASETS_ROOT", "/workspace/datasets")
+LOG_DIR       = "./data/test_logs"
+
+# In-memory batch job store
+_batch_jobs: dict[str, dict] = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    os.makedirs(LOG_DIR, exist_ok=True)
+    yield
+
+
+app = FastAPI(
+    title="Test Management API",
+    version="1.0.0",
+    description="Backend for AI model single/batch inference testing",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _list_models() -> list[dict]:
+    """Scan MODELS_ROOT for capability/version dirs with manifest.json."""
+    results = []
+    if not os.path.isdir(MODELS_ROOT):
+        return results
+    for cap in sorted(os.listdir(MODELS_ROOT)):
+        cap_dir = os.path.join(MODELS_ROOT, cap)
+        if not os.path.isdir(cap_dir):
+            continue
+        for version in sorted(os.listdir(cap_dir)):
+            v_dir = os.path.join(cap_dir, version)
+            manifest_path = os.path.join(v_dir, "manifest.json")
+            if not os.path.exists(manifest_path):
+                continue
+            try:
+                with open(manifest_path, encoding="utf-8") as f:
+                    manifest = json.load(f)
+            except Exception:
+                manifest = {}
+            results.append({
+                "capability":    cap,
+                "version":       version,
+                "model_dir":     v_dir,
+                "manifest":      manifest,
+                "last_modified": datetime.fromtimestamp(
+                    os.path.getmtime(manifest_path), tz=timezone.utc
+                ).isoformat(),
+            })
+    return results
+
+
+def _decode_image(data: bytes) -> np.ndarray:
+    import cv2  # type: ignore
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Cannot decode image")
+    return img
+
+
+def _image_to_base64(img: np.ndarray) -> str:
+    import base64
+    import cv2  # type: ignore
+    _, buf = cv2.imencode(".jpg", img)
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def _draw_result(img: np.ndarray, result: dict, capability: str) -> np.ndarray:
+    """Overlay inference result on image for visualisation."""
+    import cv2  # type: ignore
+    vis = img.copy()
+    h, w = vis.shape[:2]
+
+    if capability in ("recapture_detect",):
+        label = result.get("label", "")
+        score = result.get("score_recaptured", 0)
+        color = (0, 0, 255) if result.get("is_recaptured") else (0, 200, 0)
+        text  = f"{label}: {score:.2f}"
+        cv2.putText(vis, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+    elif capability == "face_detect":
+        for det in result.get("detections", []):
+            x1, y1, x2, y2 = det["bbox"]
+            x1i, y1i = int(x1 * w), int(y1 * h)
+            x2i, y2i = int(x2 * w), int(y2 * h)
+            cv2.rectangle(vis, (x1i, y1i), (x2i, y2i), (0, 255, 0), 2)
+            cv2.putText(vis, f"face {det['confidence']:.2f}",
+                        (x1i, y1i - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+    else:
+        label = str(result.get("top_class", ""))
+        score = str(result.get("top_score", ""))
+        cv2.putText(vis, f"class {label}: {score}",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 128, 0), 2)
+
+    return vis
+
+
+async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path: str) -> None:
+    from inferencers import get_inferencer
+    import cv2  # type: ignore
+
+    job = _batch_jobs[job_id]
+    job["status"] = "running"
+    log_path = os.path.join(LOG_DIR, f"batch_{job_id}.json")
+    job["log_path"] = log_path
+
+    inferencer = get_inferencer(capability, model_dir)
+    img_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+    samples = []
+    for root, _, files in os.walk(dataset_path):
+        for fn in files:
+            if os.path.splitext(fn)[1].lower() in img_exts:
+                samples.append(os.path.join(root, fn))
+    samples.sort()
+
+    job["total"] = len(samples)
+    job["done"]  = 0
+    results = []
+
+    for fp in samples:
+        img = cv2.imread(fp)
+        if img is None:
+            continue
+        try:
+            r = inferencer.infer(img)
+        except Exception as exc:
+            r = {"error": str(exc)}
+        results.append({"file": fp, **r})
+        job["done"] += 1
+
+    # Simple accuracy calculation for binary classification
+    correct = 0
+    total_valid = 0
+    for r in results:
+        if "error" in r:
+            continue
+        total_valid += 1
+        label_dir = os.path.basename(os.path.dirname(r["file"])).lower()
+        if capability == "recapture_detect":
+            gt = "recaptured" in label_dir
+            pred = r.get("is_recaptured", False)
+            if gt == pred:
+                correct += 1
+
+    accuracy = round(correct / total_valid, 4) if total_valid > 0 else None
+
+    report = {
+        "capability": capability,
+        "model_dir": model_dir,
+        "total_samples": len(samples),
+        "processed": total_valid,
+        "accuracy": accuracy,
+        "results": results,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+    job["status"]      = "done"
+    job["accuracy"]    = accuracy
+    job["processed"]   = total_valid
+    job["finished_at"] = report["finished_at"]
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@app.get("/health", tags=["health"])
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/v1/models", tags=["models"])
+def list_models():
+    return _list_models()
+
+
+@app.post("/api/v1/infer/single", tags=["inference"])
+async def single_infer(
+    capability: str = Form(...),
+    version: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """Single sample inference with result visualisation."""
+    from inferencers import get_inferencer
+
+    model_dir = os.path.join(MODELS_ROOT, capability, version)
+    if not os.path.isdir(model_dir):
+        raise HTTPException(status_code=404, detail=f"Model not found: {capability}/{version}")
+
+    raw = await file.read()
+    try:
+        img = _decode_image(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    inferencer = get_inferencer(capability, model_dir)
+    result = inferencer.infer(img)
+
+    vis = _draw_result(img, result, capability)
+    vis_b64 = _image_to_base64(vis)
+
+    return {
+        "capability": capability,
+        "version":    version,
+        "result":     result,
+        "vis_image":  vis_b64,  # base64 JPEG
+    }
+
+
+class BatchRequest(BaseModel):
+    capability: str
+    version: str
+    dataset_path: str
+
+
+@app.post("/api/v1/infer/batch", tags=["inference"], status_code=202)
+async def batch_infer(req: BatchRequest):
+    model_dir = os.path.join(MODELS_ROOT, req.capability, req.version)
+    if not os.path.isdir(model_dir):
+        raise HTTPException(status_code=404, detail=f"Model not found: {req.capability}/{req.version}")
+    if not os.path.isdir(req.dataset_path):
+        raise HTTPException(status_code=404, detail=f"Dataset path not found: {req.dataset_path}")
+
+    job_id = str(uuid.uuid4())
+    _batch_jobs[job_id] = {
+        "job_id":       job_id,
+        "capability":   req.capability,
+        "version":      req.version,
+        "dataset_path": req.dataset_path,
+        "status":       "pending",
+        "total":        0,
+        "done":         0,
+        "accuracy":     None,
+        "log_path":     None,
+        "created_at":   datetime.now(timezone.utc).isoformat(),
+        "finished_at":  None,
+    }
+    asyncio.create_task(_run_batch(job_id, req.capability, model_dir, req.dataset_path))
+    return _batch_jobs[job_id]
+
+
+@app.get("/api/v1/infer/batch/{job_id}", tags=["inference"])
+def get_batch_job(job_id: str):
+    if job_id not in _batch_jobs:
+        raise HTTPException(status_code=404, detail="Batch job not found")
+    return _batch_jobs[job_id]
+
+
+@app.get("/api/v1/infer/batch/{job_id}/report", tags=["inference"])
+def get_batch_report(job_id: str):
+    if job_id not in _batch_jobs:
+        raise HTTPException(status_code=404, detail="Batch job not found")
+    log_path = _batch_jobs[job_id].get("log_path")
+    if not log_path or not os.path.exists(log_path):
+        raise HTTPException(status_code=404, detail="Report not ready")
+    with open(log_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+class CompareRequest(BaseModel):
+    capability: str
+    version_a: str
+    version_b: str
+    dataset_path: str
+    max_samples: int = 20
+
+
+@app.post("/api/v1/infer/compare", tags=["inference"])
+async def compare_versions(req: CompareRequest):
+    """Synchronous side-by-side comparison of two model versions."""
+    import cv2  # type: ignore
+    from inferencers import get_inferencer
+
+    dir_a = os.path.join(MODELS_ROOT, req.capability, req.version_a)
+    dir_b = os.path.join(MODELS_ROOT, req.capability, req.version_b)
+    for d in (dir_a, dir_b):
+        if not os.path.isdir(d):
+            raise HTTPException(status_code=404, detail=f"Model dir not found: {d}")
+    if not os.path.isdir(req.dataset_path):
+        raise HTTPException(status_code=404, detail="Dataset path not found")
+
+    inf_a = get_inferencer(req.capability, dir_a)
+    inf_b = get_inferencer(req.capability, dir_b)
+
+    img_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+    samples = []
+    for root, _, files in os.walk(req.dataset_path):
+        for fn in sorted(files):
+            if os.path.splitext(fn)[1].lower() in img_exts:
+                samples.append(os.path.join(root, fn))
+    samples = samples[: req.max_samples]
+
+    comparisons = []
+    for fp in samples:
+        img = cv2.imread(fp)
+        if img is None:
+            continue
+        r_a = inf_a.infer(img)
+        r_b = inf_b.infer(img)
+        comparisons.append({
+            "file":    fp,
+            "result_a": r_a,
+            "result_b": r_b,
+        })
+
+    return {
+        "capability": req.capability,
+        "version_a":  req.version_a,
+        "version_b":  req.version_b,
+        "count":      len(comparisons),
+        "comparisons": comparisons,
+    }
+
+
+@app.websocket("/ws/batch/{job_id}")
+async def ws_batch_progress(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    try:
+        while True:
+            job = _batch_jobs.get(job_id)
+            if not job:
+                await websocket.send_text('{"type":"error","msg":"job not found"}')
+                break
+            import json as _json
+            await websocket.send_text(_json.dumps({
+                "type":     "progress",
+                "status":   job["status"],
+                "total":    job["total"],
+                "done":     job["done"],
+                "accuracy": job["accuracy"],
+            }))
+            if job["status"] in ("done", "failed"):
+                await websocket.send_text(_json.dumps({"type": "done", "status": job["status"]}))
+                break
+            await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# Serve frontend
+_frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")

@@ -90,6 +90,9 @@ services:
   # ─── 测试子系统 ──────────────────────────────────────────────────────────
   test:
     image: agilestar/ai-test:latest
+    build:
+      context: ..
+      dockerfile: test/Dockerfile
     container_name: ai-test
     <<: *default-restart
     ports:
