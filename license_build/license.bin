@@ -1,0 +1,15 @@
+{
+  "capabilities": ["face_detect", "handwriting_reco"],
+  "customer_id": "CUST-001",
+  "customer_name": "Test Customer",
+  "issued_at": "2024-01-01T00:00:00Z",
+  "issuer": "agilestar.cn",
+  "license_id": "LS-20240101-0001",
+  "license_type": "commercial",
+  "machine_fingerprint": "",
+  "max_instances": 4,
+  "signature": "uzFB1ULlBnOZ0cc4CONJqBSWWc4YCkK2zcR/6YvIBbcZfLDhbBjK9vVjm6MWPVDcWhnU3QJprhOuKfFZyswyhvUy7aQWyA+IWjG6QO9L5dAl274zUbgbRudGJBfAIJ7QKveXGmRELDbR8FcAagijFFqq+02U5UwFXoMtdIQ35hSqLxG8wTYZASzzw36b/xHceuAiGboTqJkTboroIBcOdu+Tz0GW2TyIMizxJ3vCKWobTeO8NZ6aft8HrJA7jzjZ6EJB6Wag15yXNZVuONbziEeHrUjKQ8UEhSOjHnWMo2loaVXTZrp1WogoR2xme9sptHAUXW8Yx/UP+K0z0O911A==",
+  "valid_from": "2024-01-01T00:00:00Z",
+  "valid_until": "2099-12-31T23:59:59Z",
+  "version_constraint": ">=1.0.0,<2.0.0"
+}
