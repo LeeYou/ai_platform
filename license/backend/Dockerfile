@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY license/backend/ backend/
 COPY --from=frontend-builder /app/license/frontend/dist frontend/dist
 
+# Ensure log directory exists (volume mount may override at runtime)
+RUN mkdir -p /app/logs
+
 EXPOSE 8003
 WORKDIR /app/backend
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]

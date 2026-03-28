@@ -55,7 +55,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { singleInfer } from '../api/index.js'
+import { singleInfer, extractErrorMessage } from '../api/index.js'
 
 const route = useRoute()
 const form = ref({
@@ -83,7 +83,7 @@ const doInfer = async () => {
     result.value   = res.data.result
     visImage.value = res.data.vis_image
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '推理失败')
+    ElMessage.error('推理失败：' + extractErrorMessage(e))
   } finally {
     loading.value = false
   }

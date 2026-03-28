@@ -91,7 +91,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getLicenses, getCustomers, downloadLicense, renewLicense, revokeLicense } from '../api/index.js'
+import { getLicenses, getCustomers, downloadLicense, renewLicense, revokeLicense, extractErrorMessage } from '../api/index.js'
 import LicenseStatusTag from '../components/LicenseStatusTag.vue'
 
 const loading = ref(false)
@@ -129,7 +129,7 @@ async function loadList() {
     list.value = res.data?.items ?? res.data ?? []
     total.value = res.data?.total ?? list.value.length
   } catch (e) {
-    ElMessage.error('加载授权列表失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('加载授权列表失败：' + extractErrorMessage(e))
   } finally {
     loading.value = false
   }
@@ -163,7 +163,7 @@ async function handleDownload(row) {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    ElMessage.error('下载失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('下载失败：' + extractErrorMessage(e))
   }
 }
 
@@ -182,7 +182,7 @@ async function handleRenew() {
     renewDialog.value = false
     loadList()
   } catch (e) {
-    ElMessage.error('续期失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('续期失败：' + extractErrorMessage(e))
   } finally {
     submitting.value = false
   }
@@ -196,7 +196,7 @@ async function handleRevoke(row) {
     loadList()
   } catch (e) {
     if (e === 'cancel') return
-    ElMessage.error('吊销失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('吊销失败：' + extractErrorMessage(e))
   }
 }
 

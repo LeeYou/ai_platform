@@ -89,7 +89,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getCustomers, createLicense, downloadLicense } from '../api/index.js'
+import { getCustomers, createLicense, downloadLicense, extractErrorMessage } from '../api/index.js'
 
 const step = ref(0)
 const submitting = ref(false)
@@ -163,7 +163,7 @@ async function handleSubmit() {
       version_constraint: '', machine_fingerprint: '', privkey_path: '',
     }
   } catch (e) {
-    ElMessage.error('生成授权失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('生成授权失败：' + extractErrorMessage(e))
   } finally {
     submitting.value = false
   }

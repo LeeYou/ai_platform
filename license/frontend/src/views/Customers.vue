@@ -59,7 +59,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../api/index.js'
+import { getCustomers, createCustomer, updateCustomer, deleteCustomer, extractErrorMessage } from '../api/index.js'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -90,7 +90,7 @@ async function loadList() {
     list.value = res.data?.items ?? res.data ?? []
     total.value = res.data?.total ?? list.value.length
   } catch (e) {
-    ElMessage.error('加载客户列表失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('加载客户列表失败：' + extractErrorMessage(e))
   } finally {
     loading.value = false
   }
@@ -129,7 +129,7 @@ async function handleSubmit() {
     dialogVisible.value = false
     loadList()
   } catch (e) {
-    ElMessage.error('操作失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('操作失败：' + extractErrorMessage(e))
   } finally {
     submitting.value = false
   }
@@ -143,7 +143,7 @@ async function handleDelete(row) {
     loadList()
   } catch (e) {
     if (e === 'cancel') return
-    ElMessage.error('删除失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('删除失败：' + extractErrorMessage(e))
   }
 }
 

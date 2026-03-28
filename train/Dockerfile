@@ -62,6 +62,9 @@ ENV PYTHONUNBUFFERED=1 \
     MODELS_ROOT=/workspace/models \
     REDIS_URL=redis://redis:6379/0
 
+# Ensure log directory exists (volume mount may override at runtime)
+RUN mkdir -p /workspace/logs
+
 EXPOSE 8001
 
 WORKDIR /app/train/backend

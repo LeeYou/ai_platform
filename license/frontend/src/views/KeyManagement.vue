@@ -64,7 +64,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getKeys, createKey, downloadPublicKey } from '../api/index.js'
+import { getKeys, createKey, downloadPublicKey, extractErrorMessage } from '../api/index.js'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -89,7 +89,7 @@ async function loadList() {
     const res = await getKeys()
     list.value = res.data?.items ?? res.data ?? []
   } catch (e) {
-    ElMessage.error('加载密钥列表失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('加载密钥列表失败：' + extractErrorMessage(e))
   } finally {
     loading.value = false
   }
@@ -109,7 +109,7 @@ async function handleGenerate() {
     generateDialog.value = false
     loadList()
   } catch (e) {
-    ElMessage.error('生成失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('生成失败：' + extractErrorMessage(e))
   } finally {
     submitting.value = false
   }
@@ -125,7 +125,7 @@ async function handleDownloadPubKey(row) {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    ElMessage.error('下载公钥失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('下载公钥失败：' + extractErrorMessage(e))
   }
 }
 

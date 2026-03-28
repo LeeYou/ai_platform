@@ -41,12 +41,15 @@ def _setup_logging() -> logging.Logger:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)
 
-    root = logging.getLogger()
-    root.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
-    root.addHandler(file_handler)
-    root.addHandler(console_handler)
+    # Attach handlers to a named logger (not root) so that uvicorn's
+    # dictConfig() cannot remove them when it reconfigures the root logger.
+    app_logger = logging.getLogger("train")
+    app_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    app_logger.addHandler(file_handler)
+    app_logger.addHandler(console_handler)
+    app_logger.propagate = False
 
-    return logging.getLogger("train")
+    return app_logger
 
 
 logger = _setup_logging()

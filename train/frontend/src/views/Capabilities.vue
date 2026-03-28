@@ -69,7 +69,7 @@
 import { ref, onMounted } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { listCapabilities, createCapability, updateCapability, deleteCapability } from '../api/index.js'
+import { listCapabilities, createCapability, updateCapability, deleteCapability, extractErrorMessage } from '../api/index.js'
 
 const loading = ref(false)
 const capabilities = ref([])
@@ -123,7 +123,7 @@ const doSave = async () => {
     dialogVisible.value = false
     await load()
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '操作失败')
+    ElMessage.error('操作失败：' + extractErrorMessage(e))
   }
 }
 
@@ -133,7 +133,7 @@ const doDelete = async (row) => {
     ElMessage.success('已删除')
     await load()
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '删除失败')
+    ElMessage.error('删除失败：' + extractErrorMessage(e))
   }
 }
 

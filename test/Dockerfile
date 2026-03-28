@@ -34,6 +34,9 @@ ENV PYTHONUNBUFFERED=1 \
     MODELS_ROOT=/workspace/models \
     DATASETS_ROOT=/workspace/datasets
 
+# Ensure log directory exists (volume mount may override at runtime)
+RUN mkdir -p /workspace/logs
+
 EXPOSE 8002
 
 WORKDIR /app/test/backend

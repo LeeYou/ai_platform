@@ -87,7 +87,7 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   listCapabilities, listJobs, createJob,
-  stopJob, pauseJob, resumeJob, getJobLogs
+  stopJob, pauseJob, resumeJob, getJobLogs, extractErrorMessage
 } from '../api/index.js'
 
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
@@ -151,7 +151,7 @@ const doCreate = async () => {
     newDialogVisible.value = false
     await load()
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '创建失败')
+    ElMessage.error('创建失败：' + extractErrorMessage(e))
   }
 }
 

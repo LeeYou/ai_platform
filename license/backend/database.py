@@ -2,7 +2,12 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./data/license.db")
+# Support AI_LICENSE_DB (path set in docker-compose) or DATABASE_URL (standard)
+_license_db = os.environ.get("AI_LICENSE_DB")
+if _license_db:
+    DATABASE_URL = f"sqlite:///{_license_db}"
+else:
+    DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./data/license.db")
 
 engine = create_engine(
     DATABASE_URL,

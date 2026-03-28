@@ -63,7 +63,7 @@
 <script setup>
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { compareVersions } from '../api/index.js'
+import { compareVersions, extractErrorMessage } from '../api/index.js'
 
 const form = ref({ capability: '', version_a: '', version_b: '', dataset_path: '', max_samples: 20 })
 const loading = ref(false)
@@ -86,7 +86,7 @@ const doCompare = async () => {
     const res = await compareVersions(form.value)
     result.value = res.data
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '对比失败')
+    ElMessage.error('对比失败：' + extractErrorMessage(e))
   } finally {
     loading.value = false
   }

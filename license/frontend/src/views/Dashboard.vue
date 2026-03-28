@@ -64,7 +64,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getExpiringLicenses, getCustomers, getLicenses } from '../api/index.js'
+import { getExpiringLicenses, getCustomers, getLicenses, extractErrorMessage } from '../api/index.js'
 import LicenseStatusTag from '../components/LicenseStatusTag.vue'
 
 const loading = ref(false)
@@ -97,7 +97,7 @@ async function loadData() {
     stats.value.expiring7 = expiring7Res.data?.total ?? (expiring7Res.data?.items?.length ?? 0)
     expiringList.value = expiring30Res.data?.items ?? expiring30Res.data ?? []
   } catch (e) {
-    ElMessage.error('加载数据失败：' + (e.response?.data?.detail || e.message))
+    ElMessage.error('加载数据失败：' + extractErrorMessage(e))
   } finally {
     loading.value = false
   }

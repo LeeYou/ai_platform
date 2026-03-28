@@ -43,7 +43,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listCapabilities, listModels, setCurrentModel } from '../api/index.js'
+import { listCapabilities, listModels, setCurrentModel, extractErrorMessage } from '../api/index.js'
 
 const loading = ref(false)
 const models = ref([])
@@ -72,7 +72,7 @@ const setCurrent = async (row) => {
     ElMessage.success(`已将 ${row.version} 设为当前版本`)
     await load()
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '操作失败')
+    ElMessage.error('操作失败：' + extractErrorMessage(e))
   }
 }
 
