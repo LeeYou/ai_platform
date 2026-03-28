@@ -17,6 +17,10 @@ BUILTIN_ROOT = os.getenv("BUILTIN_ROOT", "/app")
 LICENSE_PATH = os.getenv("AI_LICENSE_PATH",
                           os.path.join(MOUNT_ROOT, "licenses", "license.bin"))
 
+# Public key path for license signature verification
+PUBKEY_PATH = os.getenv("AI_PUBKEY_PATH",
+                         os.path.join(MOUNT_ROOT, "licenses", "pubkey.pem"))
+
 
 def resolve_model_dir(capability: str) -> str | None:
     """Return model 'current' dir — mount takes priority over built-in."""

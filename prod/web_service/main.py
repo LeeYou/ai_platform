@@ -70,6 +70,7 @@ try:
     from inference_engine import ProdInferenceEngine
     from resource_resolver import (
         LICENSE_PATH,
+        PUBKEY_PATH,
         list_available_capabilities,
         resolve_model_dir,
     )
@@ -106,6 +107,69 @@ def _load_engines() -> None:
 # License status helper
 # ---------------------------------------------------------------------------
 
+def _verify_license_signature(license_json: str) -> bool:
+    """Verify license RSA signature using mounted public key. Returns True if valid."""
+    if not os.path.exists(PUBKEY_PATH):
+        logger.warning("No public key at %s — skipping signature verification", PUBKEY_PATH)
+        return True  # no pubkey = skip verification (dev/test mode)
+    try:
+        with open(PUBKEY_PATH, encoding="utf-8") as f:
+            pubkey_pem = f.read()
+        # Re-use the same signing logic as license_signer for verification
+        import base64
+        import hashlib
+        data = json.loads(license_json)
+        sig_b64 = data.get("signature")
+        if not sig_b64:
+            logger.warning("License has no signature field")
+            return False
+        # Build canonical JSON (sorted keys, no spaces, excluding signature)
+        payload = {k: v for k, v in data.items() if k != "signature"}
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=False).encode("utf-8")
+        sig_bytes = base64.b64decode(sig_b64)
+        # Use cryptography library if available, otherwise skip
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.exceptions import InvalidSignature
+        public_key = serialization.load_pem_public_key(pubkey_pem.encode("utf-8"))
+        public_key.verify(
+            sig_bytes,
+            canonical,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+        return True
+    except ImportError:
+        logger.warning("cryptography library not available — skipping signature verification")
+        return True
+    except InvalidSignature:
+        logger.error("License signature verification FAILED — signature invalid")
+        return False
+    except Exception as exc:
+        logger.error("License signature verification error: %s", exc)
+        return False
+
+
+def _compute_days_remaining(valid_until: str | None) -> int:
+    """Compute days remaining from ISO-8601 valid_until string."""
+    if not valid_until:
+        return 9999  # permanent license
+    try:
+        from datetime import datetime as dt
+        # Parse ISO-8601 (with or without Z/offset)
+        exp_str = valid_until.replace("Z", "+00:00")
+        exp = dt.fromisoformat(exp_str)
+        now = dt.now(timezone.utc)
+        diff = (exp - now).days
+        return max(diff, 0)
+    except Exception:
+        return 0
+
+
 def _license_status() -> dict:
     if not os.path.exists(LICENSE_PATH):
         return {
@@ -117,12 +181,31 @@ def _license_status() -> dict:
         }
     try:
         with open(LICENSE_PATH, encoding="utf-8") as f:
-            data = json.load(f)
+            raw = f.read()
+        data = json.loads(raw)
+
+        # Verify RSA signature against mounted public key
+        if not _verify_license_signature(raw):
+            return {
+                "status":         "signature_invalid",
+                "license_id":     data.get("license_id"),
+                "valid_until":    None,
+                "days_remaining": 0,
+                "capabilities":   [],
+            }
+
+        # Compute days remaining and detect expiration
+        days = _compute_days_remaining(data.get("valid_until"))
+        if days <= 0 and data.get("valid_until"):
+            status = "expired"
+        else:
+            status = "active"
+
         return {
-            "status":         data.get("status", "unknown"),
+            "status":         status,
             "license_id":     data.get("license_id"),
             "valid_until":    data.get("valid_until"),
-            "days_remaining": data.get("days_remaining", 0),
+            "days_remaining": days,
             "capabilities":   data.get("capabilities", []),
         }
     except Exception as exc:
@@ -136,6 +219,10 @@ def _check_license(capability: str) -> None:
     if lic["status"] == "missing":
         # Dev/test mode — no license file present, allow all
         return
+    if lic["status"] == "signature_invalid":
+        raise HTTPException(status_code=403,
+                            detail={"code": 4005, "message": "License signature invalid",
+                                    "capability": capability})
     if lic["status"] == "expired":
         raise HTTPException(status_code=403,
                             detail={"code": 4002, "message": "License expired",
@@ -144,7 +231,8 @@ def _check_license(capability: str) -> None:
         raise HTTPException(status_code=403,
                             detail={"code": 4001, "message": "License invalid",
                                     "capability": capability})
-    if capability not in lic.get("capabilities", []):
+    caps = lic.get("capabilities", [])
+    if capability not in caps and "*" not in caps:
         raise HTTPException(status_code=403,
                             detail={"code": 4004, "message": "Capability not licensed",
                                     "capability": capability})

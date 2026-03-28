@@ -34,9 +34,16 @@ fi
 if [ -d "/mnt/ai_platform/licenses" ]; then
     export AI_LICENSE_PATH="/mnt/ai_platform/licenses/license.bin"
     echo "[ai-prod] Using mounted license:  ${AI_LICENSE_PATH}"
+    if [ -f "/mnt/ai_platform/licenses/pubkey.pem" ]; then
+        export AI_PUBKEY_PATH="/mnt/ai_platform/licenses/pubkey.pem"
+        echo "[ai-prod] Using mounted pubkey:   ${AI_PUBKEY_PATH}"
+    else
+        echo "[ai-prod] ⚠ No pubkey.pem found — signature verification will be skipped"
+    fi
 else
     export AI_LICENSE_PATH="${AI_LICENSE_PATH:-/app/licenses/license.bin}"
     echo "[ai-prod] Using built-in license: ${AI_LICENSE_PATH}"
+    export AI_PUBKEY_PATH="${AI_PUBKEY_PATH:-/app/licenses/pubkey.pem}"
 fi
 
 # ---------------------------------------------------------------------------
