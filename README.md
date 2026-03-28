@@ -140,6 +140,8 @@ ai_platform/
 | [C++ ABI 接口规范](docs/design/cpp_abi.md) | 统一 C ABI、生命周期接口、错误码 |
 | [C++ 编码规范](docs/cpp_coding_standard.md) | Google C++ 风格 + 公司定制规则 |
 | [开发计划](docs/development_plan.md) | 7 个阶段、里程碑、交付物清单 |
+| [AI 能力超市总览](docs/ai_capability_market_overview.md) | 整体架构图、流程图、105 种能力全景、业务场景 |
+| [Docker 镜像与容器管理手册](docs/docker_operations_manual.md) | 6 种镜像构建、启停、日志、健康检查、故障排查 |
 
 ---
 
