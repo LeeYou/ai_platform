@@ -28,6 +28,7 @@
 12. [常用运维命令速查表](#12-常用运维命令速查表)
 13. [故障排查指南](#13-故障排查指南)
 14. [附录：端口分配表](#14-附录端口分配表)
+15. [附录：授权安全模型](#15-附录授权安全模型)
 
 ---
 
@@ -640,6 +641,7 @@ docker stop ai-prod && docker rm ai-prod
 | `BUILTIN_ROOT` | `/app` | 内置资源根目录 |
 | `AI_LICENSE_PATH` | `/mnt/ai_platform/licenses/license.bin` | License 文件路径 |
 | `AI_PUBKEY_PATH` | `/mnt/ai_platform/licenses/pubkey.pem` | 公钥文件路径（用于签名验证） |
+| `TRUSTED_PUBKEY_SHA256` | `""` | 受信公钥 SHA-256 指纹（64 位 hex）。设置后拒绝不匹配的公钥，防伪造 |
 
 #### 验证
 
@@ -1091,47 +1093,120 @@ docker system prune -a --volumes
 
 ### 11.2 交付包内容
 
+> **重要**：推理 SO（`libai_runtime.so`）和生产镜像中硬编码了该客户公钥的 SHA-256
+> 指纹，因此**每个客户的交付包中 SO 和镜像都是该客户专属的**。详见
+> [附录：授权安全模型](#15-附录授权安全模型)。
+
 ```
 delivery_package/
 ├── docker/
-│   └── agilestar-ai-prod-linux-x86_64-v1.0.0.tar.gz   # 生产镜像
+│   └── agilestar-ai-prod-linux-x86_64-v1.0.0-<客户>.tar.gz  # 客户专属生产镜像
+├── libs/
+│   └── linux_x86_64/
+│       └── libai_runtime.so              # 客户专属推理 SO（含公钥指纹）
 ├── docs/
-│   ├── ai_capability_market_overview.md                 # AI 能力超市总览
-│   ├── docker_operations_manual.md                      # 本手册
-│   └── design/                                          # 设计文档
-├── sdk_linux_x86_64/include/agilestar/                  # C/C++ SDK 头文件
+│   ├── ai_capability_market_overview.md  # AI 能力超市总览
+│   ├── docker_operations_manual.md       # 本手册
+│   └── design/                           # 设计文档
+├── sdk_linux_x86_64/include/agilestar/  # C/C++ SDK 头文件
 ├── tools/
-│   └── license_tool                                     # 机器指纹采集工具
+│   └── license_tool                      # 机器指纹采集工具
 ├── mount_template/
-│   ├── init_host_dirs.sh                                # 宿主机目录初始化脚本
+│   ├── init_host_dirs.sh                 # 宿主机目录初始化脚本
 │   └── README.md
-└── DELIVERY_MANIFEST.txt                                # 交付清单和部署说明
+└── DELIVERY_MANIFEST.txt                 # 交付清单和部署说明
 ```
 
-### 11.3 客户端部署步骤
+### 11.3 客户交付标准流程（⭐ 每客户必须执行）
 
-> **部署模式：通用镜像 + 运行时挂载**
+> **安全模型：公钥指纹硬编码 + 运行时挂载**
 >
-> 生产镜像不包含任何客户特定内容。公钥、授权文件、模型、SO 插件均通过
-> 宿主机目录挂载注入。一个镜像可服务所有客户。
+> 为防止攻击者自行伪造密钥对和授权文件来绕过签名验证，我们将**客户公钥的
+> SHA-256 指纹硬编码**进推理 SO 和生产镜像中。这意味着：
+>
+> - 即使攻击者替换了 `pubkey.pem` 和 `license.bin`，SO 和 Python 服务
+>   都会检测到公钥指纹不匹配，**拒绝验证**。
+> - **每个新客户交付前**，必须用该客户公钥的指纹重新编译 SO / 重建镜像。
+> - 密钥轮换时也需重新编译 SO / 重建镜像。
+
+#### 标准流程（研发侧操作）
+
+```bash
+# =====================================================================
+# 客户交付标准流程
+# =====================================================================
+
+# 步骤 1：创建客户专属密钥对
+#   前端：🔑 密钥管理 → 生成新密钥对
+#   名称建议：customer-<客户简称>-<年份>，如 customer-huawei-2026
+#   私钥路径：/data/ai_platform/keys/<客户简称>/private_key.pem
+
+# 步骤 2：下载该客户公钥
+#   前端"下载公钥"按钮 → 保存为 pubkey.pem
+
+# 步骤 3：计算该客户公钥的 SHA-256 指纹
+python3 scripts/compute_pubkey_fingerprint.py /path/to/customer/pubkey.pem
+# 输出示例：a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890
+
+# 步骤 4：用该指纹重新编译推理 SO（libai_runtime.so）
+cd cpp
+mkdir -p build && cd build
+cmake .. \
+  -GNinja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DTRUSTED_PUBKEY_SHA256=<步骤3输出的指纹>
+ninja ai_runtime
+# 编译产物：build/lib/libai_runtime.so
+
+# 步骤 5：用该指纹重建生产 Docker 镜像
+#   方式 A：通过 ARG 注入（推荐）
+docker build \
+  -t agilestar/ai-prod:1.0.0-<客户简称> \
+  -f prod/Dockerfile \
+  --build-arg TRUSTED_PUBKEY_SHA256=<步骤3输出的指纹> \
+  .
+
+#   方式 B：通过环境变量（运行时注入，镜像通用但安全性略低）
+docker run -d \
+  --name ai-prod \
+  -e TRUSTED_PUBKEY_SHA256=<步骤3输出的指纹> \
+  ... \
+  agilestar/ai-prod:1.0.0
+
+# 步骤 6：生成该客户的 License 文件
+#   前端：➕ 生成授权 → 选择步骤1创建的密钥对 → 配置能力和有效期
+#   下载 license.bin
+
+# 步骤 7：打包交付
+./scripts/package_delivery.sh 1.0.0 /tmp/delivery_<客户简称>
+# 将步骤4编译的 SO 覆盖进交付包的 libs/ 目录
+# 将步骤5构建的镜像导出进交付包的 docker/ 目录
+# 将 pubkey.pem 和 license.bin 一并交付
+
+# 步骤 8：导出客户专属镜像
+docker save agilestar/ai-prod:1.0.0-<客户简称> | gzip > \
+  /tmp/delivery_<客户简称>/docker/agilestar-ai-prod-linux-x86_64-v1.0.0-<客户简称>.tar.gz
+```
+
+#### 客户端部署步骤
 
 ```bash
 # 1. 初始化宿主机目录
 sudo bash mount_template/init_host_dirs.sh
 
-# 2. 导入 Docker 镜像（通用镜像，不含客户数据）
-docker load < docker/agilestar-ai-prod-linux-x86_64-v1.0.0.tar.gz
+# 2. 导入客户专属 Docker 镜像
+docker load < docker/agilestar-ai-prod-linux-x86_64-v1.0.0-<客户简称>.tar.gz
 
-# 3. 放置客户公钥（一客户一密钥对，公钥用于运行时签名验证）
+# 3. 放置客户公钥
 sudo cp pubkey.pem /data/ai_platform/licenses/
 
-# 4. 放置 License 文件（用该客户密钥对的私钥签名生成）
+# 4. 放置 License 文件
 sudo cp license.bin /data/ai_platform/licenses/
 
 # 5. 放置模型包
 cp -r models/* /data/ai_platform/models/
 
-# 6. 放置 SO 插件（如有）
+# 6. 放置客户专属 SO 插件
 cp -r libs/* /data/ai_platform/libs/linux_x86_64/
 
 # 7. 启动服务
@@ -1145,57 +1220,88 @@ docker run -d \
   -v /data/ai_platform/logs/prod:/mnt/ai_platform/logs:rw \
   -e AI_ADMIN_TOKEN=your-secure-token \
   --restart always \
-  agilestar/ai-prod:1.0.0
+  agilestar/ai-prod:1.0.0-<客户简称>
 
 # 8. 验证
 curl http://localhost:8080/api/v1/health
 curl http://localhost:8080/api/v1/license/status
 ```
 
-### 11.4 授权密钥对管理（一客户一密钥对）
+### 11.4 授权密钥对管理（一客户一密钥对 + 公钥指纹硬编码）
 
-平台采用 **一客户一密钥对** 管理模式：
+平台采用 **一客户一密钥对 + 公钥指纹硬编码** 安全模型：
 
 | 概念 | 说明 |
 |------|------|
 | 密钥对粒度 | 每个客户分配一个独立的 RSA-2048 密钥对 |
 | 私钥存储 | 仅存于内部授权管理服务器磁盘（`0o600` 权限），数据库中不存储 |
 | 公钥存储 | 存于授权管理 DB（`key_pairs` 表），同时交付给客户 |
+| 公钥指纹 | 公钥的 SHA-256 哈希硬编码进推理 SO 和生产镜像中，防止公钥被替换 |
 | License 签名 | 使用客户对应密钥对的私钥签名，`license_records` 表记录 `key_pair_id` |
-| 运行时验证 | 生产容器启动时加载挂载的 `pubkey.pem`，对 `license.bin` 做 RSA-PSS SHA256 签名验证 |
+| 运行时验证 | ① 比对 `pubkey.pem` 的 SHA-256 与硬编码指纹 → ② RSA-PSS SHA256 签名验证 |
+| SO 编译 | **每个客户交付前须重新编译** `libai_runtime.so`（注入该客户公钥指纹） |
 
-**交付给客户的文件（运行时挂载到 `/data/ai_platform/licenses/`）：**
+**交付给客户的文件：**
 
 ```
-/data/ai_platform/licenses/
-├── pubkey.pem     ← 该客户密钥对的公钥（用于签名验证）
-└── license.bin    ← 该客户的授权文件（包含 capabilities、有效期等）
+/data/ai_platform/
+├── licenses/
+│   ├── pubkey.pem     ← 该客户密钥对的公钥（用于签名验证）
+│   └── license.bin    ← 该客户的授权文件（包含 capabilities、有效期等）
+└── libs/linux_x86_64/
+    └── libai_runtime.so ← 该客户专属 SO（硬编码了该客户公钥指纹）
 ```
 
-**操作流程：**
+**防伪造攻击链路：**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  攻击者尝试：自建密钥对 → 伪造私钥签名 → 替换 pubkey.pem      │
+└──────────────────────┬───────────────────────────────────────┘
+                       ▼
+  SO / Python 服务加载 pubkey.pem
+                       ▼
+  SHA256(pubkey.pem) ≠ 硬编码的 TRUSTED_PUBKEY_SHA256
+                       ▼
+               ❌ 拒绝 — 公钥被篡改
+```
+
+**操作流程（参考 11.3 标准流程）：**
 
 ```bash
 # 1. 在授权管理平台创建客户专属密钥对
-#    前端：🔑 密钥管理 → 生成新密钥对
-#    名称建议：customer-<客户简称>-<年份>，如 customer-huawei-2026
-#    私钥路径：/data/ai_platform/keys/<客户简称>/private_key.pem
+# 2. 下载该客户的公钥 PEM
+# 3. 计算公钥 SHA-256 指纹
+python3 scripts/compute_pubkey_fingerprint.py pubkey.pem
 
-# 2. 下载该客户的公钥 PEM（前端"下载公钥"按钮）
+# 4. 用指纹编译客户专属 SO
+cmake .. -DTRUSTED_PUBKEY_SHA256=<指纹>
+ninja ai_runtime
 
-# 3. 生成授权时选择该客户的密钥对
-#    前端：➕ 生成授权 → 步骤二"签名密钥对"下拉框选择对应密钥
+# 5. 用指纹构建客户专属生产镜像
+docker build --build-arg TRUSTED_PUBKEY_SHA256=<指纹> ...
 
-# 4. 将公钥和授权文件一起交付给客户
-#    客户部署时放入 /data/ai_platform/licenses/ 目录
+# 6. 生成授权时选择该客户密钥对 → 下载 license.bin
+# 7. 交付：镜像 + SO + pubkey.pem + license.bin
 ```
 
-**密钥轮换：**
+**密钥轮换（⚠️ 需重新编译 SO）：**
 
 ```bash
-# 如需轮换密钥（如疑似泄露），只需：
-# 1. 生成新密钥对（旧密钥对可标记为"停用"）
-# 2. 用新密钥对重新签发授权
-# 3. 将新的 pubkey.pem + license.bin 交付给客户
+# 如需轮换密钥（如疑似泄露），需要：
+# 1. 生成新密钥对（旧密钥对标记为"停用"）
+# 2. 计算新公钥指纹
+python3 scripts/compute_pubkey_fingerprint.py new_pubkey.pem
+
+# 3. 用新指纹重新编译 SO
+cmake .. -DTRUSTED_PUBKEY_SHA256=<新指纹>
+ninja ai_runtime
+
+# 4. 用新指纹重建生产镜像
+docker build --build-arg TRUSTED_PUBKEY_SHA256=<新指纹> ...
+
+# 5. 用新密钥对重新签发授权
+# 6. 将新的 SO + 镜像 + pubkey.pem + license.bin 交付给客户
 # 其他客户完全不受影响
 ```
 
@@ -1333,6 +1439,12 @@ curl http://localhost:8080/api/v1/capabilities
 # 错误码 4004：机器指纹不匹配
 # → 重新为当前服务器生成 License
 
+# 错误码 4005：License 签名无效（含公钥指纹不匹配）
+# → 检查 pubkey.pem 是否为该客户专属公钥
+# → 检查生产镜像/SO 是否为该客户专属版本（含正确的 TRUSTED_PUBKEY_SHA256）
+# → 如果更换过密钥对，须重新编译 SO 和重建镜像（参见 11.3 标准流程）
+curl http://localhost:8080/api/v1/license/status
+
 # 错误码 5002：模型加载失败
 # → 检查模型文件是否存在且完整
 ls -la /data/ai_platform/models/<capability>/<version>/
@@ -1432,6 +1544,76 @@ docker port ai-prod
 | 6379 | redis | TCP | 开发(内部) | Celery 任务队列（仅 localhost） |
 
 > **安全提示**：生产环境中，8003（授权管理）不应暴露到公网。6379（Redis）仅绑定 `127.0.0.1`。
+
+---
+
+## 15. 附录：授权安全模型
+
+### 15.1 威胁分析与防御
+
+| 攻击场景 | 防御措施 |
+|----------|---------|
+| 伪造密钥对 + 替换公钥 + 伪造授权 | 公钥 SHA-256 指纹硬编码进 SO 和镜像，加载 pubkey.pem 时先比对指纹 |
+| 篡改 license.bin 内容 | RSA-PSS SHA256 签名验证（私钥仅在授权管理服务器） |
+| 篡改推理 SO 中的指纹 | SO 为编译后二进制，修改需要反编译和重新链接，难度极高 |
+| 跨客户复制授权 | 每客户独立密钥对 + 独立 SO，密钥对互不通用 |
+| 过期后继续使用 | License 中 `valid_until` 由签名保护，无法篡改 |
+
+### 15.2 安全验证链路
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ 推理请求到达                                                         │
+│                                                                     │
+│  1. 加载 /mnt/ai_platform/licenses/pubkey.pem                       │
+│  2. 计算 SHA-256(pubkey.pem)                                        │
+│  3. 比对硬编码的 TRUSTED_PUBKEY_SHA256                                │
+│     ├─ 不匹配 → ❌ 拒绝（公钥被篡改）                                 │
+│     └─ 匹配 ↓                                                       │
+│  4. 加载 /mnt/ai_platform/licenses/license.bin                       │
+│  5. 重建 canonical JSON payload                                      │
+│  6. RSA-PSS SHA256 签名验证 (pubkey.pem vs license.bin.signature)     │
+│     ├─ 失败 → ❌ 拒绝（签名无效）                                     │
+│     └─ 成功 ↓                                                       │
+│  7. 检查有效期 (valid_from, valid_until)                              │
+│     ├─ 过期/未生效 → ❌ 拒绝                                         │
+│     └─ 有效 ↓                                                       │
+│  8. 检查能力授权 (capabilities 列表)                                   │
+│     ├─ 未授权 → ❌ 拒绝                                              │
+│     └─ 已授权 → ✅ 允许推理                                          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 15.3 双层验证架构
+
+| 层次 | 组件 | 验证内容 | 语言 |
+|------|------|---------|------|
+| Layer 1 | `prod/web_service/main.py` | 公钥指纹 + RSA签名 + 有效期 + 能力 | Python |
+| Layer 2 | `cpp/runtime/license_checker.cpp` | 公钥指纹 + License 解析 + 缓存 | C++ |
+
+两层均独立实现公钥指纹校验。即使绕过 Python 层直接调用 C++ SO，
+SO 内部也会验证公钥指纹。
+
+### 15.4 关键编译参数
+
+| 参数 | 用途 | 示例 |
+|------|------|------|
+| `TRUSTED_PUBKEY_SHA256` | CMake 变量，注入到 SO 编译 | `cmake -DTRUSTED_PUBKEY_SHA256=a1b2c3...` |
+| `TRUSTED_PUBKEY_SHA256` | Docker build arg / 环境变量 | `docker build --build-arg TRUSTED_PUBKEY_SHA256=a1b2c3...` |
+
+### 15.5 指纹计算工具
+
+```bash
+# 使用项目内置脚本
+python3 scripts/compute_pubkey_fingerprint.py /path/to/pubkey.pem
+# 输出：a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890
+
+# 也可使用 openssl 命令行
+openssl dgst -sha256 -hex /path/to/pubkey.pem | awk '{print $2}'
+```
+
+> ⚠️ **注意**：`compute_pubkey_fingerprint.py` 计算的是 PEM 文件原始字节的
+> SHA-256，包括换行符。请确保文件未被编辑器修改换行符格式。
 
 ---
 
