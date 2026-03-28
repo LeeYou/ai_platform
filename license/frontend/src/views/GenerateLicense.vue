@@ -31,6 +31,14 @@
               <el-option label="永久版 (permanent)" value="permanent" />
             </el-select>
           </el-form-item>
+          <el-form-item label="签名密钥对" prop="key_pair_id" :rules="[{required:true,message:'请选择签名密钥对'}]">
+            <el-select v-model="form.key_pair_id" filterable placeholder="选择该客户的密钥对" style="width:100%;">
+              <el-option v-for="k in keyPairOptions" :key="k.id" :label="k.name" :value="k.id" />
+            </el-select>
+            <div style="color:#909399;font-size:12px;margin-top:4px;">
+              一客户一密钥对：请选择该客户专属的密钥对
+            </div>
+          </el-form-item>
           <el-form-item label="功能能力">
             <el-checkbox v-model="form.allCapabilities" @change="toggleAll" label="全部功能 (*)" />
             <el-divider direction="vertical" />
@@ -71,6 +79,7 @@
 
         <el-descriptions title="授权摘要" :column="2" border style="max-width:600px;margin:20px 0;">
           <el-descriptions-item label="客户">{{ customerName }}</el-descriptions-item>
+          <el-descriptions-item label="签名密钥">{{ keyPairName }}</el-descriptions-item>
           <el-descriptions-item label="类型">{{ form.license_type }}</el-descriptions-item>
           <el-descriptions-item label="功能">{{ form.allCapabilities ? '*（全部）' : form.capabilities.join(', ') }}</el-descriptions-item>
           <el-descriptions-item label="生效日期">{{ form.valid_from }}</el-descriptions-item>
@@ -89,16 +98,18 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getCustomers, createLicense, downloadLicense, extractErrorMessage } from '../api/index.js'
+import { getCustomers, getKeys, createLicense, downloadLicense, extractErrorMessage } from '../api/index.js'
 
 const step = ref(0)
 const submitting = ref(false)
 const customerOptions = ref([])
+const keyPairOptions = ref([])
 const configFormRef = ref()
 const bindFormRef = ref()
 
 const form = ref({
   customer_id: '',
+  key_pair_id: null,
   license_type: 'commercial',
   allCapabilities: false,
   capabilities: [],
@@ -113,6 +124,11 @@ const form = ref({
 const customerName = computed(() => {
   const c = customerOptions.value.find(x => x.customer_id === form.value.customer_id)
   return c ? c.name : form.value.customer_id
+})
+
+const keyPairName = computed(() => {
+  const k = keyPairOptions.value.find(x => x.id === form.value.key_pair_id)
+  return k ? k.name : '-'
 })
 
 function toggleAll(val) {
@@ -132,6 +148,7 @@ async function handleSubmit() {
   try {
     const payload = {
       customer_id: form.value.customer_id,
+      key_pair_id: form.value.key_pair_id,
       license_type: form.value.license_type,
       capabilities: form.value.allCapabilities ? ['*'] : form.value.capabilities,
       valid_from: form.value.valid_from,
@@ -158,7 +175,7 @@ async function handleSubmit() {
     // reset
     step.value = 0
     form.value = {
-      customer_id: '', license_type: 'commercial', allCapabilities: false,
+      customer_id: '', key_pair_id: null, license_type: 'commercial', allCapabilities: false,
       capabilities: [], valid_from: '', valid_until: '', max_instances: 1,
       version_constraint: '', machine_fingerprint: '', privkey_path: '',
     }
@@ -176,5 +193,17 @@ async function loadCustomers() {
   } catch {}
 }
 
-onMounted(loadCustomers)
+async function loadKeyPairs() {
+  try {
+    const res = await getKeys()
+    // Only show active key pairs
+    const all = res.data?.items ?? res.data ?? []
+    keyPairOptions.value = all.filter(k => k.is_active)
+  } catch {}
+}
+
+onMounted(() => {
+  loadCustomers()
+  loadKeyPairs()
+})
 </script>
