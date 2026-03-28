@@ -1139,7 +1139,8 @@ delivery_package/
 # 步骤 1：创建客户专属密钥对
 #   前端：🔑 密钥管理 → 生成新密钥对
 #   名称建议：customer-<客户简称>-<年份>，如 customer-huawei-2026
-#   私钥路径：/data/ai_platform/keys/<客户简称>/private_key.pem
+#   私钥保存路径（容器内路径）：/data/licenses/keys/<客户简称>/private_key.pem
+#   对应宿主机路径：/data/ai_platform/licenses/keys/<客户简称>/private_key.pem
 
 # 步骤 2：下载该客户公钥
 #   前端"下载公钥"按钮 → 保存为 pubkey.pem

@@ -49,8 +49,8 @@
         <el-form-item label="密钥名称" prop="name">
           <el-input v-model="genForm.name" placeholder="如 production-key-2024" />
         </el-form-item>
-        <el-form-item label="私钥保存路径" prop="privkey_path">
-          <el-input v-model="genForm.privkey_path" placeholder="/secure/path/private_key.pem" />
+        <el-form-item label="私钥保存路径" prop="privkey_output_path">
+          <el-input v-model="genForm.privkey_output_path" placeholder="/data/licenses/keys/客户名称/private_key.pem" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -71,11 +71,11 @@ const submitting = ref(false)
 const list = ref([])
 const generateDialog = ref(false)
 const genFormRef = ref()
-const genForm = ref({ name: '', privkey_path: '' })
+const genForm = ref({ name: '', privkey_output_path: '' })
 
 const genRules = {
   name: [{ required: true, message: '请输入密钥名称', trigger: 'blur' }],
-  privkey_path: [{ required: true, message: '请输入私钥保存路径', trigger: 'blur' }],
+  privkey_output_path: [{ required: true, message: '请输入私钥保存路径', trigger: 'blur' }],
 }
 
 function formatDate(val) {
@@ -96,7 +96,7 @@ async function loadList() {
 }
 
 function openGenerate() {
-  genForm.value = { name: '', privkey_path: '' }
+  genForm.value = { name: '', privkey_output_path: '' }
   generateDialog.value = true
 }
 
