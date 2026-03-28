@@ -117,7 +117,6 @@ def _verify_license_signature(license_json: str) -> bool:
             pubkey_pem = f.read()
         # Re-use the same signing logic as license_signer for verification
         import base64
-        import hashlib
         data = json.loads(license_json)
         sig_b64 = data.get("signature")
         if not sig_b64:
