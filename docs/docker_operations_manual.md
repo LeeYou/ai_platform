@@ -233,6 +233,7 @@ docker run -d \
   -v /data/ai_platform/licenses:/data/licenses:rw \
   -v /data/ai_platform/logs/license:/app/logs:rw \
   -e TZ=Asia/Shanghai \
+  -e AI_LICENSE_DB=/data/licenses/license.db \
   --restart unless-stopped \
   agilestar/ai-license-mgr:latest
 
@@ -747,8 +748,9 @@ cd deploy
 docker compose up -d --build
 
 # 仅重建指定服务
-docker compose up -d --build train
-docker compose up -d --build test
+docker compose up -d --build license    # 授权管理
+docker compose up -d --build train      # 训练
+docker compose up -d --build test       # 测试
 ```
 
 ---

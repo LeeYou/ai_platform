@@ -4,8 +4,8 @@
 # 不包含生产推理服务（生产使用 docker-compose.prod.yml）
 #
 # 使用方法：
-#   docker-compose up -d
-#   docker-compose logs -f train
+#   docker compose up -d
+#   docker compose logs -f train
 #
 # 前置条件：
 #   宿主机已创建 /data/ai_platform/ 目录结构（见 mount_template/）

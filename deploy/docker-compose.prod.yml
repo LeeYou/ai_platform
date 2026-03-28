@@ -3,8 +3,8 @@
 # 生产交付环境：仅生产推理服务（单容器，极简依赖）
 #
 # 使用方法：
-#   docker-compose -f docker-compose.prod.yml up -d
-#   docker-compose -f docker-compose.prod.yml logs -f prod
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml logs -f prod
 #
 # 前置条件：
 #   1. 宿主机已部署 /data/ai_platform/ 目录结构
