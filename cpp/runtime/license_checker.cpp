@@ -2,6 +2,11 @@
  * license_checker.cpp
  * License 校验（读取并解析 license.bin），结果缓存 60 秒
  *
+ * 安全设计：
+ *   编译时通过 -DTRUSTED_PUBKEY_SHA256="<hex>" 将受信公钥的 SHA-256
+ *   指纹硬编码进 SO。运行时加载 pubkey.pem 后先比对指纹，不匹配则
+ *   拒绝验证——防止攻击者替换公钥+伪造授权绕过签名校验。
+ *
  * Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agilestar.cn
  */
 
@@ -18,7 +23,77 @@
 #include <thread>
 #include <vector>
 
+// OpenSSL for SHA-256 fingerprint verification (optional at compile time)
+#if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
+#include <openssl/evp.h>
+#include <iomanip>
+#endif
+
+// Trusted public key SHA-256 fingerprint — injected at compile time.
+// Example:  -DTRUSTED_PUBKEY_SHA256="a1b2c3..."
+// If not defined, fingerprint checking is disabled (dev/test only).
+#ifndef TRUSTED_PUBKEY_SHA256
+#define TRUSTED_PUBKEY_SHA256 ""
+#endif
+
 namespace agilestar {
+
+// ---------------------------------------------------------------------------
+// Public key fingerprint verification
+// ---------------------------------------------------------------------------
+
+#if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
+static std::string _sha256_hex(const std::string& data) {
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return "";
+    const EVP_MD* md = EVP_sha256();
+    if (EVP_DigestInit_ex(ctx, md, nullptr) != 1) { EVP_MD_CTX_free(ctx); return ""; }
+    if (EVP_DigestUpdate(ctx, data.data(), data.size()) != 1) { EVP_MD_CTX_free(ctx); return ""; }
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int  dlen = 0;
+    if (EVP_DigestFinal_ex(ctx, digest, &dlen) != 1) { EVP_MD_CTX_free(ctx); return ""; }
+    EVP_MD_CTX_free(ctx);
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (unsigned int i = 0; i < dlen; ++i) oss << std::setw(2) << static_cast<unsigned>(digest[i]);
+    return oss.str();
+}
+#endif
+
+/// Verify that the pubkey file matches the compile-time trusted fingerprint.
+/// Returns true if fingerprint matches or checking is not available.
+static bool _verify_pubkey_fingerprint(const std::string& pubkey_path) {
+    const std::string trusted(TRUSTED_PUBKEY_SHA256);
+    if (trusted.empty()) {
+        // No fingerprint compiled in — dev/test mode, allow any key
+        return true;
+    }
+#if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
+    std::ifstream f(pubkey_path, std::ios::binary);
+    if (!f.is_open()) {
+        std::fprintf(stderr, "[LicenseChecker] Cannot open pubkey for fingerprint check: %s\n",
+                     pubkey_path.c_str());
+        return false;
+    }
+    std::string pem((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::string actual = _sha256_hex(pem);
+    if (actual != trusted) {
+        std::fprintf(stderr,
+            "[LicenseChecker] ❌ Public key fingerprint MISMATCH!\n"
+            "  expected: %s\n"
+            "  actual:   %s\n"
+            "  Possible tampering — license verification DENIED.\n",
+            trusted.c_str(), actual.c_str());
+        return false;
+    }
+    std::fprintf(stdout, "[LicenseChecker] ✅ Public key fingerprint verified.\n");
+    return true;
+#else
+    // No OpenSSL available but fingerprint is required — fail closed
+    std::fprintf(stderr, "[LicenseChecker] OpenSSL not available but TRUSTED_PUBKEY_SHA256 is set — DENIED.\n");
+    return false;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Simple JSON field extractor (no external deps)
@@ -62,6 +137,13 @@ public:
         std::lock_guard<std::mutex> lk(mutex_);
         license_path_ = path;
         last_check_   = {};           // force immediate refresh
+    }
+
+    void set_pubkey_path(const std::string& path) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        pubkey_path_ = path;
+        pubkey_verified_ = false;     // force re-verification
+        last_check_      = {};
     }
 
     LicenseStatus get() {
@@ -109,6 +191,28 @@ private:
         if (license_path_.empty()) {
             std::fprintf(stderr, "[LicenseChecker] No license path configured.\n");
             return;
+        }
+
+        // Verify public key fingerprint (once per pubkey_path change)
+        if (!pubkey_verified_) {
+            if (!pubkey_path_.empty()) {
+                if (!_verify_pubkey_fingerprint(pubkey_path_)) {
+                    std::fprintf(stderr, "[LicenseChecker] Public key fingerprint verification FAILED — license REJECTED.\n");
+                    cached_.valid   = false;
+                    cached_.expired = false;
+                    return;
+                }
+                pubkey_verified_ = true;
+            } else {
+                // No pubkey path → fingerprint check skipped if no trusted hash compiled in
+                const std::string trusted(TRUSTED_PUBKEY_SHA256);
+                if (!trusted.empty()) {
+                    std::fprintf(stderr, "[LicenseChecker] TRUSTED_PUBKEY_SHA256 is set but no pubkey path configured — DENIED.\n");
+                    cached_.valid = false;
+                    return;
+                }
+                pubkey_verified_ = true;
+            }
         }
 
         std::ifstream f(license_path_, std::ios::binary);
@@ -190,6 +294,8 @@ private:
 
     std::mutex    mutex_;
     std::string   license_path_;
+    std::string   pubkey_path_;
+    bool          pubkey_verified_ = false;
     LicenseStatus cached_;
     std::chrono::steady_clock::time_point last_check_;
     std::chrono::seconds cache_ttl_;
@@ -200,6 +306,10 @@ private:
 // C interface
 void agilestar_license_set_path(const char* path) {
     agilestar::LicenseCache::instance().set_license_path(path);
+}
+
+void agilestar_license_set_pubkey_path(const char* path) {
+    agilestar::LicenseCache::instance().set_pubkey_path(path);
 }
 
 bool agilestar_license_is_valid(const char* cap_name) {

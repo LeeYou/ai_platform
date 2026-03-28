@@ -21,6 +21,12 @@ LICENSE_PATH = os.getenv("AI_LICENSE_PATH",
 PUBKEY_PATH = os.getenv("AI_PUBKEY_PATH",
                          os.path.join(MOUNT_ROOT, "licenses", "pubkey.pem"))
 
+# Trusted public key SHA-256 fingerprint (hex, 64 chars).
+# Set via env var at image build time or in docker-compose.
+# When set, _verify_license_signature() will reject any pubkey.pem
+# whose SHA-256 does not match — preventing key-pair forgery attacks.
+TRUSTED_PUBKEY_SHA256 = os.getenv("TRUSTED_PUBKEY_SHA256", "")
+
 
 def resolve_model_dir(capability: str) -> str | None:
     """Return model 'current' dir — mount takes priority over built-in."""

@@ -43,6 +43,7 @@ void     agilestar_pool_destroy_all();
 // ---------------------------------------------------------------------------
 
 void     agilestar_license_set_path(const char* path);
+void     agilestar_license_set_pubkey_path(const char* path);
 bool     agilestar_license_is_valid(const char* cap_name);
 int32_t  agilestar_license_get_json(char* buf, int32_t buf_len);
 

@@ -71,6 +71,7 @@ try:
     from resource_resolver import (
         LICENSE_PATH,
         PUBKEY_PATH,
+        TRUSTED_PUBKEY_SHA256,
         list_available_capabilities,
         resolve_model_dir,
     )
@@ -110,11 +111,28 @@ def _load_engines() -> None:
 def _verify_license_signature(license_json: str) -> bool:
     """Verify license RSA signature using mounted public key. Returns True if valid."""
     if not os.path.exists(PUBKEY_PATH):
+        if TRUSTED_PUBKEY_SHA256:
+            logger.error("No public key at %s but TRUSTED_PUBKEY_SHA256 is set — DENIED", PUBKEY_PATH)
+            return False
         logger.warning("No public key at %s — skipping signature verification", PUBKEY_PATH)
         return True  # no pubkey = skip verification (dev/test mode)
     try:
         with open(PUBKEY_PATH, encoding="utf-8") as f:
             pubkey_pem = f.read()
+
+        # Verify public key fingerprint against trusted hash (anti-forgery)
+        if TRUSTED_PUBKEY_SHA256:
+            import hashlib
+            actual_fp = hashlib.sha256(pubkey_pem.encode("utf-8")).hexdigest()
+            if actual_fp != TRUSTED_PUBKEY_SHA256:
+                logger.error(
+                    "Public key fingerprint MISMATCH — possible tampering!\n"
+                    "  expected: %s\n  actual:   %s",
+                    TRUSTED_PUBKEY_SHA256, actual_fp,
+                )
+                return False
+            logger.debug("Public key fingerprint verified: %s", actual_fp[:16] + "...")
+
         # Re-use the same signing logic as license_signer for verification
         import base64
         data = json.loads(license_json)
@@ -143,6 +161,9 @@ def _verify_license_signature(license_json: str) -> bool:
         )
         return True
     except ImportError:
+        if TRUSTED_PUBKEY_SHA256:
+            logger.error("cryptography library not available but TRUSTED_PUBKEY_SHA256 is set — DENIED")
+            return False
         logger.warning("cryptography library not available — skipping signature verification")
         return True
     except InvalidSignature:
