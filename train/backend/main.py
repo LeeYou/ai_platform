@@ -2,22 +2,15 @@
 
 import logging
 import os
+import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-
-from database import Base, engine
-from routers import capabilities, datasets, jobs, models, ws
-
 # ---------------------------------------------------------------------------
-# Logging setup
+# Logging setup — MUST run before any third-party / app imports so that
+# import errors are captured in the log file.
 # ---------------------------------------------------------------------------
 
 LOG_DIR = os.getenv("LOG_DIR", "/workspace/logs")
@@ -41,8 +34,6 @@ def _setup_logging() -> logging.Logger:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)
 
-    # Attach handlers to a named logger (not root) so that uvicorn's
-    # dictConfig() cannot remove them when it reconfigures the root logger.
     app_logger = logging.getLogger("train")
     app_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
     app_logger.addHandler(file_handler)
@@ -53,6 +44,23 @@ def _setup_logging() -> logging.Logger:
 
 
 logger = _setup_logging()
+logger.info("=== Logging initialized — log_dir=%s, level=%s ===", LOG_DIR, LOG_LEVEL)
+
+# ---------------------------------------------------------------------------
+# Third-party & application imports
+# ---------------------------------------------------------------------------
+try:
+    from fastapi import FastAPI, Request
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+    from fastapi.staticfiles import StaticFiles
+
+    from database import Base, engine
+    from routers import capabilities, datasets, jobs, models, ws
+except Exception:
+    logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # App lifespan

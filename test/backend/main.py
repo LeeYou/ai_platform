@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import os
+import sys
 import time
 import traceback
 import uuid
@@ -18,26 +19,15 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
 
-import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+# ---------------------------------------------------------------------------
+# Logging setup — MUST run before any third-party imports so that
+# import errors are captured in the log file.
+# ---------------------------------------------------------------------------
 
 MODELS_ROOT   = os.getenv("MODELS_ROOT",   "/workspace/models")
 DATASETS_ROOT = os.getenv("DATASETS_ROOT", "/workspace/datasets")
 LOG_DIR       = os.getenv("LOG_DIR", "/workspace/logs")
 TEST_LOG_DIR  = "./data/test_logs"
-
-# In-memory batch job store
-_batch_jobs: dict[str, dict] = {}
-
-# ---------------------------------------------------------------------------
-# Logging setup
-# ---------------------------------------------------------------------------
-
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 
@@ -58,8 +48,6 @@ def _setup_logging() -> logging.Logger:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)
 
-    # Attach handlers to a named logger (not root) so that uvicorn's
-    # dictConfig() cannot remove them when it reconfigures the root logger.
     app_logger = logging.getLogger("test")
     app_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
     app_logger.addHandler(file_handler)
@@ -70,6 +58,25 @@ def _setup_logging() -> logging.Logger:
 
 
 logger = _setup_logging()
+logger.info("=== Logging initialized — log_dir=%s, level=%s ===", LOG_DIR, LOG_LEVEL)
+
+# ---------------------------------------------------------------------------
+# Third-party & application imports
+# ---------------------------------------------------------------------------
+try:
+    import numpy as np
+    from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+    from fastapi.staticfiles import StaticFiles
+    from pydantic import BaseModel
+except Exception:
+    logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
+    sys.exit(1)
+
+# In-memory batch job store
+_batch_jobs: dict[str, dict] = {}
 
 
 @asynccontextmanager

@@ -2,22 +2,15 @@
 
 import logging
 import os
+import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-
-from database import Base, engine
-from routers import customers, keys, licenses
-
 # ---------------------------------------------------------------------------
-# Logging setup
+# Logging setup — MUST run before any third-party / app imports so that
+# import errors are captured in the log file.
 # ---------------------------------------------------------------------------
 
 LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
@@ -41,18 +34,35 @@ def _setup_logging() -> logging.Logger:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)
 
-    # Attach handlers to a named logger (not root) so that uvicorn's
-    # dictConfig() cannot remove them when it reconfigures the root logger.
+    # Use a named logger (not root) so uvicorn's dictConfig() cannot
+    # remove our handlers when it reconfigures the root logger.
     app_logger = logging.getLogger("license")
     app_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
     app_logger.addHandler(file_handler)
     app_logger.addHandler(console_handler)
-    app_logger.propagate = False  # avoid duplicate output via root
+    app_logger.propagate = False
 
     return app_logger
 
 
 logger = _setup_logging()
+logger.info("=== Logging initialized — log_dir=%s, level=%s ===", LOG_DIR, LOG_LEVEL)
+
+# ---------------------------------------------------------------------------
+# Third-party & application imports (any error will now appear in the log)
+# ---------------------------------------------------------------------------
+try:
+    from fastapi import FastAPI, Request
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+    from fastapi.staticfiles import StaticFiles
+
+    from database import Base, engine
+    from routers import customers, keys, licenses
+except Exception:
+    logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # App lifespan

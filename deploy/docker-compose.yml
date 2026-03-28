@@ -33,6 +33,9 @@ services:
   # ─── 授权管理子系统 ───────────────────────────────────────────────────────
   license:
     image: agilestar/ai-license-mgr:latest
+    build:
+      context: ..
+      dockerfile: license/backend/Dockerfile
     container_name: ai-license-mgr
     <<: *default-restart
     ports:
