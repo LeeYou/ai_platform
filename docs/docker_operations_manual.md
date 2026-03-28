@@ -839,7 +839,52 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## 8. 日志管理
 
-### 8.1 查看容器实时日志
+> **日志架构**：每个服务使用 Python `logging` 模块同时输出到 **文件** 和 **stdout**。
+> 文件日志通过 Docker 卷挂载持久化到宿主机，stdout 日志由 Docker json-file 驱动管理。
+
+### 8.1 应用日志文件路径
+
+每个服务会自动创建带轮转的日志文件，格式为 `时间 | 级别 | 模块 | 消息`：
+
+| 服务 | 容器内路径 | 宿主机路径 | 轮转策略 |
+|------|-----------|-----------|---------|
+| 授权管理 | `/app/logs/license.log` | `/data/ai_platform/logs/license/license.log` | 50MB × 5 |
+| 训练 | `/workspace/logs/train.log` | `/data/ai_platform/logs/train/train.log` | 50MB × 5 |
+| 测试 | `/workspace/logs/test.log` | `/data/ai_platform/logs/test/test.log` | 50MB × 5 |
+| 编译 | `./data/build_logs/build_service.log` | （需额外挂载） | 50MB × 5 |
+| 生产推理 | `/mnt/ai_platform/logs/prod.log` | `/data/ai_platform/logs/prod/prod.log` | 50MB × 10 |
+
+**日志包含内容**：
+- ✅ 每个 HTTP 请求的 Method、Path、状态码、耗时
+- ✅ 参数校验错误的详细字段信息
+- ✅ 未捕获异常的完整堆栈跟踪
+- ✅ 服务启停事件
+- ✅ 能力加载/重载结果
+
+### 8.2 查看宿主机日志文件
+
+```bash
+# 授权管理日志（排查"添加客户失败"等问题）
+tail -f /data/ai_platform/logs/license/license.log
+
+# 训练日志
+tail -f /data/ai_platform/logs/train/train.log
+
+# 测试日志
+tail -f /data/ai_platform/logs/test/test.log
+
+# 生产推理日志
+tail -f /data/ai_platform/logs/prod/prod.log
+
+# 搜索错误日志
+grep "ERROR" /data/ai_platform/logs/license/license.log
+grep "Validation error" /data/ai_platform/logs/license/license.log
+
+# 查看最近 N 行
+tail -100 /data/ai_platform/logs/prod/prod.log
+```
+
+### 8.3 查看容器实时日志（stdout）
 
 ```bash
 # docker compose 方式（开发环境）
@@ -860,30 +905,7 @@ docker logs --since 2026-03-28T10:00:00 ai-train  # 指定时间之后
 docker logs -f --until 2026-03-28T12:00:00 ai-train  # 指定时间之前
 ```
 
-### 8.2 宿主机日志文件
-
-所有服务的应用级日志会落地到宿主机目录：
-
-```bash
-# 训练日志
-ls -la /data/ai_platform/logs/train/
-cat /data/ai_platform/logs/train/train.log
-tail -f /data/ai_platform/logs/train/train.log
-
-# 测试日志
-tail -f /data/ai_platform/logs/test/test.log
-
-# 编译日志
-tail -f /data/ai_platform/logs/build/build.log
-
-# 授权管理日志
-tail -f /data/ai_platform/logs/license/license.log
-
-# 生产推理日志
-tail -f /data/ai_platform/logs/prod/prod.log
-```
-
-### 8.3 Docker 日志文件位置
+### 8.4 Docker 日志文件位置
 
 Docker 容器的 stdout/stderr 日志默认保存在：
 
@@ -893,7 +915,7 @@ docker inspect --format='{{.LogPath}}' ai-prod
 # 通常在：/var/lib/docker/containers/<container-id>/<container-id>-json.log
 ```
 
-### 8.4 日志轮转配置
+### 8.5 日志轮转配置
 
 日志轮转已在 docker-compose 文件中配置：
 
@@ -902,7 +924,7 @@ docker inspect --format='{{.LogPath}}' ai-prod
 | 开发环境 | 50 MB | 5 | 250 MB/服务 |
 | 生产环境 | 100 MB | 10 | 1 GB/服务 |
 
-### 8.5 清理旧日志
+### 8.6 清理旧日志
 
 ```bash
 # 清理指定容器的 Docker 日志（需要 root）
