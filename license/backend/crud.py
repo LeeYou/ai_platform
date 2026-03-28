@@ -125,6 +125,7 @@ def create_license_record(
     record = models.LicenseRecord(
         license_id=license_id,
         customer_id=data.customer_id,
+        key_pair_id=data.key_pair_id,
         license_type=data.license_type,
         capabilities=json.dumps(data.capabilities, ensure_ascii=False),
         machine_fingerprint=data.machine_fingerprint,

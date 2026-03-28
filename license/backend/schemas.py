@@ -43,6 +43,7 @@ class CustomerWithLicenses(CustomerResponse):
 
 class LicenseCreate(BaseModel):
     customer_id: str
+    key_pair_id: int  # which key pair to sign with (one customer = one key pair)
     license_type: str  # trial / commercial / permanent
     capabilities: list[str]
     machine_fingerprint: Optional[str] = None
@@ -57,6 +58,8 @@ class LicenseResponse(BaseModel):
     id: int
     license_id: str
     customer_id: str
+    key_pair_id: Optional[int] = None
+    key_pair_name: Optional[str] = None
     license_type: str
     capabilities: list[str]
     machine_fingerprint: Optional[str]

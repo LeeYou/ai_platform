@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 import crud
 import schemas
 from database import get_db
-from license_signer import sign_license
+from license_signer import sign_license, verify_license as verify_sig
 
 LICENSES_DIR = os.environ.get("LICENSES_DIR", "./data/licenses")
 
@@ -25,6 +25,17 @@ def _read_privkey(path: str) -> str:
         return f.read()
 
 
+def _verify_key_match(privkey_pem: str, pubkey_pem: str) -> None:
+    """Verify private key matches the stored public key by sign/verify round-trip."""
+    test_data = {"_verify": "key_match_check"}
+    signed = sign_license(test_data, privkey_pem)
+    if not verify_sig(signed, pubkey_pem):
+        raise HTTPException(
+            status_code=400,
+            detail="Private key does not match the public key of the selected key pair",
+        )
+
+
 def _save_license_file(license_id: str, content: str) -> str:
     os.makedirs(LICENSES_DIR, exist_ok=True)
     filepath = os.path.join(LICENSES_DIR, f"{license_id}.bin")
@@ -36,6 +47,9 @@ def _save_license_file(license_id: str, content: str) -> str:
 def _license_to_response(record, request_base_url: str = "") -> schemas.LicenseResponse:
     data = schemas.LicenseResponse.model_validate(record)
     data.download_url = f"{request_base_url}/api/v1/licenses/{record.license_id}/download"
+    # Populate key_pair_name from relationship
+    if record.key_pair:
+        data.key_pair_name = record.key_pair.name
     return data
 
 
@@ -71,7 +85,17 @@ def create_license(data: schemas.LicenseCreate, db: Session = Depends(get_db)):
     if not customer:
         raise HTTPException(status_code=404, detail=f"Customer '{data.customer_id}' not found")
 
+    # Validate key pair exists and is active
+    key_pair = crud.get_key_pair(db, data.key_pair_id)
+    if not key_pair:
+        raise HTTPException(status_code=404, detail=f"Key pair {data.key_pair_id} not found")
+    if not key_pair.is_active:
+        raise HTTPException(status_code=400, detail=f"Key pair '{key_pair.name}' is inactive")
+
     privkey_pem = _read_privkey(data.privkey_path)
+    # Verify private key matches the selected key pair's public key
+    _verify_key_match(privkey_pem, key_pair.public_key_pem)
+
     issued_at = datetime.now(timezone.utc)
     license_id = crud.generate_license_id(db)
 

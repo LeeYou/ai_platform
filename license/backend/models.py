@@ -35,6 +35,9 @@ class LicenseRecord(Base):
     customer_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("customers.customer_id"), nullable=False
     )
+    key_pair_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("key_pairs.id"), nullable=True
+    )
     license_type: Mapped[str] = mapped_column(String(32), nullable=False)  # trial/commercial/permanent
     capabilities: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array as text
     machine_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -50,6 +53,7 @@ class LicenseRecord(Base):
     customer: Mapped["Customer"] = relationship(
         "Customer", back_populates="licenses", foreign_keys=[customer_id]
     )
+    key_pair: Mapped["KeyPair | None"] = relationship("KeyPair", foreign_keys=[key_pair_id])
 
 
 class KeyPair(Base):
