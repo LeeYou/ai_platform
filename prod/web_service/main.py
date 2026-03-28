@@ -8,14 +8,18 @@ Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agile
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
 
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -26,6 +30,41 @@ from resource_resolver import (
     list_available_capabilities,
     resolve_model_dir,
 )
+
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+
+LOG_DIR = os.getenv("LOG_DIR", "/mnt/ai_platform/logs")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
+
+
+def _setup_logging() -> logging.Logger:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler = RotatingFileHandler(
+        os.path.join(LOG_DIR, "prod.log"),
+        maxBytes=50 * 1024 * 1024,
+        backupCount=10,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(fmt)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(fmt)
+
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
+
+    return logging.getLogger("prod")
+
+
+logger = _setup_logging()
 
 # ---------------------------------------------------------------------------
 # Admin token (simple bearer auth for reload endpoint)
@@ -47,9 +86,9 @@ def _load_engines() -> None:
         mdir = cap_info["model_dir"]
         try:
             _engines[cap] = ProdInferenceEngine(cap, mdir)
-            print(f"[Prod] Loaded capability: {cap} v{_engines[cap].version} from {mdir}")
+            logger.info("Loaded capability: %s v%s from %s", cap, _engines[cap].version, mdir)
         except Exception as exc:
-            print(f"[Prod] Failed to load {cap}: {exc}")
+            logger.error("Failed to load %s: %s", cap, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +114,8 @@ def _license_status() -> dict:
             "days_remaining": data.get("days_remaining", 0),
             "capabilities":   data.get("capabilities", []),
         }
-    except Exception:
+    except Exception as exc:
+        logger.error("Failed to parse license file %s: %s", LICENSE_PATH, exc)
         return {"status": "invalid", "license_id": None, "valid_until": None,
                 "days_remaining": 0, "capabilities": []}
 
@@ -106,7 +146,9 @@ def _check_license(capability: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_engines()
+    logger.info("Production AI service started — %d capabilities loaded", len(_engines))
     yield
+    logger.info("Production AI service stopped")
 
 
 app = FastAPI(
@@ -129,6 +171,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Request logging middleware
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "%s %s → %s (%.0fms)",
+            request.method, request.url.path, response.status_code, elapsed_ms,
+        )
+        return response
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.error(
+            "%s %s → 500 (%.0fms) %s: %s\n%s",
+            request.method, request.url.path, elapsed_ms,
+            type(exc).__name__, exc, traceback.format_exc(),
+        )
+        raise
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for e in exc.errors():
+        field = e["loc"][-1] if e.get("loc") else "unknown"
+        errors.append(f"{field}: {e['msg']}")
+    detail = "; ".join(errors)
+    logger.warning("Validation error on %s %s — %s", request.method, request.url.path, detail)
+    return JSONResponse(status_code=422, content={"detail": detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception on %s %s: %s\n%s",
+        request.method, request.url.path, exc, traceback.format_exc(),
+    )
+    return JSONResponse(status_code=500, content={"detail": "服务器内部错误，请查看日志排查原因"})
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +331,7 @@ async def infer(
     try:
         result = engine.infer(img, opts)
     except Exception as exc:
+        logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
         return _error_response(2004, f"Inference failed: {exc}", capability)
 
     elapsed = (time.perf_counter() - t0) * 1000.0
@@ -276,7 +364,7 @@ async def reload_all(request: Request):
             reloaded.append(cap)
         except Exception as exc:
             failed.append(cap)
-            print(f"[Prod] Reload {cap} failed: {exc}")
+            logger.error("Reload %s failed: %s", cap, exc)
     return {"reloaded": reloaded, "failed": failed}
 
 
