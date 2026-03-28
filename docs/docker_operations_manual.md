@@ -1530,6 +1530,45 @@ docker exec ai-train curl -sf http://license:8003/health
 docker port ai-prod
 ```
 
+### 13.8 授权管理数据库迁移
+
+授权管理后端使用 SQLite 数据库。版本升级后如果 SQLAlchemy 模型新增了字段（如
+`key_pair_id`），服务会在启动时**自动执行 ALTER TABLE 迁移**，无需手动操作。
+
+如果遇到 `no such column` 错误（如 `license_records.key_pair_id`），通常是因为
+容器使用了旧镜像。解决步骤：
+
+```bash
+# 1. 确认使用最新代码重建镜像
+cd deploy
+docker compose build license
+
+# 2. 重启服务（自动迁移会在启动时运行）
+docker compose up -d license
+
+# 3. 查看迁移日志，确认 ALTER TABLE 执行成功
+docker logs ai-license-mgr 2>&1 | grep -i migrat
+
+# 4. 如果仍有问题，可手动迁移（进入容器执行）
+docker exec -it ai-license-mgr python3 -c "
+import sqlite3, os
+db = os.environ.get('AI_LICENSE_DB', '/data/licenses/license.db')
+conn = sqlite3.connect(db)
+cols = [r[1] for r in conn.execute('PRAGMA table_info(license_records)')]
+if 'key_pair_id' not in cols:
+    conn.execute('ALTER TABLE license_records ADD COLUMN key_pair_id INTEGER REFERENCES key_pairs(id)')
+    conn.commit()
+    print('key_pair_id column added')
+else:
+    print('key_pair_id column already exists')
+conn.close()
+"
+
+# 5. 极端情况：删除旧数据库重新初始化（⚠️ 会丢失所有授权记录）
+# docker exec ai-license-mgr rm -f /data/licenses/license.db
+# docker restart ai-license-mgr
+```
+
 ---
 
 ## 14. 附录：端口分配表

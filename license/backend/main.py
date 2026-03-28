@@ -69,10 +69,39 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 
+def _run_migrations(eng) -> None:
+    """Add columns that may be missing from an older SQLite schema.
+
+    ``create_all()`` only creates *new* tables — it never alters existing ones.
+    We therefore check for columns introduced after the initial release and
+    ``ALTER TABLE … ADD COLUMN`` when necessary.
+    """
+    import sqlalchemy
+
+    inspector = sqlalchemy.inspect(eng)
+    if "license_records" not in inspector.get_table_names():
+        return  # fresh install — create_all() already handled everything
+
+    with eng.connect() as conn:
+        cols = {c["name"] for c in inspector.get_columns("license_records")}
+
+        if "key_pair_id" not in cols:
+            logger.info("Migrating: adding key_pair_id column to license_records")
+            conn.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE license_records ADD COLUMN key_pair_id INTEGER"
+                    " REFERENCES key_pairs(id)"
+                )
+            )
+            conn.commit()
+            logger.info("Migration complete: key_pair_id added")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs("./data/licenses", exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    _run_migrations(engine)
     logger.info("License Management service started")
     yield
     logger.info("License Management service stopped")
