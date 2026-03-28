@@ -638,6 +638,8 @@ docker stop ai-prod && docker rm ai-prod
 | `LOG_LEVEL` | `info` | 日志级别 (debug/info/warning/error) |
 | `MOUNT_ROOT` | `/mnt/ai_platform` | 挂载资源根目录 |
 | `BUILTIN_ROOT` | `/app` | 内置资源根目录 |
+| `AI_LICENSE_PATH` | `/mnt/ai_platform/licenses/license.bin` | License 文件路径 |
+| `AI_PUBKEY_PATH` | `/mnt/ai_platform/licenses/pubkey.pem` | 公钥文件路径（用于签名验证） |
 
 #### 验证
 
@@ -1108,23 +1110,31 @@ delivery_package/
 
 ### 11.3 客户端部署步骤
 
+> **部署模式：通用镜像 + 运行时挂载**
+>
+> 生产镜像不包含任何客户特定内容。公钥、授权文件、模型、SO 插件均通过
+> 宿主机目录挂载注入。一个镜像可服务所有客户。
+
 ```bash
 # 1. 初始化宿主机目录
 sudo bash mount_template/init_host_dirs.sh
 
-# 2. 导入 Docker 镜像
+# 2. 导入 Docker 镜像（通用镜像，不含客户数据）
 docker load < docker/agilestar-ai-prod-linux-x86_64-v1.0.0.tar.gz
 
-# 3. 放置 License 文件
+# 3. 放置客户公钥（一客户一密钥对，公钥用于运行时签名验证）
+sudo cp pubkey.pem /data/ai_platform/licenses/
+
+# 4. 放置 License 文件（用该客户密钥对的私钥签名生成）
 sudo cp license.bin /data/ai_platform/licenses/
 
-# 4. 放置模型包
+# 5. 放置模型包
 cp -r models/* /data/ai_platform/models/
 
-# 5. 放置 SO 插件（如有）
+# 6. 放置 SO 插件（如有）
 cp -r libs/* /data/ai_platform/libs/linux_x86_64/
 
-# 6. 启动服务
+# 7. 启动服务
 docker run -d \
   --name ai-prod \
   --gpus all \
@@ -1137,8 +1147,56 @@ docker run -d \
   --restart always \
   agilestar/ai-prod:1.0.0
 
-# 7. 验证
+# 8. 验证
 curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/license/status
+```
+
+### 11.4 授权密钥对管理（一客户一密钥对）
+
+平台采用 **一客户一密钥对** 管理模式：
+
+| 概念 | 说明 |
+|------|------|
+| 密钥对粒度 | 每个客户分配一个独立的 RSA-2048 密钥对 |
+| 私钥存储 | 仅存于内部授权管理服务器磁盘（`0o600` 权限），数据库中不存储 |
+| 公钥存储 | 存于授权管理 DB（`key_pairs` 表），同时交付给客户 |
+| License 签名 | 使用客户对应密钥对的私钥签名，`license_records` 表记录 `key_pair_id` |
+| 运行时验证 | 生产容器启动时加载挂载的 `pubkey.pem`，对 `license.bin` 做 RSA-PSS SHA256 签名验证 |
+
+**交付给客户的文件（运行时挂载到 `/data/ai_platform/licenses/`）：**
+
+```
+/data/ai_platform/licenses/
+├── pubkey.pem     ← 该客户密钥对的公钥（用于签名验证）
+└── license.bin    ← 该客户的授权文件（包含 capabilities、有效期等）
+```
+
+**操作流程：**
+
+```bash
+# 1. 在授权管理平台创建客户专属密钥对
+#    前端：🔑 密钥管理 → 生成新密钥对
+#    名称建议：customer-<客户简称>-<年份>，如 customer-huawei-2026
+#    私钥路径：/data/ai_platform/keys/<客户简称>/private_key.pem
+
+# 2. 下载该客户的公钥 PEM（前端"下载公钥"按钮）
+
+# 3. 生成授权时选择该客户的密钥对
+#    前端：➕ 生成授权 → 步骤二"签名密钥对"下拉框选择对应密钥
+
+# 4. 将公钥和授权文件一起交付给客户
+#    客户部署时放入 /data/ai_platform/licenses/ 目录
+```
+
+**密钥轮换：**
+
+```bash
+# 如需轮换密钥（如疑似泄露），只需：
+# 1. 生成新密钥对（旧密钥对可标记为"停用"）
+# 2. 用新密钥对重新签发授权
+# 3. 将新的 pubkey.pem + license.bin 交付给客户
+# 其他客户完全不受影响
 ```
 
 ---

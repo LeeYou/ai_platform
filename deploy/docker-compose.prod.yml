@@ -8,9 +8,10 @@
 #
 # 前置条件：
 #   1. 宿主机已部署 /data/ai_platform/ 目录结构
-#   2. /data/ai_platform/licenses/<customer_id>/license.bin 已放置
-#   3. /data/ai_platform/models/<capability>/current/ 已指向有效模型包
-#   4. /data/ai_platform/libs/<arch>/<capability>/current/ 已放置 SO/DLL
+#   2. /data/ai_platform/licenses/license.bin   — 客户授权文件
+#   3. /data/ai_platform/licenses/pubkey.pem    — 客户对应密钥对的公钥（用于签名验证）
+#   4. /data/ai_platform/models/<capability>/current/ 已指向有效模型包
+#   5. /data/ai_platform/libs/<arch>/<capability>/current/ 已放置 SO/DLL
 # =============================================================================
 
 version: "3.9"
