@@ -6,24 +6,27 @@ from pydantic import BaseModel, field_validator
 # ─── Customer ────────────────────────────────────────────────────────────────
 
 class CustomerCreate(BaseModel):
-    customer_id: str
+    customer_id: Optional[str] = None  # auto-generated if omitted
     name: str
-    contact: Optional[str] = None
+    contact_person: Optional[str] = None
     email: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CustomerUpdate(BaseModel):
     name: Optional[str] = None
-    contact: Optional[str] = None
+    contact_person: Optional[str] = None
     email: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class CustomerResponse(BaseModel):
     id: int
     customer_id: str
     name: str
-    contact: Optional[str]
+    contact_person: Optional[str]
     email: Optional[str]
+    notes: Optional[str]
     created_at: datetime
     updated_at: datetime
 

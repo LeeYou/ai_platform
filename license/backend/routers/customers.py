@@ -1,5 +1,7 @@
 """Router: /api/v1/customers"""
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -21,9 +23,12 @@ def list_customers(
 
 @router.post("", response_model=schemas.CustomerResponse, status_code=201)
 def create_customer(data: schemas.CustomerCreate, db: Session = Depends(get_db)):
+    # Auto-generate customer_id if not provided
+    if not data.customer_id:
+        data.customer_id = "C-" + uuid.uuid4().hex[:12].upper()
     existing = crud.get_customer(db, data.customer_id)
     if existing:
-        raise HTTPException(status_code=400, detail=f"Customer '{data.customer_id}' already exists")
+        raise HTTPException(status_code=400, detail=f"客户 '{data.customer_id}' 已存在")
     return crud.create_customer(db, data)
 
 
@@ -31,7 +36,7 @@ def create_customer(data: schemas.CustomerCreate, db: Session = Depends(get_db))
 def get_customer(customer_id: str, db: Session = Depends(get_db)):
     customer = crud.get_customer(db, customer_id)
     if not customer:
-        raise HTTPException(status_code=404, detail=f"Customer '{customer_id}' not found")
+        raise HTTPException(status_code=404, detail=f"客户 '{customer_id}' 不存在")
     return customer
 
 
@@ -41,7 +46,7 @@ def update_customer(
 ):
     customer = crud.get_customer(db, customer_id)
     if not customer:
-        raise HTTPException(status_code=404, detail=f"Customer '{customer_id}' not found")
+        raise HTTPException(status_code=404, detail=f"客户 '{customer_id}' 不存在")
     return crud.update_customer(db, customer, data)
 
 
@@ -49,10 +54,10 @@ def update_customer(
 def delete_customer(customer_id: str, db: Session = Depends(get_db)):
     customer = crud.get_customer(db, customer_id)
     if not customer:
-        raise HTTPException(status_code=404, detail=f"Customer '{customer_id}' not found")
+        raise HTTPException(status_code=404, detail=f"客户 '{customer_id}' 不存在")
     if crud.has_active_licenses(db, customer_id):
         raise HTTPException(
             status_code=400,
-            detail="Cannot delete customer with active licenses. Revoke all licenses first.",
+            detail="该客户下存在有效授权，请先吊销所有授权后再删除。",
         )
     crud.delete_customer(db, customer)

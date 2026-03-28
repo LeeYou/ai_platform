@@ -14,8 +14,9 @@ class Customer(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     customer_id: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    contact: Mapped[str] = mapped_column(String(255), nullable=True)
+    contact_person: Mapped[str] = mapped_column(String(255), nullable=True)
     email: Mapped[str] = mapped_column(String(255), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
