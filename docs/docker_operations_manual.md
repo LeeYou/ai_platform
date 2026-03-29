@@ -467,20 +467,38 @@ curl http://localhost:8002/health
 
 ### 5.5 编译镜像 (ai-builder-linux-x86)
 
-**用途**：提供 C++ 编译环境，将 AI 能力插件编译为 SO 动态库（Linux x86_64 平台）。
+**用途**：提供 C++ 编译环境 + Web 编译管理界面，将 AI 能力插件编译为 SO 动态库（Linux x86_64 平台）。支持在 Web 页面上选择 AI 能力、绑定客户密钥对，自动将客户公钥指纹编译到 SO 库中。
 
-**Dockerfile 路径**：`build/Dockerfile.linux_x86`
+**Dockerfile 路径**：`build/Dockerfile.linux_x86`（两阶段构建：Node.js 编译前端 + Ubuntu 编译环境运行后端）
 
-**基础镜像**：`ubuntu:22.04`
+**基础镜像**：`node:18-slim`（前端构建阶段）+ `ubuntu:22.04`（运行阶段）
 
-**暴露端口**：8004
+**暴露端口**：8004（Web 管理界面 + API）
 
 **内含工具**：GCC 12、CMake、Ninja、OpenSSL、ONNXRuntime 1.18.1
+
+**Web 管理界面功能**：
+- 📊 仪表盘：查看可编译能力数、客户密钥对数、编译统计
+- 🔨 新建编译：选择 AI 能力 + 绑定客户密钥对（自动计算公钥指纹写入 SO）+ 触发编译
+- 📋 编译历史：查看编译状态、日志、下载编译产物
+
+**API 端点**：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/capabilities` | 列出所有可编译的 AI 能力 |
+| GET | `/api/v1/key-pairs` | 代理获取授权服务的客户密钥对列表 |
+| POST | `/api/v1/builds` | 触发编译（支持 key_pair_id 自动绑定公钥指纹） |
+| GET | `/api/v1/builds` | 列出所有编译任务 |
+| GET | `/api/v1/builds/{id}` | 查看编译任务状态 |
+| GET | `/api/v1/builds/{id}/logs` | 获取编译日志 |
+| GET | `/api/v1/builds/{id}/artifacts` | 列出编译产物 |
+| GET | `/api/v1/builds/{id}/artifacts/{filename}` | 下载编译产物 |
+| WS | `/ws/build/{id}` | WebSocket 实时编译日志流 |
 
 #### 构建命令
 
 ```bash
-# 标准构建
+# 标准构建（含前端 + 后端）
 docker build -t agilestar/ai-builder-linux-x86:latest -f build/Dockerfile.linux_x86 .
 
 # 指定版本号
@@ -490,6 +508,31 @@ docker build -t agilestar/ai-builder-linux-x86:1.0.0 -f build/Dockerfile.linux_x
 docker build --no-cache -t agilestar/ai-builder-linux-x86:latest -f build/Dockerfile.linux_x86 .
 ```
 
+#### docker compose 方式运行（推荐）
+
+编译服务已集成到 `deploy/docker-compose.yml`，依赖授权服务获取客户密钥对：
+
+```bash
+cd deploy
+
+# 启动全部服务（含编译管理）
+docker compose up -d
+
+# 仅启动编译 + 授权服务
+docker compose up -d license build
+
+# 查看编译服务日志
+docker compose logs -f build
+
+# 重启编译服务
+docker compose restart build
+
+# 停止编译服务
+docker compose stop build
+```
+
+访问编译管理 Web 界面：`http://<宿主机IP>:8004`
+
 #### 独立运行
 
 ```bash
@@ -497,9 +540,10 @@ docker build --no-cache -t agilestar/ai-builder-linux-x86:latest -f build/Docker
 docker run -d \
   --name ai-builder \
   -p 8004:8004 \
-  -v /data/ai_platform/libs/linux_x86_64:/output/libs:rw \
-  -v /data/ai_platform/logs/build:/workspace/logs:rw \
+  -v /data/ai_platform/libs/linux_x86_64:/workspace/libs/linux_x86_64:rw \
+  -v /data/ai_platform/logs/build:/app/build/backend/data/build_logs:rw \
   -e TZ=Asia/Shanghai \
+  -e LICENSE_SERVICE_URL=http://license:8003 \
   -e ONNXRUNTIME_ROOT=/usr/local \
   --restart unless-stopped \
   agilestar/ai-builder-linux-x86:latest
@@ -523,7 +567,7 @@ docker stop ai-builder && docker rm ai-builder
 # 进入编译容器
 docker run -it --rm \
   -v $(pwd)/cpp:/workspace/cpp:ro \
-  -v /data/ai_platform/libs/linux_x86_64:/output/libs:rw \
+  -v /data/ai_platform/libs/linux_x86_64:/workspace/libs/linux_x86_64:rw \
   -e ONNXRUNTIME_ROOT=/usr/local \
   agilestar/ai-builder-linux-x86:latest \
   /bin/bash
@@ -551,6 +595,15 @@ docker exec ai-builder ls /usr/local/lib/libonnxruntime*
 
 # 检查健康状态
 curl http://localhost:8004/health
+
+# 检查 Web 界面
+curl -s http://localhost:8004/ | head -5
+
+# 检查 API — 列出可编译能力
+curl http://localhost:8004/api/v1/capabilities
+
+# 检查 API — 查看编译历史
+curl http://localhost:8004/api/v1/builds
 ```
 
 ---
@@ -686,6 +739,7 @@ docker compose up -d
 docker compose up -d license        # 仅启动授权管理
 docker compose up -d train redis    # 启动训练 + Redis
 docker compose up -d test           # 仅启动测试
+docker compose up -d license build  # 启动编译管理（依赖授权服务）
 ```
 
 ### 6.2 停止服务
@@ -706,6 +760,7 @@ docker compose down -v
 docker compose stop train
 docker compose stop test
 docker compose stop license
+docker compose stop build
 ```
 
 ### 6.3 重启服务
@@ -720,6 +775,7 @@ docker compose restart
 docker compose restart train
 docker compose restart test
 docker compose restart license
+docker compose restart build
 ```
 
 ### 6.4 查看服务状态
@@ -755,6 +811,7 @@ docker compose up -d --build
 docker compose up -d --build license    # 授权管理
 docker compose up -d --build train      # 训练
 docker compose up -d --build test       # 测试
+docker compose up -d --build build      # 编译管理
 ```
 
 ---
@@ -857,7 +914,7 @@ docker compose -f docker-compose.prod.yml up -d
 | 授权管理 | `/app/logs/license.log` | `/data/ai_platform/logs/license/license.log` | 50MB × 5 |
 | 训练 | `/workspace/logs/train.log` | `/data/ai_platform/logs/train/train.log` | 50MB × 5 |
 | 测试 | `/workspace/logs/test.log` | `/data/ai_platform/logs/test/test.log` | 50MB × 5 |
-| 编译 | `./data/build_logs/build_service.log` | （需额外挂载） | 50MB × 5 |
+| 编译 | `./data/build_logs/build_service.log` | `/data/ai_platform/logs/build/build_service.log` | 50MB × 5 |
 | 生产推理 | `/mnt/ai_platform/logs/prod.log` | `/data/ai_platform/logs/prod/prod.log` | 50MB × 10 |
 
 **日志包含内容**：
