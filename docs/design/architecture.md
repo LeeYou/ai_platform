@@ -1,7 +1,7 @@
 # 系统整体架构设计
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.0 | 2026-03-27**
+**文档版本：v2.0 | 2026-03-29**
 
 ---
 
@@ -42,18 +42,22 @@
 | 训练子系统 | `agilestar/ai-train:latest` | 数据集管理、模型训练、模型包导出 |
 | 测试子系统 | `agilestar/ai-test:latest` | 模型推理测试、精度评估 |
 | 编译子系统 | `agilestar/ai-builder-*:latest` | C++ SO/DLL 多平台编译 |
-| 生产交付子系统 | `agilestar/ai-prod:latest` | 对外 REST HTTP 推理服务 |
+| 生产交付子系统 | `agilestar/ai-prod:latest` | REST HTTP 推理服务 + Web 管理页面 + AI 能力编排 |
 | 授权子系统 | `agilestar/ai-license-mgr:latest` | License 生成、管理、校验 |
 
 ---
 
-## 3. 生产容器内部 4 层结构
+## 3. 生产容器内部 5 层结构
 
 ```
 ┌──────────────────────────────────────────────────────┐
+│  Layer 0: Web 管理层                                   │
+│  Vue3 前端 / API 测试 / 服务状态监控 /                  │
+│  AI 能力编排管理 / Pipeline 测试                        │
+├──────────────────────────────────────────────────────┤
 │  Layer 1: HTTP 服务层                                  │
 │  接收外部请求 / 参数校验 / License 状态检查 /           │
-│  能力路由 / 日志 / 健康检查 / 管理接口                  │
+│  能力路由 / AI 编排引擎 / 日志 / 健康检查 / 管理接口    │
 ├──────────────────────────────────────────────────────┤
 │  Layer 2: Runtime 层                                  │
 │  动态加载能力 SO / 管理实例池 / 并发调度 /              │
@@ -110,6 +114,11 @@
 │   └── <customer_id>/
 │       └── license.bin
 │
+├── pipelines/                        # AI 能力编排配置（生产容器读写）
+│   ├── active_liveness_check.json    # 指令活体检测流水线
+│   ├── silent_liveness_check.json    # 静默活体检测流水线
+│   └── <pipeline_id>.json
+│
 ├── output/                           # 最终交付产物归档
 │   └── <version>/
 │
@@ -137,6 +146,7 @@
 | 生产容器 | `/data/ai_platform/libs/` | `/mnt/ai_platform/libs` | 只读 |
 | 生产容器 | `/data/ai_platform/licenses/` | `/mnt/ai_platform/licenses` | 只读 |
 | 生产容器 | `/data/ai_platform/logs/prod/` | `/mnt/ai_platform/logs` | 读写 |
+| 生产容器 | `/data/ai_platform/pipelines/` | `/mnt/ai_platform/pipelines` | 读写 |
 
 ---
 
@@ -159,16 +169,20 @@
 
 ## 7. 新增 AI 能力流程
 
+> **重要原则**：每次新增 AI 能力模块时，必须同步更新所有关联子系统。详细清单见 `docs/design/build_service.md` 第 9 节。
+
 ```
 1. 在 /data/ai_platform/datasets/<new_capability>/ 下准备数据集
 2. 在 cpp/capabilities/<new_capability>/ 下新建 CMake 插件工程（复用模板）
 3. 在 train/scripts/<new_capability>/ 下新建训练脚本
 4. 在训练 Web 页面配置新能力并开始训练
 5. 训练完成，模型包导出到 /data/ai_platform/models/<new_capability>/v1.0.0/
-6. 编译容器编译生成 lib<new_capability>.so
-7. 测试容器验证推理结果
-8. 授权系统为新能力颁发 License
-9. 将新 SO 和模型包纳入生产镜像，或通过挂载目录热更新
+6. 在测试 Web 页面验证模型推理结果和精度
+7. 在授权 Web 页面生成包含新能力的试用授权
+8. 在编译 Web 页面选择授权密钥对，编译生成 lib<new_capability>.so
+9. 启动/重启生产镜像
+10. 在生产 Web 测试页面验证新能力推理接口
+11. (可选) 在 AI 编排管理页面创建包含新能力的 Pipeline
 ```
 
 ---

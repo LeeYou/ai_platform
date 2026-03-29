@@ -230,4 +230,81 @@ option(BUILD_ALL_CAPS   "构建所有能力插件" ON)
 
 ---
 
+## 9. 新增 AI 能力模块开发规范（全链路更新清单）
+
+> **重要原则**：每次新增一个 AI 能力模块时，必须同步更新所有关联子系统的代码、配置和 Web 页面。以下清单必须全部完成，确保全链路打通。
+
+### 9.1 必须更新的内容清单
+
+| 序号 | 子系统 | 更新内容 | 文件/目录 |
+|------|--------|---------|----------|
+| 1 | C++ 能力插件 | 创建能力插件源码 | `cpp/capabilities/<new_cap>/` |
+| 2 | C++ CMake | 注册新能力到 CMake 编译系统 | `cpp/capabilities/<new_cap>/CMakeLists.txt` |
+| 3 | 训练脚本 | 创建训练和导出脚本 | `train/scripts/<new_cap>/train.py, export.py, config.json` |
+| 4 | 训练 Web 页面 | 新能力自动出现在能力配置列表（动态加载，通常无需改代码） | `train/frontend/` |
+| 5 | 测试推理器 | 添加能力专属推理器实现 | `test/backend/inferencers.py` |
+| 6 | 测试 Web 页面 | 新能力自动出现在模型列表（动态加载，通常无需改代码） | `test/frontend/` |
+| 7 | 授权系统 | 将新能力名称添加到可选能力列表 | `license/backend/` 能力列表配置 |
+| 8 | 授权 Web 页面 | 新能力出现在授权生成时的能力勾选列表 | `license/frontend/` |
+| 9 | 编译 Web 页面 | 新能力自动出现在编译目标列表（动态扫描，无需改代码） | `build/frontend/` |
+| 10 | 编译后端 | 新能力自动可编译（CMake 宏模板，无需改代码） | `build/backend/` |
+| 11 | 生产推理服务 | 新能力 SO 和模型放置到正确位置后自动加载（热重载） | `prod/web_service/` |
+| 12 | 生产 Web 页面 | 新能力自动出现在 API 测试页和状态页（动态加载） | `prod/frontend/` |
+| 13 | AI 编排系统 | 新能力自动出现在编排步骤能力选择列表（动态加载） | `prod/frontend/` |
+| 14 | 文档 | 更新能力清单文档 | `docs/ai_capability_market_overview.md` |
+
+### 9.2 新增 AI 能力的标准操作步骤
+
+```
+1. 【训练准备】
+   ├── 创建训练脚本: train/scripts/<new_cap>/train.py, export.py, config.json
+   ├── 准备训练样本: /data/ai_platform/datasets/<new_cap>/
+   └── 在训练 Web 页面配置能力并启动训练
+
+2. 【模型导出】
+   └── 训练完成后导出模型包到: /data/ai_platform/models/<new_cap>/v1.0.0/
+
+3. 【测试验证】
+   ├── 添加测试推理器: test/backend/inferencers.py (新增 <NewCap>Inferencer 类)
+   ├── 准备测试样本: /data/ai_platform/datasets/<new_cap>/test/
+   └── 在测试 Web 页面执行单样本和批量测试
+
+4. 【C++ 插件开发】
+   ├── 创建插件代码: cpp/capabilities/<new_cap>/<new_cap>.cpp/.h
+   ├── 创建 CMakeLists.txt (使用 add_capability_plugin 宏)
+   └── 单元测试: cpp/tests/test_<new_cap>.cpp
+
+5. 【授权配置】
+   └── 在授权 Web 页面生成包含新能力的试用授权
+
+6. 【编译 SO】
+   └── 在编译 Web 页面选择新能力 + 试用授权密钥对，触发编译
+
+7. 【生产集成】
+   ├── 编译产物自动归档到: /data/ai_platform/libs/<arch>/<new_cap>/
+   ├── 启动/重启生产镜像
+   └── 在生产 Web 页面测试新能力推理接口
+
+8. 【AI 编排】(可选)
+   └── 如需将新能力纳入编排 Pipeline，在编排管理页面创建或更新 Pipeline
+
+9. 【文档更新】
+   └── 更新 docs/ai_capability_market_overview.md 能力清单
+```
+
+### 9.3 自动化与手动更新
+
+| 类型 | 自动适配（无需改代码） | 需手动更新 |
+|------|----------------------|-----------|
+| 训练 Web | ✅ 能力列表动态加载 | — |
+| 测试 Web | ✅ 模型列表动态扫描 | ⚠️ 需添加推理器类 |
+| 授权 Web | ✅ 能力列表动态读取 | — |
+| 编译 Web | ✅ 能力列表动态扫描 | — |
+| 生产 Web | ✅ 能力列表动态加载 | — |
+| AI 编排 | ✅ 能力列表动态加载 | ⚠️ 需创建 Pipeline 配置（如有需要） |
+| C++ 代码 | — | ⚠️ 必须创建插件源码 |
+| 训练脚本 | — | ⚠️ 必须创建训练脚本 |
+
+---
+
 *Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agilestar.cn*

@@ -1,7 +1,7 @@
 # 分阶段开发计划
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.0 | 2026-03-27**
+**文档版本：v2.0 | 2026-03-29**
 
 ---
 
@@ -15,8 +15,10 @@
 | Phase 3 | C++ Runtime & 首个能力 SO | 第 9-14 周 | Runtime 库、recapture_detect SO、编译 Web |
 | Phase 4 | 测试子系统 | 第 13-16 周 | 测试 Web、精度评估、版本对比 |
 | Phase 5 | 生产交付子系统 | 第 16-20 周 | 生产镜像、REST API、热重载 |
-| Phase 6 | 多平台扩展 | 第 20-26 周 | aarch64/Windows SO、JNI、更多能力 SO |
-| Phase 7 | 完善与发布 | 第 26-30 周 | 全量测试、文档、v1.0.0 发布 |
+| **Phase 5A** | **生产 Web 管理前端** | **第 20-22 周** | **生产测试页面、服务状态监控、API 测试** |
+| **Phase 5B** | **AI 能力编排子系统** | **第 22-25 周** | **Pipeline 编排引擎、编排管理 Web、编排测试** |
+| Phase 6 | 多平台扩展 | 第 25-30 周 | aarch64/Windows SO、JNI、更多能力 SO |
+| Phase 7 | 完善与发布 | 第 30-34 周 | 全量测试、文档、v1.0.0 发布 |
 
 > **关键路径**：Phase 0 → Phase 1（授权） → Phase 3（C++ Runtime）  
 > 这三个阶段是整个平台的地基，授权体系和 C ABI 是所有其他子系统的依赖。
@@ -244,7 +246,90 @@
 
 ---
 
-## Phase 6：多平台扩展（第 20-26 周）
+## Phase 5A：生产 Web 管理前端（第 20-22 周）
+
+### 目标
+
+为生产推理服务添加内置 Web 管理页面，提供 API 接口测试、服务状态监控等功能，使测试和运维更加方便直观。
+
+### 任务清单
+
+#### 前端项目搭建
+
+- [ ] 初始化 `prod/frontend/` Vue3 + Vite 项目（Element Plus）
+- [ ] 创建 `prod/frontend/nginx.conf`（静态文件 + API 反向代理）
+- [ ] 配置 `prod/frontend/src/api/index.js`（axios 实例，含 normalizeErrorDetail 和 extractErrorMessage）
+- [ ] 配置 Vue Router 路由
+
+#### 页面开发
+
+- [ ] **Dashboard.vue**（仪表盘）：服务状态、能力统计、License 概况、GPU 状态、快捷入口
+- [ ] **ApiTest.vue**（API 测试）：选择能力、上传图片、配置参数、执行推理、结果展示（JSON + 可视化）
+- [ ] **Status.vue**（服务状态）：能力列表（loaded/unavailable）、License 详情、模型版本信息
+- [ ] **Admin.vue**（系统管理）：热重载操作（需 Admin Token 认证）
+- [ ] **NavMenu.vue**（导航组件）
+
+#### 容器化更新
+
+- [ ] 更新 `prod/Dockerfile`：增加 Node.js 构建阶段、nginx 安装
+- [ ] 创建 `prod/supervisord.conf`（管理 nginx + FastAPI）
+- [ ] 更新 `deploy/docker-compose.prod.yml`：端口映射调整
+- [ ] 更新 `docs/docker_operations_manual.md`
+
+### 里程碑验收
+
+- 生产容器启动后，访问 Web 页面可查看服务状态
+- 在 API 测试页面选择能力、上传图片、执行推理并查看结果
+- Admin 页面可执行热重载操作
+
+---
+
+## Phase 5B：AI 能力编排子系统（第 22-25 周）
+
+### 目标
+
+为生产服务添加 AI 能力编排功能，支持多个 AI 能力按照配置化的流水线串行组合调用，并提供可视化编排管理 Web 页面。
+
+### 任务清单
+
+#### 编排引擎后端
+
+- [ ] 实现 Pipeline 定义模型（JSON Schema 校验）
+- [ ] 实现 Pipeline 存储（文件系统 JSON 文件）
+- [ ] 实现 Pipeline 执行引擎（步骤串行执行、条件分支、结果透传）
+- [ ] 实现简单表达式引擎（变量引用、JSONPath 提取、比较和逻辑运算）
+- [ ] Pipeline 管理 API：CRUD + validate
+- [ ] Pipeline 执行 API：`/api/v1/pipeline/{pipeline_id}/run`
+- [ ] 单元测试
+
+#### 编排管理前端
+
+- [ ] **Pipelines.vue**（编排列表）：列表展示、新建/编辑/删除/启禁用
+- [ ] **PipelineEdit.vue**（编排编辑器）：步骤添加/删除/排序、能力选择、参数配置、条件设置、验证
+- [ ] **PipelineTest.vue**（编排测试）：选择 Pipeline、上传数据、执行、步骤级结果展示
+
+#### 容器化更新
+
+- [ ] 更新 `deploy/docker-compose.prod.yml`：增加 pipelines 目录挂载
+- [ ] 创建 `deploy/mount_template/pipelines/` 目录模板
+- [ ] 更新 `docs/docker_operations_manual.md`
+
+#### 预置 Pipeline 配置
+
+- [ ] 创建 `active_liveness_check.json`（指令活体：face_detect → face_liveness_action → recapture_detect）
+- [ ] 创建 `silent_liveness_check.json`（静默活体：face_detect → face_liveness_silent → recapture_detect）
+
+### 里程碑验收
+
+- 在编排管理页面可创建、编辑、删除 Pipeline
+- Pipeline 验证功能正确检查能力是否存在
+- 执行编排流水线返回正确的分步结果和最终结果
+- 条件分支和错误处理策略正确执行
+- 预置的活体检测 Pipeline 可正常运行
+
+---
+
+## Phase 6：多平台扩展（第 25-30 周）
 
 ### 任务清单
 
@@ -281,7 +366,7 @@
 
 ---
 
-## Phase 7：完善与发布（第 26-30 周）
+## Phase 7：完善与发布（第 30-34 周）
 
 ### 任务清单
 
@@ -335,7 +420,11 @@ Phase 0（基础设施）
             ↓
             ├── Phase 4（测试子系统）
             │       ↓
-            └── Phase 5（生产交付）
+            └── Phase 5（生产交付 REST API）
+                    ↓
+                Phase 5A（生产 Web 管理前端）
+                    ↓
+                Phase 5B（AI 能力编排子系统）
                     ↓
                 Phase 6（多平台扩展）
                     ↓
