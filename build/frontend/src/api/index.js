@@ -86,5 +86,6 @@ export function downloadArtifact(jobId, filename) {
 export function connectBuildWs(jobId) {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return new WebSocket(`${proto}//${host}/ws/build/${jobId}`)
+  const encoded = encodeURIComponent(jobId)
+  return new WebSocket(`${proto}//${host}/ws/build/${encoded}`)
 }

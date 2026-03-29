@@ -11,7 +11,8 @@ import asyncio
 import hashlib
 import logging
 import os
-import subprocess
+import re
+import shlex
 import sys
 import time
 import traceback
@@ -33,6 +34,10 @@ BUILD_LOG_DIR = "./data/build_logs"
 LOG_DIR = os.getenv("LOG_DIR", "./data/build_logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LICENSE_SERVICE_URL = os.getenv("LICENSE_SERVICE_URL", "http://license:8003")
+
+ALLOWED_BUILD_TYPES = {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
+# CMake -D args must match: -DVARNAME=VALUE (alphanumeric + underscore/dot/dash)
+CMAKE_ARG_RE = re.compile(r"^-D[A-Za-z_][A-Za-z0-9_]*(=[\w./-]*)?$")
 
 
 # ---------------------------------------------------------------------------
@@ -194,32 +199,41 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
     build_dir = f"/tmp/build_{job_id}"
     os.makedirs(build_dir, exist_ok=True)
 
-    # Build specific capability only
-    cap_flag = f"-DBUILD_ALL_CAPS=OFF -DBUILD_CAP_{req.capability.upper()}=ON"
+    # Build argument lists — no shell expansion, safe from injection
+    cmake_args = [
+        "cmake", CPP_SOURCE_DIR, "-B", build_dir,
+        f"-DCMAKE_BUILD_TYPE={req.build_type}",
+        "-DBUILD_ALL_CAPS=OFF",
+        f"-DBUILD_CAP_{req.capability.upper()}=ON",
+    ]
 
     # Inject trusted public key fingerprint if provided
     fingerprint = req.trusted_pubkey_sha256 or job.get("trusted_pubkey_sha256", "")
-    fingerprint_flag = f'-DTRUSTED_PUBKEY_SHA256="{fingerprint}"' if fingerprint else ""
+    if fingerprint:
+        cmake_args.append(f"-DTRUSTED_PUBKEY_SHA256={fingerprint}")
 
-    cmake_cmd = (
-        f"cmake {CPP_SOURCE_DIR} -B {build_dir} "
-        f"-DCMAKE_BUILD_TYPE={req.build_type} "
-        f"{cap_flag} "
-        f"{fingerprint_flag} "
-        + " ".join(req.extra_cmake_args or [])
-    )
-    build_cmd = f"cmake --build {build_dir} --parallel $(nproc)"
-    install_cmd = (
-        f"cmake --install {build_dir} "
-        f"--prefix {BUILD_OUTPUT_DIR}/{req.capability}"
-    )
+    # Extra CMake args (already validated in trigger_build)
+    cmake_args.extend(req.extra_cmake_args or [])
+
+    # Determine nproc safely
+    try:
+        nproc = str(os.cpu_count() or 1)
+    except Exception:
+        nproc = "1"
+
+    build_args = ["cmake", "--build", build_dir, "--parallel", nproc]
+    install_args = [
+        "cmake", "--install", build_dir,
+        "--prefix", os.path.join(BUILD_OUTPUT_DIR, req.capability),
+    ]
 
     with open(log_path, "w", encoding="utf-8") as lf:
-        for cmd in [cmake_cmd, build_cmd, install_cmd]:
-            lf.write(f"\n$ {cmd}\n")
+        for args in [cmake_args, build_args, install_args]:
+            cmd_display = " ".join(shlex.quote(a) for a in args)
+            lf.write(f"\n$ {cmd_display}\n")
             lf.flush()
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            proc = await asyncio.create_subprocess_exec(
+                *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -231,7 +245,7 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
             if proc.returncode != 0:
                 job["status"] = "failed"
                 job["finished_at"] = datetime.now(timezone.utc).isoformat()
-                logger.error("Build %s failed at command: %s (exit code %s)", job_id, cmd, proc.returncode)
+                logger.error("Build %s failed at command: %s (exit code %s)", job_id, cmd_display, proc.returncode)
                 return
 
     job["status"] = "done"
@@ -255,6 +269,41 @@ def list_builds():
 
 @app.post("/api/v1/builds", response_model=BuildJob, status_code=201, tags=["builds"])
 async def trigger_build(req: BuildRequest):
+    # --- Input validation ---
+    # Validate build_type
+    if req.build_type not in ALLOWED_BUILD_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"build_type 必须是以下之一: {', '.join(sorted(ALLOWED_BUILD_TYPES))}",
+        )
+
+    # Validate capability against actual directory listing
+    cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
+    if os.path.isdir(cap_dir):
+        valid_caps = {
+            d for d in os.listdir(cap_dir)
+            if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
+        }
+        if req.capability not in valid_caps:
+            raise HTTPException(status_code=400, detail=f"无效的能力名称: {req.capability}")
+    elif not re.match(r"^[a-z][a-z0-9_]*$", req.capability):
+        raise HTTPException(status_code=400, detail=f"无效的能力名称: {req.capability}")
+
+    # Validate extra cmake args (must be -DKEY=VALUE format only)
+    for arg in (req.extra_cmake_args or []):
+        if not CMAKE_ARG_RE.match(arg):
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效的 CMake 参数: {arg}（格式需为 -DNAME=VALUE）",
+            )
+
+    # Validate fingerprint format if provided directly
+    if req.trusted_pubkey_sha256 and not re.match(r"^[a-f0-9]{64}$", req.trusted_pubkey_sha256):
+        raise HTTPException(
+            status_code=400,
+            detail="trusted_pubkey_sha256 必须是 64 位小写十六进制字符串",
+        )
+
     # Resolve key_pair_id to public key fingerprint via license service
     key_pair_name = None
     fingerprint = req.trusted_pubkey_sha256 or ""
