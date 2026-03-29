@@ -1,9 +1,14 @@
 """Build Management API — trigger CMake builds, stream build logs.
 
+Provides a web UI for selecting AI capabilities, binding customer key pairs
+(via license service proxy), and compiling customer-specific SO libraries
+with the trusted public-key fingerprint compiled in.
+
 Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agilestar.cn
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import subprocess
@@ -27,6 +32,7 @@ BUILD_OUTPUT_DIR = os.getenv("BUILD_OUTPUT_DIR", "/workspace/libs/linux_x86_64")
 BUILD_LOG_DIR = "./data/build_logs"
 LOG_DIR = os.getenv("LOG_DIR", "./data/build_logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LICENSE_SERVICE_URL = os.getenv("LICENSE_SERVICE_URL", "http://license:8003")
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +76,10 @@ try:
     from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
     from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse, PlainTextResponse
+    from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
+    import httpx
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -155,6 +163,8 @@ class BuildRequest(BaseModel):
     capability: str           # e.g. "recapture_detect"
     platform: str = "linux_x86_64"
     build_type: str = "Release"
+    key_pair_id: Optional[int] = None  # binds customer key pair, auto-computes fingerprint
+    trusted_pubkey_sha256: Optional[str] = None  # or pass fingerprint directly
     extra_cmake_args: Optional[list[str]] = None
 
 
@@ -166,6 +176,8 @@ class BuildJob(BaseModel):
     log_path: Optional[str]
     created_at: str
     finished_at: Optional[str]
+    key_pair_name: Optional[str] = None
+    trusted_pubkey_sha256: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +196,16 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
 
     # Build specific capability only
     cap_flag = f"-DBUILD_ALL_CAPS=OFF -DBUILD_CAP_{req.capability.upper()}=ON"
+
+    # Inject trusted public key fingerprint if provided
+    fingerprint = req.trusted_pubkey_sha256 or job.get("trusted_pubkey_sha256", "")
+    fingerprint_flag = f'-DTRUSTED_PUBKEY_SHA256="{fingerprint}"' if fingerprint else ""
+
     cmake_cmd = (
         f"cmake {CPP_SOURCE_DIR} -B {build_dir} "
         f"-DCMAKE_BUILD_TYPE={req.build_type} "
         f"{cap_flag} "
+        f"{fingerprint_flag} "
         + " ".join(req.extra_cmake_args or [])
     )
     build_cmd = f"cmake --build {build_dir} --parallel $(nproc)"
@@ -237,6 +255,32 @@ def list_builds():
 
 @app.post("/api/v1/builds", response_model=BuildJob, status_code=201, tags=["builds"])
 async def trigger_build(req: BuildRequest):
+    # Resolve key_pair_id to public key fingerprint via license service
+    key_pair_name = None
+    fingerprint = req.trusted_pubkey_sha256 or ""
+    if req.key_pair_id and not fingerprint:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{LICENSE_SERVICE_URL}/api/v1/keys")
+                resp.raise_for_status()
+                keys = resp.json()
+                kp = next((k for k in keys if k["id"] == req.key_pair_id), None)
+                if not kp:
+                    raise HTTPException(status_code=400, detail=f"密钥对 ID={req.key_pair_id} 不存在")
+                key_pair_name = kp.get("name", "")
+                pem_bytes = kp["public_key_pem"].encode("utf-8")
+                fingerprint = hashlib.sha256(pem_bytes).hexdigest()
+                logger.info(
+                    "Resolved key_pair_id=%s (%s) → fingerprint=%s",
+                    req.key_pair_id, key_pair_name, fingerprint,
+                )
+        except httpx.HTTPError as exc:
+            logger.error("Failed to fetch key pairs from license service: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"无法连接授权服务获取密钥对信息: {exc}",
+            )
+
     job_id = str(uuid.uuid4())
     job = {
         "job_id": job_id,
@@ -246,8 +290,12 @@ async def trigger_build(req: BuildRequest):
         "log_path": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None,
+        "key_pair_name": key_pair_name,
+        "trusted_pubkey_sha256": fingerprint or None,
     }
     _jobs[job_id] = job
+    # Store fingerprint on request so _run_build can use it
+    req.trusted_pubkey_sha256 = fingerprint or None
     asyncio.create_task(_run_build(job_id, req))
     return BuildJob(**job)
 
@@ -314,3 +362,98 @@ async def ws_build_logs(websocket: WebSocket, job_id: str):
             await websocket.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Capabilities — scan cpp/capabilities/ directory
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/capabilities", tags=["capabilities"])
+def list_capabilities():
+    """Return a sorted list of available AI capability names."""
+    cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
+    if not os.path.isdir(cap_dir):
+        logger.warning("Capabilities directory not found: %s", cap_dir)
+        return []
+    caps = sorted(
+        d for d in os.listdir(cap_dir)
+        if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
+    )
+    logger.info("Found %d capabilities in %s", len(caps), cap_dir)
+    return caps
+
+
+# ---------------------------------------------------------------------------
+# Key Pairs — proxy from license service
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/key-pairs", tags=["key-pairs"])
+async def list_key_pairs():
+    """Proxy key pair list from the license management service.
+
+    Each item includes: id, name, public_key_pem, is_active, created_at,
+    plus a computed ``fingerprint`` (SHA-256 of the PEM bytes).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{LICENSE_SERVICE_URL}/api/v1/keys")
+            resp.raise_for_status()
+            keys = resp.json()
+    except httpx.HTTPError as exc:
+        logger.error("Failed to proxy key pairs from license service: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"无法连接授权服务: {exc}",
+        )
+
+    # Enrich each key pair with a computed fingerprint
+    for kp in keys:
+        pem = kp.get("public_key_pem", "")
+        kp["fingerprint"] = hashlib.sha256(pem.encode("utf-8")).hexdigest() if pem else ""
+    return keys
+
+
+# ---------------------------------------------------------------------------
+# Artifacts — list and download build outputs
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/builds/{job_id}/artifacts", tags=["artifacts"])
+def list_artifacts(job_id: str):
+    """List output files produced by a build."""
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Build job not found")
+    job = _jobs[job_id]
+    cap = job["capability"]
+    artifact_dir = os.path.join(BUILD_OUTPUT_DIR, cap)
+    if not os.path.isdir(artifact_dir):
+        return []
+    result = []
+    for root, _dirs, files in os.walk(artifact_dir):
+        for fname in files:
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, artifact_dir)
+            result.append({
+                "filename": rel,
+                "size": os.path.getsize(full),
+            })
+    return result
+
+
+@app.get("/api/v1/builds/{job_id}/artifacts/{filename:path}", tags=["artifacts"])
+def download_artifact(job_id: str, filename: str):
+    """Download a specific build artifact."""
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Build job not found")
+    cap = _jobs[job_id]["capability"]
+    filepath = os.path.join(BUILD_OUTPUT_DIR, cap, filename)
+    if not os.path.isfile(filepath):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return FileResponse(filepath, filename=os.path.basename(filename))
+
+
+# ---------------------------------------------------------------------------
+# Serve built frontend (Vue SPA) if present
+# ---------------------------------------------------------------------------
+_frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
