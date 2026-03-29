@@ -470,9 +470,10 @@ async def infer(
 # ---------------------------------------------------------------------------
 
 def _verify_admin(request: Request) -> None:
+    import hmac
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ").strip()
-    if token != ADMIN_TOKEN:
+    if not hmac.compare_digest(token, ADMIN_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -628,9 +629,14 @@ if os.path.isdir(_FRONTEND_DIR):
         # Only serve frontend for non-API routes
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
-        static_file = os.path.join(_FRONTEND_DIR, full_path)
-        if os.path.isfile(static_file):
-            return FileResponse(static_file)
+        # Prevent path traversal: resolve and verify within frontend dir
+        from pathlib import Path
+        frontend_root_path = Path(_FRONTEND_DIR).resolve()
+        requested = (frontend_root_path / full_path).resolve()
+        if not str(requested).startswith(str(frontend_root_path)):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if requested.is_file():
+            return FileResponse(str(requested))
         return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
 
     logger.info("Frontend static files enabled from %s", _FRONTEND_DIR)
