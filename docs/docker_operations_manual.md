@@ -1,7 +1,7 @@
 # Docker 镜像与容器构建管理手册
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.0 | 2026-03-28**  
+**文档版本：v1.1 | 2026-03-29**  
 **适用范围：AI 综合能力平台 (ai_platform) 全部 Docker 镜像**
 
 ---
@@ -26,9 +26,10 @@
 10. [镜像推送与仓库管理](#10-镜像推送与仓库管理)
 11. [交付包打包](#11-交付包打包)
 12. [常用运维命令速查表](#12-常用运维命令速查表)
-13. [故障排查指南](#13-故障排查指南)
-14. [附录：端口分配表](#14-附录端口分配表)
-15. [附录：授权安全模型](#15-附录授权安全模型)
+13. [新增 AI 能力模块完整操作流程](#13-新增-ai-能力模块完整操作流程)
+14. [故障排查指南](#14-故障排查指南)
+15. [附录：端口分配表](#15-附录端口分配表)
+16. [附录：授权安全模型](#16-附录授权安全模型)
 
 ---
 
@@ -99,10 +100,45 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 
 # 验证
-docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 nvidia-smi
 ```
 
-### 2.4 配置 Docker 日志驱动（推荐）
+### 2.4 CUDA 版本兼容性说明
+
+本平台默认使用 **CUDA 11.8** 作为训练镜像的基础版本，同时支持 CUDA 12.1。
+
+#### 已验证兼容的 NVIDIA CUDA 镜像
+
+| 镜像 | CUDA 版本 | 用途 | 状态 |
+|------|-----------|------|------|
+| `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04` | 11.8 | 训练（含编译工具链） | ✅ **默认推荐** |
+| `nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04` | 11.8 | 推理运行时（轻量） | ✅ 支持 |
+| `nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04` | 12.1 | 训练（可选） | ✅ 支持 |
+
+#### 主要依赖库兼容性
+
+| 依赖库 | CUDA 11.8 | CUDA 12.1 | 说明 |
+|--------|-----------|-----------|------|
+| PyTorch 2.0-2.4 | ✅ | ✅ | 官方同时提供 cu118 和 cu121 wheel |
+| ONNXRuntime 1.18 | ✅ | ✅ | GPU 版支持 CUDA 11.8+ |
+| TensorRT 8.6 | ✅ | ✅ | 支持 CUDA 11.8+ |
+| cuDNN 8.x | ✅ | ✅ | 两个版本都已包含 |
+
+#### 切换 CUDA 版本
+
+```bash
+# 使用默认 CUDA 11.8 构建训练镜像
+docker build -t agilestar/ai-train:latest -f train/Dockerfile .
+
+# 切换到 CUDA 12.1 构建训练镜像
+docker build -t agilestar/ai-train:latest -f train/Dockerfile \
+  --build-arg CUDA_BASE_IMAGE=nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04 .
+```
+
+> **NVIDIA 驱动兼容性**：CUDA 11.8 要求 NVIDIA 驱动 ≥ 520，CUDA 12.1 要求 ≥ 530。
+> 如果宿主机驱动较旧，建议使用 CUDA 11.8。
+
+### 2.5 配置 Docker 日志驱动（推荐）
 
 编辑 `/etc/docker/daemon.json`：
 
@@ -130,7 +166,7 @@ sudo systemctl restart docker
 | 序号 | 镜像名 | Dockerfile 路径 | 基础镜像 | 端口 | 用途 |
 |------|--------|----------------|---------|------|------|
 | 1 | `agilestar/ai-license-mgr` | `license/backend/Dockerfile` | `python:3.11-slim` | 8003 | 授权管理 Web + API |
-| 2 | `agilestar/ai-train` | `train/Dockerfile` | `nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04` | 8001 | GPU 训练服务 |
+| 2 | `agilestar/ai-train` | `train/Dockerfile` | `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04`（默认，支持切换为12.1） | 8001 | GPU 训练服务 |
 | 3 | `agilestar/ai-train-dev` | `train/Dockerfile.dev` | `python:3.11-slim` | 8001 | 本地开发训练（无 GPU） |
 | 4 | `agilestar/ai-test` | `test/Dockerfile` | `python:3.11-slim` | 8002 | 模型测试与精度评估 |
 | 5 | `agilestar/ai-builder-linux-x86` | `build/Dockerfile.linux_x86` | `ubuntu:22.04` | 8004 | C++ 多平台编译 |
@@ -270,7 +306,14 @@ curl http://localhost:8003/health
 
 **Dockerfile 路径**：`train/Dockerfile`
 
-**基础镜像**：`nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04`
+**基础镜像**：`nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04`（默认）
+
+> **CUDA 版本说明**：默认使用 CUDA 11.8，兼容性最广，完全支持 PyTorch 2.x 所有版本。
+> 如需使用 CUDA 12.x，可通过 `--build-arg` 切换基础镜像。
+>
+> 支持的基础镜像（已验证）：
+> - `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04` — **默认推荐**，兼容 PyTorch 2.0-2.4、ONNXRuntime 1.18
+> - `nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04` — 可选，支持最新 CUDA 特性
 
 **暴露端口**：8001
 
@@ -279,8 +322,12 @@ curl http://localhost:8003/health
 #### 构建命令
 
 ```bash
-# 标准构建（较大，约 8-12 GB，含 CUDA + cuDNN）
+# 标准构建（默认 CUDA 11.8，较大，约 8-12 GB，含 CUDA + cuDNN）
 docker build -t agilestar/ai-train:latest -f train/Dockerfile .
+
+# 使用 CUDA 12.1 构建（可选）
+docker build -t agilestar/ai-train:latest -f train/Dockerfile \
+  --build-arg CUDA_BASE_IMAGE=nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04 .
 
 # 指定版本号
 docker build -t agilestar/ai-train:1.0.0 -f train/Dockerfile .
@@ -1167,7 +1214,7 @@ docker system prune -a --volumes
 
 > **重要**：推理 SO（`libai_runtime.so`）和生产镜像中硬编码了该客户公钥的 SHA-256
 > 指纹，因此**每个客户的交付包中 SO 和镜像都是该客户专属的**。详见
-> [附录：授权安全模型](#15-附录授权安全模型)。
+> [附录：授权安全模型](#16-附录授权安全模型)。
 
 ```
 delivery_package/
@@ -1449,9 +1496,260 @@ docker build --build-arg TRUSTED_PUBKEY_SHA256=<新指纹> ...
 
 ---
 
-## 13. 故障排查指南
+## 13. 新增 AI 能力模块完整操作流程
 
-### 13.1 容器无法启动
+> 本节描述从零开始新增一个 AI 能力模块的完整端到端流程，确保所有子系统同步更新。
+
+### 13.1 流程总览
+
+```
+训练 → 模型导出 → 测试验证 → C++插件开发 → 授权配置 → SO编译 → 生产集成 → AI编排(可选)
+```
+
+### 13.2 步骤 1：训练工作
+
+```bash
+# ── 1.1 准备代码 ──
+# 创建训练脚本（必须手动完成）
+mkdir -p train/scripts/<new_cap>/
+# 需要创建：
+#   train/scripts/<new_cap>/train.py       # 训练主脚本
+#   train/scripts/<new_cap>/export.py      # 模型导出脚本（PyTorch → ONNX）
+#   train/scripts/<new_cap>/config.json    # 默认训练超参数
+#   train/scripts/<new_cap>/requirements.txt # 训练依赖
+
+# ── 1.2 准备样本数据 ──
+# 将训练数据放到宿主机指定位置
+cp -r /path/to/training_data/* /data/ai_platform/datasets/<new_cap>/
+
+# ── 1.3 启动训练容器 ──
+cd deploy
+docker compose up -d train redis
+
+# ── 1.4 打开训练管理 Web 页面 ──
+# 浏览器打开：http://<server-ip>:8001
+# 操作步骤：
+#   1. 进入"能力配置"页面，新能力会自动出现在列表中
+#   2. 配置训练参数（学习率、batch_size、epoch 等）
+#   3. 选择训练数据集路径
+#   4. 点击"开始训练"
+
+# ── 1.5 监控训练进度 ──
+# 训练管理 Web 页面实时展示：
+#   - Loss 曲线
+#   - 训练进度百分比
+#   - GPU 使用状态
+#   - 实时日志
+# 也可查看宿主机日志：
+tail -f /data/ai_platform/logs/train/train.log
+
+# ── 1.6 导出模型 ──
+# 训练完成后，在 Web 页面执行模型导出
+# 导出为 ONNX 格式（或根据具体能力选择合适的格式）
+# 模型输出到：/data/ai_platform/models/<new_cap>/v1.0.0/
+#   ├── model.onnx
+#   └── manifest.json
+```
+
+### 13.3 步骤 2：测试模型
+
+```bash
+# ── 2.1 准备测试样本 ──
+mkdir -p /data/ai_platform/datasets/<new_cap>/test/
+cp -r /path/to/test_samples/* /data/ai_platform/datasets/<new_cap>/test/
+
+# ── 2.2 添加测试推理器（必须手动完成）──
+# 编辑 test/backend/inferencers.py
+# 添加新能力的推理器类：
+#   class NewCapInferencer(BaseInferencer):
+#       def preprocess(self, input_data): ...
+#       def postprocess(self, output): ...
+
+# ── 2.3 启动测试容器 ──
+cd deploy
+docker compose up -d test
+
+# ── 2.4 打开测试管理 Web 页面 ──
+# 浏览器打开：http://<server-ip>:8002
+# 操作步骤：
+#   1. 新能力自动出现在模型列表中
+#   2. 单样本测试：上传单个测试图片，查看推理结果
+#   3. 批量测试：配置测试数据集路径，执行批量测试
+#   4. 查看评估报告（精度、召回率、F1 等指标）
+#   5. 版本对比：对比 v1.0.0 与之前版本的精度差异
+```
+
+### 13.4 步骤 3：授权生成
+
+```bash
+# ── 3.1 启动授权容器 ──
+cd deploy
+docker compose up -d license
+
+# ── 3.2 打开授权管理 Web 页面 ──
+# 浏览器打开：http://<server-ip>:8003
+# 操作步骤：
+#   1. 进入"授权生成"页面
+#   2. 选择客户密钥对
+#   3. 在能力列表中勾选新增的 AI 能力（自动出现在列表中）
+#   4. 设置有效期
+#   5. 点击"生成授权"→ 下载 license.bin
+
+# ── 3.3 验证授权 ──
+# 在授权管理页面查看生成的授权详情，确认包含新能力
+
+# ── 3.4 输出授权文件 ──
+cp license.bin /data/ai_platform/licenses/
+```
+
+### 13.5 步骤 4：推理库编译
+
+```bash
+# ── 4.1 准备 C++ 插件代码（必须手动完成）──
+# 创建能力插件源码
+mkdir -p cpp/capabilities/<new_cap>/
+# 需要创建：
+#   cpp/capabilities/<new_cap>/CMakeLists.txt   # 使用 add_capability_plugin 宏
+#   cpp/capabilities/<new_cap>/<new_cap>.h      # 接口头文件
+#   cpp/capabilities/<new_cap>/<new_cap>.cpp    # 实现（AiCreate/AiInit/AiInfer/AiDestroy等）
+
+# ── 4.2 启动编译容器 ──
+cd deploy
+docker compose up -d license build
+
+# ── 4.3 打开编译管理 Web 页面 ──
+# 浏览器打开：http://<server-ip>:8004
+# 操作步骤：
+#   1. 新能力自动出现在可编译能力列表中（动态扫描 cpp/capabilities/ 目录）
+#   2. 选择要编译的能力（勾选新增的能力）
+#   3. 选择客户密钥对（授权绑定）
+#   4. 确认授权信息中包含该新增的 AI 能力
+#   5. 点击"开始编译"
+#   6. 查看实时编译日志（WebSocket 推送）
+
+# ── 4.4 编译产物自动归档 ──
+# 编译成功后，SO 文件自动输出到：
+# /data/ai_platform/libs/linux_x86_64/<new_cap>/lib<new_cap>.so
+# 生产镜像通过卷挂载即可访问
+```
+
+### 13.6 步骤 5：生产镜像构建（仅首次）
+
+```bash
+# ── 仅在首次创建生产镜像时需要执行 ──
+
+# 5.1 构建生产镜像
+docker build -t agilestar/ai-prod:latest -f prod/Dockerfile .
+
+# 5.2 启动生产镜像
+cd deploy
+AI_ADMIN_TOKEN=your-secure-token \
+docker compose -f docker-compose.prod.yml up -d
+
+# 5.3 打开生产 Web 管理页面
+# 浏览器打开：http://<server-ip>:8080
+# 操作步骤：
+#   1. 仪表盘：确认新能力已加载
+#   2. API 测试页面：选择新增的 AI 能力，上传测试图片，执行推理
+#   3. 服务状态页面：确认能力状态为 "loaded"
+
+# 5.4 使用 curl 测试 HTTP 接口
+curl http://localhost:8080/api/v1/health
+curl http://localhost:8080/api/v1/capabilities
+curl -X POST http://localhost:8080/api/v1/infer/<new_cap> \
+  -F "image=@/path/to/test.jpg"
+```
+
+### 13.7 步骤 6：已有镜像更新 AI 能力
+
+```bash
+# ── 已有生产镜像添加新 AI 能力时执行 ──
+
+# 6.1 确认编译产物和模型已就位
+ls -la /data/ai_platform/libs/linux_x86_64/<new_cap>/
+ls -la /data/ai_platform/models/<new_cap>/v1.0.0/
+ls -la /data/ai_platform/licenses/license.bin
+
+# 6.2 重启生产镜像（加载新资源）
+cd deploy
+docker compose -f docker-compose.prod.yml restart
+
+# 或通过热重载 API（无需重启容器）
+curl -X POST http://localhost:8080/api/v1/admin/reload \
+  -H "Authorization: Bearer your-secure-token"
+
+# 6.3 验证新能力已加载
+curl http://localhost:8080/api/v1/capabilities
+# 应该在返回列表中看到新增的能力
+
+# 6.4 在生产 Web 页面测试
+# 浏览器打开：http://<server-ip>:8080
+# → API 测试页面 → 选择新能力 → 上传测试图片 → 执行推理
+
+# 6.5 使用 curl 测试接口
+curl -X POST http://localhost:8080/api/v1/infer/<new_cap> \
+  -F "image=@/path/to/test.jpg"
+```
+
+### 13.8 步骤 7：AI 能力编排（可选）
+
+```bash
+# ── 如需将新能力纳入 Pipeline 编排 ──
+
+# 7.1 打开生产 Web 管理页面
+# 浏览器打开：http://<server-ip>:8080
+# → AI 编排管理页面
+
+# 7.2 创建或更新 Pipeline
+# 操作步骤：
+#   1. 点击"新建编排"
+#   2. 添加步骤，选择 AI 能力（新增的能力自动出现在列表中）
+#   3. 配置步骤参数、条件分支、错误处理策略
+#   4. 点击"验证"确认配置正确
+#   5. 保存 Pipeline
+
+# 7.3 测试编排
+# → 编排测试页面 → 选择 Pipeline → 上传测试数据 → 执行
+# 查看每个步骤的执行结果和最终输出
+
+# 7.4 通过 API 测试编排
+# 创建 Pipeline
+curl -X POST http://localhost:8080/api/v1/pipelines \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pipeline_id": "my_pipeline",
+    "name": "示例编排",
+    "steps": [
+      {"step_id": "step1", "capability": "<new_cap>", "params": {}}
+    ]
+  }'
+
+# 执行 Pipeline
+curl -X POST http://localhost:8080/api/v1/pipeline/my_pipeline/run \
+  -F "image=@/path/to/test.jpg"
+```
+
+### 13.9 全链路更新清单（每次新增能力必须检查）
+
+| # | 更新内容 | 自动/手动 | 说明 |
+|---|---------|----------|------|
+| 1 | C++ 能力插件代码 | ⚠️ 手动 | `cpp/capabilities/<new_cap>/` |
+| 2 | 训练脚本 | ⚠️ 手动 | `train/scripts/<new_cap>/train.py, export.py` |
+| 3 | 测试推理器 | ⚠️ 手动 | `test/backend/inferencers.py` 添加推理器类 |
+| 4 | 训练 Web 页面 | ✅ 自动 | 能力列表动态加载 |
+| 5 | 测试 Web 页面 | ✅ 自动 | 模型列表动态扫描 |
+| 6 | 授权 Web 页面 | ✅ 自动 | 能力列表动态读取 |
+| 7 | 编译 Web 页面 | ✅ 自动 | 能力目录动态扫描 |
+| 8 | 生产 Web 页面 | ✅ 自动 | 已加载能力动态展示 |
+| 9 | AI 编排系统 | ✅ 自动 | 能力列表动态加载 |
+| 10 | Pipeline 配置 | ⚠️ 手动 | 如需编排则创建 JSON 配置 |
+| 11 | 能力清单文档 | ⚠️ 手动 | `docs/ai_capability_market_overview.md` |
+
+---
+
+## 14. 故障排查指南
+
+### 14.1 容器无法启动
 
 ```bash
 # 检查容器启动日志
@@ -1475,11 +1773,11 @@ sudo chmod -R 777 /data/ai_platform/logs/
 
 # 4. GPU 不可用（GPU 模式下）
 nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 nvidia-smi
 # → 检查 NVIDIA 驱动和 Container Toolkit
 ```
 
-### 13.2 服务健康检查失败
+### 14.2 服务健康检查失败
 
 ```bash
 # 检查容器是否运行
@@ -1498,7 +1796,7 @@ docker exec ai-prod ps aux
 docker exec ai-prod ss -tlnp
 ```
 
-### 13.3 推理返回错误
+### 14.3 推理返回错误
 
 ```bash
 # 错误码 4002：License 已过期
@@ -1529,7 +1827,7 @@ docker logs --tail 100 ai-prod
 tail -50 /data/ai_platform/logs/prod/prod.log
 ```
 
-### 13.4 GPU 相关问题
+### 14.4 GPU 相关问题
 
 ```bash
 # 检查宿主机 GPU 状态
@@ -1539,7 +1837,7 @@ nvidia-smi
 docker info | grep -i nvidia
 
 # 测试 GPU 容器
-docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 nvidia-smi
 
 # 容器内检查 GPU
 docker exec ai-prod nvidia-smi
@@ -1549,7 +1847,7 @@ docker exec ai-train python3 -c "import torch; print(f'CUDA: {torch.cuda.is_avai
 # → 参考第 2.3 节安装步骤
 ```
 
-### 13.5 磁盘空间不足
+### 14.5 磁盘空间不足
 
 ```bash
 # 检查 Docker 磁盘使用
@@ -1571,7 +1869,7 @@ find /data/ai_platform/logs -name "*.log" -size +100M -exec truncate -s 0 {} \;
 docker images --format "{{.Size}}\t{{.Repository}}:{{.Tag}}" | sort -hr
 ```
 
-### 13.6 训练服务 Celery Worker 异常
+### 14.6 训练服务 Celery Worker 异常
 
 ```bash
 # 检查 Redis 连接
@@ -1588,7 +1886,7 @@ docker exec ai-train celery -A tasks.celery_app control shutdown
 docker restart ai-train
 ```
 
-### 13.7 网络连接问题
+### 14.7 网络连接问题
 
 ```bash
 # 检查容器网络
@@ -1603,7 +1901,7 @@ docker exec ai-train curl -sf http://license:8003/health
 docker port ai-prod
 ```
 
-### 13.8 授权管理数据库迁移
+### 14.8 授权管理数据库迁移
 
 授权管理后端使用 SQLite 数据库。版本升级后如果 SQLAlchemy 模型新增了字段（如
 `key_pair_id`），服务会在启动时**自动执行 ALTER TABLE 迁移**，无需手动操作。
@@ -1644,7 +1942,7 @@ conn.close()
 
 ---
 
-## 14. 附录：端口分配表
+## 15. 附录：端口分配表
 
 | 端口 | 服务 | 协议 | 环境 | 说明 |
 |------|------|------|------|------|
@@ -1659,9 +1957,9 @@ conn.close()
 
 ---
 
-## 15. 附录：授权安全模型
+## 16. 附录：授权安全模型
 
-### 15.1 威胁分析与防御
+### 16.1 威胁分析与防御
 
 | 攻击场景 | 防御措施 |
 |----------|---------|
@@ -1671,7 +1969,7 @@ conn.close()
 | 跨客户复制授权 | 每客户独立密钥对 + 独立 SO，密钥对互不通用 |
 | 过期后继续使用 | License 中 `valid_until` 由签名保护，无法篡改 |
 
-### 15.2 安全验证链路
+### 16.2 安全验证链路
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -1696,7 +1994,7 @@ conn.close()
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 15.3 双层验证架构
+### 16.3 双层验证架构
 
 | 层次 | 组件 | 验证内容 | 语言 |
 |------|------|---------|------|
@@ -1706,14 +2004,14 @@ conn.close()
 两层均独立实现公钥指纹校验。即使绕过 Python 层直接调用 C++ SO，
 SO 内部也会验证公钥指纹。
 
-### 15.4 关键编译参数
+### 16.4 关键编译参数
 
 | 参数 | 用途 | 示例 |
 |------|------|------|
 | `TRUSTED_PUBKEY_SHA256` | CMake 变量，注入到 SO 编译 | `cmake -DTRUSTED_PUBKEY_SHA256=a1b2c3...` |
 | `TRUSTED_PUBKEY_SHA256` | Docker build arg / 环境变量 | `docker build --build-arg TRUSTED_PUBKEY_SHA256=a1b2c3...` |
 
-### 15.5 指纹计算工具
+### 16.5 指纹计算工具
 
 ```bash
 # 使用项目内置脚本

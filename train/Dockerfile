@@ -3,9 +3,19 @@
 # 训练子系统镜像
 # 镜像名：agilestar/ai-train:latest
 # 服务端口：8001
+#
+# CUDA 版本说明：
+#   默认使用 CUDA 11.8（兼容性最广，支持 PyTorch 2.x 所有版本）
+#   如需 CUDA 12.x，构建时指定：
+#     docker build --build-arg CUDA_BASE_IMAGE=nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04 ...
+#
+# 支持的基础镜像（已验证）：
+#   - nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04  (默认，推荐)
+#   - nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
 # =============================================================================
 
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+ARG CUDA_BASE_IMAGE=nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM ${CUDA_BASE_IMAGE}
 
 # ---------------------------------------------------------------------------
 # System dependencies
