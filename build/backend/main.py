@@ -445,7 +445,11 @@ def download_artifact(job_id: str, filename: str):
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Build job not found")
     cap = _jobs[job_id]["capability"]
-    filepath = os.path.join(BUILD_OUTPUT_DIR, cap, filename)
+    artifact_dir = os.path.realpath(os.path.join(BUILD_OUTPUT_DIR, cap))
+    filepath = os.path.realpath(os.path.join(artifact_dir, filename))
+    # Prevent path traversal
+    if not filepath.startswith(artifact_dir + os.sep) and filepath != artifact_dir:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Artifact not found")
     return FileResponse(filepath, filename=os.path.basename(filename))
