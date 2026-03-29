@@ -54,7 +54,7 @@ export function getCapabilities() {
 }
 
 export function getLicense() {
-  return http.get('/license')
+  return http.get('/license/status')
 }
 
 // Inference

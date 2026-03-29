@@ -39,6 +39,8 @@ services:
       - /data/ai_platform/models:/mnt/ai_platform/models:ro
       - /data/ai_platform/libs/${AI_ARCH:-linux_x86_64}:/mnt/ai_platform/libs:ro
       - /data/ai_platform/licenses:/mnt/ai_platform/licenses:ro
+      # AI 编排 Pipeline 配置
+      - /data/ai_platform/pipelines:/mnt/ai_platform/pipelines:rw
       # 日志落地
       - /data/ai_platform/logs/prod:/mnt/ai_platform/logs:rw
     environment:

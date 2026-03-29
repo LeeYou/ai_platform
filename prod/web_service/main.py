@@ -75,6 +75,14 @@ try:
         list_available_capabilities,
         resolve_model_dir,
     )
+    from pipeline_engine import (
+        delete_pipeline_file,
+        execute_pipeline,
+        get_pipeline,
+        list_pipelines,
+        save_pipeline,
+        validate_pipeline,
+    )
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -499,3 +507,132 @@ async def reload_capability(capability: str, request: Request):
         return {"reloaded": capability, "version": _engines[capability].version}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Pipeline orchestration
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/pipelines", tags=["pipelines"])
+def list_all_pipelines():
+    """List all pipeline definitions."""
+    return {"pipelines": list_pipelines()}
+
+
+@app.post("/api/v1/pipelines", tags=["pipelines"])
+async def create_pipeline_endpoint(request: Request):
+    """Create a new pipeline definition."""
+    _verify_admin(request)
+    body = await request.json()
+    if not body.get("pipeline_id"):
+        raise HTTPException(status_code=400, detail="missing 'pipeline_id'")
+    existing = get_pipeline(body["pipeline_id"])
+    if existing:
+        raise HTTPException(status_code=409,
+                            detail=f"Pipeline '{body['pipeline_id']}' already exists")
+    save_pipeline(body)
+    return {"status": "created", "pipeline_id": body["pipeline_id"]}
+
+
+@app.get("/api/v1/pipelines/{pipeline_id}", tags=["pipelines"])
+def get_pipeline_endpoint(pipeline_id: str):
+    """Get a single pipeline definition."""
+    p = get_pipeline(pipeline_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
+    return p
+
+
+@app.put("/api/v1/pipelines/{pipeline_id}", tags=["pipelines"])
+async def update_pipeline_endpoint(pipeline_id: str, request: Request):
+    """Update a pipeline definition."""
+    _verify_admin(request)
+    body = await request.json()
+    body["pipeline_id"] = pipeline_id
+    save_pipeline(body)
+    return {"status": "updated", "pipeline_id": pipeline_id}
+
+
+@app.delete("/api/v1/pipelines/{pipeline_id}", tags=["pipelines"])
+async def delete_pipeline_endpoint(pipeline_id: str, request: Request):
+    _verify_admin(request)
+    if not delete_pipeline_file(pipeline_id):
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
+    return {"status": "deleted", "pipeline_id": pipeline_id}
+
+
+@app.post("/api/v1/pipelines/{pipeline_id}/validate", tags=["pipelines"])
+def validate_pipeline_endpoint(pipeline_id: str):
+    """Validate a pipeline definition."""
+    p = get_pipeline(pipeline_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
+    available = list(_engines.keys())
+    errors = validate_pipeline(p, available)
+    return {"pipeline_id": pipeline_id, "valid": len(errors) == 0, "errors": errors}
+
+
+@app.post("/api/v1/pipeline/{pipeline_id}/run", tags=["pipelines"])
+async def run_pipeline_endpoint(
+    pipeline_id: str,
+    image: UploadFile = File(...),
+    options: Optional[str] = Form(default=None),
+):
+    """Execute a pipeline."""
+    p = get_pipeline(pipeline_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
+    if not p.get("enabled", True):
+        raise HTTPException(status_code=400,
+                            detail=f"Pipeline '{pipeline_id}' is disabled")
+
+    raw = await image.read()
+    global_opts: dict = {}
+    if options:
+        try:
+            global_opts = json.loads(options)
+        except Exception:
+            pass
+
+    def _infer_for_pipeline(capability: str, image_bytes: bytes, opts: dict) -> dict:
+        if capability not in _engines:
+            raise ValueError(f"Capability '{capability}' not available")
+        img = _decode_image(image_bytes)
+        return _engines[capability].infer(img, opts)
+
+    result = execute_pipeline(p, raw, _infer_for_pipeline, _check_license, global_opts)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Frontend static files (must be last — catch-all for SPA routing)
+# ---------------------------------------------------------------------------
+
+_FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+
+if os.path.isdir(_FRONTEND_DIR):
+    from fastapi.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+
+    @app.get("/", include_in_schema=False)
+    async def frontend_root():
+        return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
+
+    # Serve static assets (JS/CSS/images)
+    app.mount("/assets", StaticFiles(directory=os.path.join(_FRONTEND_DIR, "assets")),
+              name="frontend-assets")
+
+    # SPA fallback — any non-API path serves index.html
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        # Only serve frontend for non-API routes
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
+        static_file = os.path.join(_FRONTEND_DIR, full_path)
+        if os.path.isfile(static_file):
+            return FileResponse(static_file)
+        return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
+
+    logger.info("Frontend static files enabled from %s", _FRONTEND_DIR)
+else:
+    logger.info("No frontend dist directory found at %s — serving API only", _FRONTEND_DIR)

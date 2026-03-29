@@ -192,6 +192,7 @@ sudo chmod -R 777 ${AI_ROOT}/logs             # 日志目录：容器可写
 │   ├── build/
 │   ├── license/
 │   └── prod/
+├── pipelines/                  # AI 编排 Pipeline 配置（JSON 文件）
 └── output/                     # 交付产物归档
 ```
 
@@ -610,15 +611,23 @@ curl http://localhost:8004/api/v1/builds
 
 ### 5.6 生产推理镜像 (ai-prod)
 
-**用途**：生产环境 AI 推理服务，提供 REST API 接口，支持 GPU/CPU 自适应、实例池并发调度、热重载。
+**用途**：生产环境 AI 推理服务，提供 REST API 接口 + Web 管理页面（API 测试、AI 编排管理）、GPU/CPU 自适应、实例池并发调度、热重载。
 
-**Dockerfile 路径**：`prod/Dockerfile`
+**Dockerfile 路径**：`prod/Dockerfile`（两阶段构建：Node.js 编译前端 + Python 运行后端）
 
 **基础镜像**：`ubuntu:22.04`
 
 **暴露端口**：8080
 
 **入口脚本**：`docker-entrypoint.sh`（自动检测 GPU 并配置推理后端）
+
+**Web 管理页面**：访问 `http://<host>:8080/` 打开生产服务管理页面，支持：
+- 📊 仪表盘：服务状态概览、能力统计、License 信息
+- 🧪 API 测试：选择 AI 能力、上传图片、在线推理测试
+- 🔗 AI 编排管理：创建/编辑/删除 AI 能力编排 Pipeline
+- 🧪 编排测试：测试 Pipeline 编排执行效果
+- 📋 服务状态：能力加载列表、License 详情
+- ⚙️ 系统管理：热重载操作
 
 #### 构建命令
 
@@ -644,6 +653,7 @@ docker run -d \
   -v /data/ai_platform/models:/mnt/ai_platform/models:ro \
   -v /data/ai_platform/libs/linux_x86_64:/mnt/ai_platform/libs:ro \
   -v /data/ai_platform/licenses:/mnt/ai_platform/licenses:ro \
+  -v /data/ai_platform/pipelines:/mnt/ai_platform/pipelines:rw \
   -v /data/ai_platform/logs/prod:/mnt/ai_platform/logs:rw \
   -e TZ=Asia/Shanghai \
   -e AI_MAX_INSTANCES=4 \
@@ -659,6 +669,7 @@ docker run -d \
   -v /data/ai_platform/models:/mnt/ai_platform/models:ro \
   -v /data/ai_platform/libs/linux_x86_64:/mnt/ai_platform/libs:ro \
   -v /data/ai_platform/licenses:/mnt/ai_platform/licenses:ro \
+  -v /data/ai_platform/pipelines:/mnt/ai_platform/pipelines:rw \
   -v /data/ai_platform/logs/prod:/mnt/ai_platform/logs:rw \
   -e TZ=Asia/Shanghai \
   -e AI_MAX_INSTANCES=4 \
@@ -818,7 +829,7 @@ docker compose up -d --build build      # 编译管理
 
 ## 7. 生产环境启停管理 (docker-compose.prod)
 
-生产环境使用 `deploy/docker-compose.prod.yml`，仅包含生产推理服务。
+生产环境使用 `deploy/docker-compose.prod.yml`，仅包含生产推理服务（含 Web 管理页面和 AI 编排引擎）。
 
 ### 7.1 启动
 
@@ -833,6 +844,10 @@ AI_ARCH=linux_x86_64 \
 AI_MAX_INSTANCES=8 \
 AI_ADMIN_TOKEN=your-secure-token \
 docker compose -f docker-compose.prod.yml up -d
+
+# 启动后访问管理页面
+# Web 管理页面: http://<host>:8080/
+# API 文档:     http://<host>:8080/api/v1/docs
 ```
 
 ### 7.2 停止

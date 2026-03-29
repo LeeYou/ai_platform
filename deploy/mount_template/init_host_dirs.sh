@@ -37,7 +37,7 @@ LOG_SERVICES=(train test build license prod)
 # ---------------------------------------------------------------------------
 # 创建基础目录
 # ---------------------------------------------------------------------------
-mkdir -p "${ROOT}"/{output,licenses}
+mkdir -p "${ROOT}"/{output,licenses,pipelines}
 
 # 日志目录
 for svc in "${LOG_SERVICES[@]}"; do
