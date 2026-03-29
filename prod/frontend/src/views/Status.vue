@@ -113,10 +113,10 @@ onMounted(async () => {
     if (licRes.status === 'fulfilled') {
       const lic = licRes.value.data
       licData.value = {
-        valid: lic.valid === true || lic.status === 'valid',
-        expiry: lic.expiry || lic.expires_at || lic.expiration || '',
+        valid: lic.status === 'active' || lic.status === 'valid' || lic.valid === true,
+        expiry: lic.valid_until || lic.expiry || lic.expires_at || lic.expiration || '',
         days: lic.days_remaining ?? lic.remaining_days ?? null,
-        type: lic.type || lic.license_type || '',
+        type: lic.status || lic.type || lic.license_type || '',
       }
     }
 

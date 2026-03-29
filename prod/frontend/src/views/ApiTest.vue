@@ -151,7 +151,9 @@ onMounted(async () => {
   try {
     const res = await getCapabilities()
     const data = res.data
-    capabilities.value = Array.isArray(data) ? data : (data.capabilities || [])
+    // Backend returns {capabilities: [{capability: "name", version: "...", ...}]}
+    const raw = Array.isArray(data) ? data : (data.capabilities || [])
+    capabilities.value = raw.map(c => typeof c === 'string' ? c : c.capability)
   } catch (e) {
     ElMessage.error(extractErrorMessage(e))
   }

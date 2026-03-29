@@ -107,10 +107,10 @@ onMounted(async () => {
     }
     if (licRes.status === 'fulfilled') {
       const lic = licRes.value.data
-      licenseValid.value = lic.valid === true || lic.status === 'valid'
-      licenseExpiry.value = lic.expiry || lic.expires_at || lic.expiration || ''
+      licenseValid.value = lic.status === 'active' || lic.status === 'valid' || lic.valid === true
+      licenseExpiry.value = lic.valid_until || lic.expiry || lic.expires_at || lic.expiration || ''
       licenseDays.value = lic.days_remaining ?? lic.remaining_days ?? null
-      licenseType.value = lic.type || lic.license_type || ''
+      licenseType.value = lic.status || lic.type || lic.license_type || ''
     }
   } catch (e) {
     ElMessage.error(extractErrorMessage(e))

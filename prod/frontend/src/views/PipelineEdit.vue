@@ -190,7 +190,8 @@ onMounted(async () => {
   try {
     const capRes = await getCapabilities()
     const data = capRes.data
-    capabilities.value = Array.isArray(data) ? data : (data.capabilities || [])
+    const raw = Array.isArray(data) ? data : (data.capabilities || [])
+    capabilities.value = raw.map(c => typeof c === 'string' ? c : c.capability)
   } catch (e) {
     ElMessage.error(extractErrorMessage(e))
   }
