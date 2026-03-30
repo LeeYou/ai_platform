@@ -71,7 +71,7 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - /data/ai_platform/datasets:/workspace/datasets:ro
+      - /data/ai_platform/datasets:/workspace/datasets:rw
       - /data/ai_platform/models:/workspace/models:rw
       - /data/ai_platform/logs/train:/workspace/logs:rw
     environment:

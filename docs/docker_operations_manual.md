@@ -351,7 +351,7 @@ docker run -d \
   --name ai-train \
   --gpus all \
   -p 8001:8001 \
-  -v /data/ai_platform/datasets:/workspace/datasets:ro \
+  -v /data/ai_platform/datasets:/workspace/datasets:rw \
   -v /data/ai_platform/models:/workspace/models:rw \
   -v /data/ai_platform/logs/train:/workspace/logs:rw \
   -e TZ=Asia/Shanghai \
@@ -421,7 +421,7 @@ docker run -d --name redis -p 6379:6379 redis:7-alpine
 docker run -d \
   --name ai-train-dev \
   -p 8001:8001 \
-  -v /data/ai_platform/datasets:/workspace/datasets:ro \
+  -v /data/ai_platform/datasets:/workspace/datasets:rw \
   -v /data/ai_platform/models:/workspace/models:rw \
   -v /data/ai_platform/logs/train:/workspace/logs:rw \
   -e TZ=Asia/Shanghai \

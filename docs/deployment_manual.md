@@ -662,7 +662,7 @@ docker compose logs build | grep -i license
 |------------------------------------|---------------------------|--------------|------|
 | `/data/ai_platform/licenses`       | `/data/licenses`          | license      | rw   |
 | `/data/ai_platform/licenses`       | `/mnt/ai_platform/licenses` | prod       | ro   |
-| `/data/ai_platform/datasets`       | `/workspace/datasets`     | train, test  | ro   |
+| `/data/ai_platform/datasets`       | `/workspace/datasets`     | train (rw), test (ro) | —  |
 | `/data/ai_platform/models`         | `/workspace/models`       | train (rw), test (ro) | —  |
 | `/data/ai_platform/models`         | `/mnt/ai_platform/models` | prod         | ro   |
 | `/data/ai_platform/libs/linux_x86_64` | `/workspace/libs/linux_x86_64` | build | rw   |
