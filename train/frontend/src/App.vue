@@ -17,6 +17,10 @@
           <el-icon><Odometer /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
+        <el-menu-item index="/annotations">
+          <el-icon><Edit /></el-icon>
+          <span>样本标注</span>
+        </el-menu-item>
         <el-menu-item index="/datasets">
           <el-icon><FolderOpen /></el-icon>
           <span>数据集管理</span>

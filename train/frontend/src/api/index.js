@@ -64,3 +64,24 @@ export const getJobLogs = (id) => http.get(`/jobs/${id}/logs`)
 export const listModels = (params) => http.get('/models/', { params })
 export const getModel = (id) => http.get(`/models/${id}`)
 export const setCurrentModel = (id) => http.post(`/models/${id}/set-current`)
+
+// Annotations - Projects
+export const listAnnotationProjects = (params) => http.get('/annotations/projects', { params })
+export const createAnnotationProject = (data) => http.post('/annotations/projects', data)
+export const getAnnotationProject = (id) => http.get(`/annotations/projects/${id}`)
+export const updateAnnotationProject = (id, data) => http.put(`/annotations/projects/${id}`, data)
+export const deleteAnnotationProject = (id) => http.delete(`/annotations/projects/${id}`)
+export const getAnnotationProjectStats = (id) => http.get(`/annotations/projects/${id}/stats`)
+export const exportAnnotations = (id) => http.post(`/annotations/projects/${id}/export`)
+
+// Annotations - Samples & Records
+export const listAnnotationSamples = (id, params) => http.get(`/annotations/projects/${id}/samples`, { params })
+export const saveAnnotation = (id, data) => http.post(`/annotations/projects/${id}/annotate`, data)
+export const deleteAnnotationRecord = (projectId, recordId) => http.delete(`/annotations/projects/${projectId}/samples/${recordId}`)
+
+// Annotation image URL helper (not an API call, returns URL string)
+export const annotationImageUrl = (path, base) => {
+  const params = new URLSearchParams({ path })
+  if (base) params.append('base', base)
+  return `/api/v1/annotations/image?${params.toString()}`
+}
