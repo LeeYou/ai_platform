@@ -1,5 +1,8 @@
 """face_detect training script.
 
+Uses Ultralytics YOLOv8 for production face-detection training on data
+produced by convert_widerface.py.  Two classes: face (0), occluded_face (1).
+
 Usage:
     python train.py --config config.json \\
                     --dataset /workspace/datasets/face_detect/ \\
@@ -9,8 +12,8 @@ Usage:
 
 import argparse
 import json
-import math
 import os
+import shutil
 import signal
 import sys
 import time
@@ -41,7 +44,7 @@ def _parse_args():
     parser.add_argument(
         "--dataset",
         default="/workspace/datasets/face_detect/",
-        help="Dataset root directory",
+        help="Dataset root directory (must contain data.yaml)",
     )
     parser.add_argument(
         "--output",
@@ -54,304 +57,153 @@ def _parse_args():
 
 
 # ---------------------------------------------------------------------------
-# Model definition (requires PyTorch)
+# YOLO training (requires ultralytics)
 # ---------------------------------------------------------------------------
 
-def _build_model(device):
-    import torch
-    import torch.nn as nn
-
-    class SimpleFaceDetector(nn.Module):
-        """Lightweight face detection CNN (demo architecture)."""
-
-        def __init__(self):
-            super().__init__()
-            self.backbone = nn.Sequential(
-                nn.Conv2d(3, 16, 3, stride=2, padding=1), nn.BatchNorm2d(16), nn.ReLU(),
-                nn.Conv2d(16, 32, 3, stride=2, padding=1), nn.BatchNorm2d(32), nn.ReLU(),
-                nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.BatchNorm2d(64), nn.ReLU(),
-                nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
-                nn.AdaptiveAvgPool2d((8, 8)),
-            )
-            self.head_bbox = nn.Linear(128 * 8 * 8, 4)   # x1,y1,x2,y2 normalised
-            self.head_conf = nn.Linear(128 * 8 * 8, 1)   # confidence logit
-
-        def forward(self, x):
-            feat = self.backbone(x).flatten(1)
-            return self.head_bbox(feat), self.head_conf(feat)
-
-    return SimpleFaceDetector().to(device)
+def _resolve_device(config):
+    """Return a device string suitable for Ultralytics YOLO."""
+    device = config.get("device", "auto")
+    if device == "auto":
+        try:
+            import torch
+            return "0" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            return "cpu"
+    return device
 
 
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
+def _train_yolo(args, config):
+    """Run YOLOv8 training via the Ultralytics library."""
+    from ultralytics import YOLO
 
-def _build_dataloaders(dataset_path, config, device_str):
-    """Return (train_loader, val_loader, use_synthetic) tuple."""
-    import torch
-    from torch.utils.data import DataLoader, Dataset, random_split
+    # --- Locate data.yaml produced by convert_widerface.py ----------------
+    data_yaml = os.path.join(args.dataset, "data.yaml")
+    if not os.path.isfile(data_yaml):
+        print(
+            f"[ERROR] data.yaml not found in {args.dataset}. "
+            "Run convert_widerface.py first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    img_dir = os.path.join(dataset_path, "images")
-    lbl_dir = os.path.join(dataset_path, "labels")
-    has_data = os.path.isdir(img_dir) and os.path.isdir(lbl_dir)
+    # --- Prepare output directories ---------------------------------------
+    os.makedirs(args.output, exist_ok=True)
+    ckpt_dir = os.path.join(args.output, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
 
-    if has_data:
-        import cv2
-        import numpy as np
-        from PIL import Image
-
-        class FaceDataset(Dataset):
-            def __init__(self, img_dir, lbl_dir, size=640):
-                self.size = size
-                self.samples = []
-                for fn in os.listdir(img_dir):
-                    if fn.lower().endswith((".jpg", ".jpeg", ".png")):
-                        stem = os.path.splitext(fn)[0]
-                        lbl_path = os.path.join(lbl_dir, stem + ".txt")
-                        if os.path.exists(lbl_path):
-                            self.samples.append(
-                                (os.path.join(img_dir, fn), lbl_path)
-                            )
-
-            def __len__(self):
-                return len(self.samples)
-
-            def __getitem__(self, idx):
-                img_path, lbl_path = self.samples[idx]
-                img = Image.open(img_path).convert("RGB").resize(
-                    (self.size, self.size)
-                )
-                img_t = torch.tensor(
-                    np.array(img, dtype=np.float32).transpose(2, 0, 1) / 255.0
-                )
-                # Normalise
-                mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-                std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-                img_t = (img_t - mean) / std
-
-                # Read first bounding box from YOLO label
-                with open(lbl_path) as f:
-                    line = f.readline().split()
-                if len(line) >= 5:
-                    cx, cy, w, h = [float(x) for x in line[1:5]]
-                    x1 = cx - w / 2
-                    y1 = cy - h / 2
-                    x2 = cx + w / 2
-                    y2 = cy + h / 2
-                else:
-                    x1 = y1 = x2 = y2 = 0.5
-
-                bbox = torch.tensor([x1, y1, x2, y2], dtype=torch.float32)
-                conf = torch.tensor([1.0], dtype=torch.float32)
-                return img_t, bbox, conf
-
-        dataset = FaceDataset(img_dir, lbl_dir)
-        val_len = max(1, int(len(dataset) * config.get("val_split", 0.1)))
-        train_len = len(dataset) - val_len
-        train_ds, val_ds = random_split(dataset, [train_len, val_len])
-        use_synthetic = False
+    # --- Load pretrained model or resume ----------------------------------
+    if args.resume and os.path.isfile(args.resume):
+        print(f"[INFO] Resuming from {args.resume}", flush=True)
+        model = YOLO(args.resume)
+        resume_flag = True
     else:
-        print("[INFO] Dataset not found — using synthetic data for demonstration.", flush=True)
+        model = YOLO("yolov8n.pt")
+        resume_flag = False
 
-        class SyntheticDataset(torch.utils.data.Dataset):
-            def __init__(self, n=256):
-                self.n = n
+    # --- Map config.json to Ultralytics train() kwargs --------------------
+    device = _resolve_device(config)
+    imgsz = config.get("input_size", [640, 640])
+    if isinstance(imgsz, list):
+        imgsz = imgsz[0]
 
-            def __len__(self):
-                return self.n
-
-            def __getitem__(self, idx):
-                img = torch.randn(3, 64, 64)  # small for speed
-                bbox = torch.rand(4)
-                conf = torch.ones(1)
-                return img, bbox, conf
-
-        full_ds = SyntheticDataset(256)
-        train_ds, val_ds = random_split(full_ds, [224, 32])
-        use_synthetic = True
-
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=config.get("batch_size", 16),
-        shuffle=True,
-        num_workers=0,
-        drop_last=False,
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=config.get("batch_size", 16),
-        shuffle=False,
-        num_workers=0,
-    )
-    return train_loader, val_loader, use_synthetic
-
-
-# ---------------------------------------------------------------------------
-# Training loop
-# ---------------------------------------------------------------------------
-
-def _train_pytorch(args, config):
-    import torch
-    import torch.nn as nn
-
-    device_str = config.get("device", "auto")
-    if device_str == "auto":
-        device_str = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device_str)
-
-    model = _build_model(device)
-    optimizer = torch.optim.SGD(
-        model.parameters(),
-        lr=config.get("lr0", 0.01),
+    train_kwargs = dict(
+        data=data_yaml,
+        epochs=config.get("epochs", 100),
+        batch=config.get("batch_size", 16),
+        imgsz=imgsz,
+        lr0=config.get("lr0", 0.01),
+        lrf=config.get("lrf", 0.001),
         momentum=config.get("momentum", 0.937),
         weight_decay=config.get("weight_decay", 0.0005),
+        warmup_epochs=config.get("warmup_epochs", 3),
+        warmup_momentum=config.get("warmup_momentum", 0.8),
+        warmup_bias_lr=config.get("warmup_bias_lr", 0.1),
+        patience=config.get("patience", 20),
+        workers=config.get("workers", 4),
+        device=device,
+        amp=config.get("amp", True),
+        augment=config.get("augment", True),
+        project=ckpt_dir,
+        name="yolo_run",
+        exist_ok=True,
+        resume=resume_flag,
+        verbose=True,
     )
 
+    # --- Install SIGTERM callback -----------------------------------------
+    def _sigterm_callback(trainer):
+        if _stop_requested:
+            print("[INFO] Training stopped by signal.", flush=True)
+            trainer.epoch = trainer.epochs  # tell trainer to finish
+
+    model.add_callback("on_train_epoch_start", _sigterm_callback)
+
+    # --- Epoch logging callback -------------------------------------------
+    def _epoch_log_callback(trainer):
+        epoch = trainer.epoch + 1
+        total = trainer.epochs
+        metrics = trainer.metrics
+        loss = metrics.get("val/box_loss", 0.0) + metrics.get("val/cls_loss", 0.0)
+        mAP50 = metrics.get("metrics/mAP50(B)", 0.0)
+        print(
+            f"[EPOCH {epoch}/{total}] loss={loss:.4f} mAP50={mAP50:.4f}",
+            flush=True,
+        )
+
+    model.add_callback("on_fit_epoch_end", _epoch_log_callback)
+
+    # --- Train ------------------------------------------------------------
+    results = model.train(**train_kwargs)
+
+    # --- Copy best.pt / last.pt to output directory -----------------------
+    run_dir = os.path.join(ckpt_dir, "yolo_run", "weights")
+    for fname in ("best.pt", "last.pt"):
+        src = os.path.join(run_dir, fname)
+        dst = os.path.join(args.output, fname)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst)
+
+    # --- ONNX export of best model ----------------------------------------
+    best_path = os.path.join(args.output, "best.pt")
+    if os.path.isfile(best_path):
+        print("[INFO] Exporting best model to ONNX ...", flush=True)
+        export_model = YOLO(best_path)
+        export_model.export(
+            format="onnx",
+            imgsz=imgsz,
+            opset=17,
+            dynamic=True,
+        )
+        # Ultralytics writes the ONNX next to the .pt — move it to output
+        onnx_src = best_path.replace(".pt", ".onnx")
+        onnx_dst = os.path.join(args.output, "model.onnx")
+        if os.path.isfile(onnx_src) and onnx_src != onnx_dst:
+            shutil.move(onnx_src, onnx_dst)
+        print(f"[INFO] ONNX model saved to {onnx_dst}", flush=True)
+
+    print(f"[DONE] model saved to {args.output}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Fallback simulation (no ultralytics / no PyTorch)
+# ---------------------------------------------------------------------------
+
+def _simulate_training(args, config):
+    """Fallback simulation when Ultralytics is not available."""
+    import random
+
     epochs = config.get("epochs", 100)
-    warmup_epochs = config.get("warmup_epochs", 3)
-    lrf = config.get("lrf", 0.001)
-
-    def _lr_lambda(epoch):
-        if epoch < warmup_epochs:
-            return (epoch + 1) / warmup_epochs
-        t = (epoch - warmup_epochs) / max(1, epochs - warmup_epochs)
-        return lrf + 0.5 * (1 - lrf) * (1 + math.cos(math.pi * t))
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _lr_lambda)
-    use_amp = config.get("amp", True) and device_str == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-
-    bbox_loss_fn = nn.MSELoss()
-    conf_loss_fn = nn.BCEWithLogitsLoss()
-
-    train_loader, val_loader, use_synthetic = _build_dataloaders(
-        args.dataset, config, device_str
+    print(
+        "[INFO] Ultralytics not available — running training simulation.",
+        flush=True,
     )
 
     os.makedirs(args.output, exist_ok=True)
     ckpt_dir = os.path.join(args.output, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    # Resume
-    start_epoch = 0
-    best_loss = float("inf")
-    if args.resume and os.path.exists(args.resume):
-        print(f"[INFO] Resuming from {args.resume}", flush=True)
-        ckpt = torch.load(args.resume, map_location=device)
-        model.load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        start_epoch = ckpt.get("epoch", 0)
-        best_loss = ckpt.get("best_loss", float("inf"))
-
-    patience = config.get("patience", 20)
-    no_improve = 0
-
-    for epoch in range(start_epoch, epochs):
-        if _stop_requested:
-            print("[INFO] Training stopped by signal.", flush=True)
-            break
-
-        # --- train ---
-        model.train()
-        train_loss = 0.0
-        for imgs, bboxes, confs in train_loader:
-            imgs = imgs.to(device)
-            bboxes = bboxes.to(device)
-            confs = confs.to(device)
-            optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=use_amp):
-                pred_bbox, pred_conf = model(imgs)
-                loss = bbox_loss_fn(pred_bbox, bboxes) + conf_loss_fn(pred_conf, confs)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            train_loss += loss.item()
-
-        train_loss /= max(1, len(train_loader))
-
-        # --- val ---
-        model.eval()
-        val_loss = 0.0
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for imgs, bboxes, confs in val_loader:
-                imgs = imgs.to(device)
-                bboxes = bboxes.to(device)
-                confs = confs.to(device)
-                pred_bbox, pred_conf = model(imgs)
-                loss = bbox_loss_fn(pred_bbox, bboxes) + conf_loss_fn(pred_conf, confs)
-                val_loss += loss.item()
-                preds = (torch.sigmoid(pred_conf) > 0.5).float()
-                correct += (preds == confs).sum().item()
-                total += confs.numel()
-
-        val_loss /= max(1, len(val_loader))
-        accuracy = correct / max(1, total)
-
-        scheduler.step()
-
-        print(
-            f"[EPOCH {epoch + 1}/{epochs}] loss={val_loss:.4f} accuracy={accuracy:.4f}",
-            flush=True,
-        )
-
-        # Checkpoint every 10 epochs
-        if (epoch + 1) % 10 == 0:
-            torch.save(
-                {
-                    "epoch": epoch + 1,
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "best_loss": best_loss,
-                },
-                os.path.join(ckpt_dir, f"epoch_{epoch + 1}.pt"),
-            )
-
-        # Best model
-        if val_loss < best_loss:
-            best_loss = val_loss
-            no_improve = 0
-            torch.save(
-                {
-                    "epoch": epoch + 1,
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "best_loss": best_loss,
-                },
-                os.path.join(args.output, "best.pt"),
-            )
-        else:
-            no_improve += 1
-            if patience > 0 and no_improve >= patience:
-                print(f"[INFO] Early stopping at epoch {epoch + 1}", flush=True)
-                break
-
-    # Save last checkpoint
-    torch.save(
-        {
-            "epoch": epochs,
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "best_loss": best_loss,
-        },
-        os.path.join(args.output, "last.pt"),
-    )
-
-    print(f"[DONE] model saved to {args.output}", flush=True)
-
-
-def _simulate_training(args, config):
-    """Fallback simulation when PyTorch is not available."""
-    import random
-
-    epochs = config.get("epochs", 100)
-    print("[INFO] PyTorch not available — running training simulation.", flush=True)
-
-    os.makedirs(args.output, exist_ok=True)
     loss = 1.2
-    acc = 0.4
+    mAP = 0.25
 
     for epoch in range(1, epochs + 1):
         if _stop_requested:
@@ -359,12 +211,15 @@ def _simulate_training(args, config):
             break
         time.sleep(0.05)
         loss = max(0.01, loss * (0.97 + random.uniform(-0.01, 0.01)))
-        acc = min(0.99, acc + random.uniform(0.002, 0.008))
-        print(f"[EPOCH {epoch}/{epochs}] loss={loss:.4f} accuracy={acc:.4f}", flush=True)
+        mAP = min(0.99, mAP + random.uniform(0.002, 0.008))
+        print(
+            f"[EPOCH {epoch}/{epochs}] loss={loss:.4f} mAP50={mAP:.4f}",
+            flush=True,
+        )
 
-    # Create placeholder files
-    open(os.path.join(args.output, "best.pt"), "w").close()
-    open(os.path.join(args.output, "last.pt"), "w").close()
+    # Create placeholder files so downstream scripts can detect outputs
+    for fname in ("best.pt", "last.pt"):
+        open(os.path.join(args.output, fname), "w").close()
     print(f"[DONE] model saved to {args.output}", flush=True)
 
 
@@ -393,8 +248,8 @@ def main():
     )
 
     try:
-        import torch  # noqa: F401
-        _train_pytorch(args, config)
+        from ultralytics import YOLO  # noqa: F401
+        _train_yolo(args, config)
     except ImportError:
         _simulate_training(args, config)
 
