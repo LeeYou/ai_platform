@@ -1,7 +1,7 @@
 # Docker 镜像与容器构建管理手册
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.2 | 2026-03-29**  
+**文档版本：v1.3 | 2026-03-30**  
 **适用范围：AI 综合能力平台 (ai_platform) 全部 Docker 镜像**
 
 ---
@@ -18,7 +18,8 @@
    - [5.3 训练开发镜像 (ai-train-dev)](#53-训练开发镜像-ai-train-dev)
    - [5.4 测试镜像 (ai-test)](#54-测试镜像-ai-test)
    - [5.5 编译镜像 (ai-builder-linux-x86)](#55-编译镜像-ai-builder-linux-x86)
-   - [5.6 生产推理镜像 (ai-prod)](#56-生产推理镜像-ai-prod)
+   - [5.6 编译镜像 — ARM64 (ai-builder-linux-arm)](#56-编译镜像--arm64-ai-builder-linux-arm)
+   - [5.7 生产推理镜像 (ai-prod)](#57-生产推理镜像-ai-prod)
 6. [开发环境启停管理 (docker-compose)](#6-开发环境启停管理-docker-compose)
 7. [生产环境启停管理 (docker-compose.prod)](#7-生产环境启停管理-docker-composeprod)
 8. [日志管理](#8-日志管理)
@@ -35,7 +36,7 @@
 
 ## 1. 概述
 
-AI 综合能力平台包含 **6 种 Docker 镜像**，覆盖 AI 能力从训练、测试、编译到生产推理和授权管理的全生命周期。本手册提供每种镜像的完整操作指南，包括构建、启停、日志查看、健康检查和故障排查。
+AI 综合能力平台包含 **7 种 Docker 镜像**，覆盖 AI 能力从训练、测试、编译到生产推理和授权管理的全生命周期。本手册提供每种镜像的完整操作指南，包括构建、启停、日志查看、健康检查和故障排查。
 
 ### 镜像与子系统对应关系
 
@@ -169,8 +170,9 @@ sudo systemctl restart docker
 | 2 | `agilestar/ai-train` | `train/Dockerfile` | `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04`（默认，支持切换为12.1） | 8001 | GPU 训练服务 |
 | 3 | `agilestar/ai-train-dev` | `train/Dockerfile.dev` | `python:3.11-slim` | 8001 | 本地开发训练（无 GPU） |
 | 4 | `agilestar/ai-test` | `test/Dockerfile` | `python:3.11-slim` | 8002 | 模型测试与精度评估 |
-| 5 | `agilestar/ai-builder-linux-x86` | `build/Dockerfile.linux_x86` | `ubuntu:22.04` | 8004 | C++ 多平台编译 |
-| 6 | `agilestar/ai-prod` | `prod/Dockerfile` | `ubuntu:22.04` | 8080 | 生产 AI 推理服务 |
+| 5 | `agilestar/ai-builder-linux-x86` | `build/Dockerfile.linux_x86` | `ubuntu:22.04` | 8004 | C++ x86_64 编译 |
+| 6 | `agilestar/ai-builder-linux-arm` | `build/Dockerfile.linux_arm` | `ubuntu:22.04` | 8004 | C++ aarch64 编译 |
+| 7 | `agilestar/ai-prod` | `prod/Dockerfile` | `ubuntu:22.04` | 8080 | 生产 AI 推理服务 |
 
 ---
 
@@ -656,7 +658,67 @@ curl http://localhost:8004/api/v1/builds
 
 ---
 
-### 5.6 生产推理镜像 (ai-prod)
+### 5.6 编译镜像 — ARM64 (ai-builder-linux-arm)
+
+**用途**：提供 ARM64/aarch64 平台 C++ 编译环境，编译 AI 能力插件为 aarch64 架构 SO 动态库。结构与 x86 编译镜像一致，仅 ONNXRuntime 和目标架构不同。
+
+**Dockerfile 路径**：`build/Dockerfile.linux_arm`（两阶段构建：Node.js 编译前端 + Ubuntu 编译环境运行后端）
+
+**基础镜像**：`node:18-slim`（前端构建阶段）+ `ubuntu:22.04`（运行阶段）
+
+**暴露端口**：8004
+
+**内含工具**：GCC 12、CMake、Ninja、OpenSSL、ONNXRuntime 1.18.1（aarch64 版）
+
+**编译产物输出目录**：`/workspace/libs/linux_aarch64`
+
+#### 构建命令
+
+```bash
+# 标准构建（需在 ARM64 主机或使用 QEMU/buildx 交叉构建）
+docker build -t agilestar/ai-builder-linux-arm:latest -f build/Dockerfile.linux_arm .
+
+# 指定版本号
+docker build -t agilestar/ai-builder-linux-arm:1.0.0 -f build/Dockerfile.linux_arm .
+
+# 使用 buildx 在 x86 主机上交叉构建
+docker buildx build --platform linux/arm64 \
+  -t agilestar/ai-builder-linux-arm:latest \
+  -f build/Dockerfile.linux_arm .
+```
+
+#### 独立运行
+
+```bash
+docker run -d \
+  --name ai-builder-arm \
+  -p 8005:8004 \
+  -v /data/ai_platform/libs/linux_aarch64:/workspace/libs/linux_aarch64:rw \
+  -v /data/ai_platform/logs/build-arm:/app/build/backend/data/build_logs:rw \
+  -e TZ=Asia/Shanghai \
+  -e LICENSE_SERVICE_URL=http://license:8003 \
+  -e BUILD_OUTPUT_DIR=/workspace/libs/linux_aarch64 \
+  --restart unless-stopped \
+  agilestar/ai-builder-linux-arm:latest
+```
+
+#### 验证
+
+```bash
+# 检查架构
+docker exec ai-builder-arm uname -m
+# 预期输出: aarch64
+
+# 检查健康状态
+curl http://localhost:8005/health
+
+# 检查 API — 列出可编译能力
+curl http://localhost:8005/api/v1/capabilities
+```
+
+---
+
+### 5.7 生产推理镜像 (ai-prod)
 
 **用途**：生产环境 AI 推理服务，提供 REST API 接口 + Web 管理页面（API 测试、AI 编排管理）、GPU/CPU 自适应、实例池并发调度、热重载。
 
