@@ -1,0 +1,37 @@
+{
+  "pipeline_id": "silent_liveness_check",
+  "name": "静默活体检测",
+  "description": "串行执行人脸检测 → 静默活体 → 翻拍检测，无需用户配合动作",
+  "enabled": true,
+  "steps": [
+    {
+      "step_id": "detect_face",
+      "capability": "face_detect",
+      "description": "检测输入图像中的人脸区域",
+      "params": {},
+      "on_failure": "abort"
+    },
+    {
+      "step_id": "silent_liveness",
+      "capability": "face_liveness_silent",
+      "description": "静默活体检测（单帧图像判断真人/攻击）",
+      "params": {},
+      "condition": "${detect_face.face_count} > 0",
+      "on_failure": "abort"
+    },
+    {
+      "step_id": "anti_recapture",
+      "capability": "recapture_detect",
+      "description": "翻拍检测，排除屏幕翻拍攻击",
+      "params": {},
+      "condition": "${silent_liveness.is_live} == true",
+      "on_failure": "abort"
+    }
+  ],
+  "output_mapping": {
+    "face_detected": "${detect_face.face_count} > 0",
+    "silent_liveness_pass": "${silent_liveness.is_live}",
+    "recapture_safe": "${anti_recapture.is_real}",
+    "final_result": "${anti_recapture.is_real}"
+  }
+}

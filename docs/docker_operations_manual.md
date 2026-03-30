@@ -1728,6 +1728,22 @@ curl -X POST http://localhost:8080/api/v1/infer/<new_cap> \
 
 ### 13.8 步骤 7：AI 能力编排（可选）
 
+#### 预置 Pipeline 模板
+
+平台预置了两个活体检测 Pipeline 模板，位于 `deploy/mount_template/pipelines/`：
+
+| 文件 | 名称 | 流程 |
+|------|------|------|
+| `active_liveness_check.json` | 指令活体检测 | face_detect → face_liveness_action → recapture_detect |
+| `silent_liveness_check.json` | 静默活体检测 | face_detect → face_liveness_silent → recapture_detect |
+
+```bash
+# 复制预置 Pipeline 到宿主机（init_host_dirs.sh 会自动复制，也可手动执行）
+sudo cp deploy/mount_template/pipelines/*.json /data/ai_platform/pipelines/
+```
+
+#### 自定义 Pipeline
+
 ```bash
 # ── 如需将新能力纳入 Pipeline 编排 ──
 

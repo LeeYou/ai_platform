@@ -62,6 +62,22 @@ for arch in "${ARCHS[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
+# 复制预置 Pipeline 配置
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRESET_DIR="${SCRIPT_DIR}/pipelines"
+if [ -d "${PRESET_DIR}" ]; then
+    for f in "${PRESET_DIR}"/*.json; do
+        [ -f "$f" ] || continue
+        dest="${ROOT}/pipelines/$(basename "$f")"
+        if [ ! -f "${dest}" ]; then
+            cp "$f" "${dest}"
+            echo "[ai_platform] 已复制预置 Pipeline: $(basename "$f")"
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
 # 设置权限
 # ---------------------------------------------------------------------------
 # licenses 目录：仅 root 可读（防止未授权访问）
