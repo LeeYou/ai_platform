@@ -306,7 +306,7 @@ curl http://localhost:8003/health
 
 ### 5.2 训练镜像 (ai-train)
 
-**用途**：提供 GPU 训练环境，支持 PyTorch/PaddlePaddle 训练、模型导出和训练进度监控 Web UI。
+**用途**：提供 GPU 训练环境，支持样本标注、PyTorch/PaddlePaddle 训练、模型导出和训练进度监控 Web UI。内置样本标注功能支持二分类、多分类、目标检测、OCR 和图像分割五种标注类型，可直接导出训练兼容格式。
 
 **Dockerfile 路径**：`train/Dockerfile`
 

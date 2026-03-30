@@ -1,7 +1,7 @@
 # 系统整体架构设计
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v2.0 | 2026-03-29**
+**文档版本：v2.1 | 2026-03-30**
 
 ---
 
@@ -39,7 +39,7 @@
 
 | 子系统 | Docker 镜像 | 职责 |
 |--------|------------|------|
-| 训练子系统 | `agilestar/ai-train:latest` | 数据集管理、模型训练、模型包导出 |
+| 训练子系统 | `agilestar/ai-train:latest` | 样本标注、数据集管理、模型训练、模型包导出 |
 | 测试子系统 | `agilestar/ai-test:latest` | 模型推理测试、精度评估 |
 | 编译子系统 | `agilestar/ai-builder-*:latest` | C++ SO/DLL 多平台编译 |
 | 生产交付子系统 | `agilestar/ai-prod:latest` | REST HTTP 推理服务 + Web 管理页面 + AI 能力编排 |
@@ -172,7 +172,8 @@
 > **重要原则**：每次新增 AI 能力模块时，必须同步更新所有关联子系统。详细清单见 `docs/design/build_service.md` 第 9 节。
 
 ```
-1. 在 /data/ai_platform/datasets/<new_capability>/ 下准备数据集
+1. 在 /data/ai_platform/datasets/<new_capability>/ 下准备原始数据集
+1a. 在训练 Web 样本标注页面创建标注项目，完成样本标注并导出训练数据
 2. 在 cpp/capabilities/<new_capability>/ 下新建 CMake 插件工程（复用模板）
 3. 在 train/scripts/<new_capability>/ 下新建训练脚本
 4. 在训练 Web 页面配置新能力并开始训练

@@ -3,6 +3,25 @@
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [1.1.0] - 2026-03-30
+
+### 新增 (Added)
+
+- **样本标注子系统** — 在训练容器中集成完整的样本标注功能
+  - 支持五种标注类型：二分类、多分类、目标检测(YOLO)、OCR文字识别、图像分割
+  - 标注项目管理：关联 AI 能力、标注类型、神经网络选型
+  - 标注工作台：大图展示、工具栏、样本导航、进度追踪
+  - 键盘快捷键：数字键标注、方向键翻页、自动跳转下一样本
+  - 多格式导出：分类目录结构、YOLO txt、OCR txt、通用 JSON
+  - 安全设计：路径遍历防护、JSON 格式校验
+
+### 文档 (Documentation)
+
+- 新增 `docs/design/annotation_service.md` 标注子系统设计文档
+- 更新 `docs/design/architecture.md` v2.1 — 新增标注子系统说明
+- 更新 `docs/design/train_service.md` v1.1 — 新增标注页面和流程
+- 更新 `docs/development_plan.md` v2.2 — 新增 Phase 8 标注子系统
+
 ## [1.0.0] - 2026-03-30
 
 ### 新增
@@ -60,4 +79,5 @@
 
 ---
 
+[1.1.0]: https://github.com/AgileStar/ai_platform/releases/tag/v1.1.0
 [1.0.0]: https://github.com/AgileStar/ai_platform/releases/tag/v1.0.0
