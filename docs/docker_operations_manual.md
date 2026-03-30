@@ -1,7 +1,7 @@
 # Docker 镜像与容器构建管理手册
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.3 | 2026-03-30**  
+**文档版本：v1.4 | 2026-03-30**  
 **适用范围：AI 综合能力平台 (ai_platform) 全部 Docker 镜像**
 
 ---
@@ -19,7 +19,8 @@
    - [5.4 测试镜像 (ai-test)](#54-测试镜像-ai-test)
    - [5.5 编译镜像 (ai-builder-linux-x86)](#55-编译镜像-ai-builder-linux-x86)
    - [5.6 编译镜像 — ARM64 (ai-builder-linux-arm)](#56-编译镜像--arm64-ai-builder-linux-arm)
-   - [5.7 生产推理镜像 (ai-prod)](#57-生产推理镜像-ai-prod)
+   - [5.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)](#57-编译镜像--windows-交叉编译-ai-builder-windows)
+   - [5.8 生产推理镜像 (ai-prod)](#58-生产推理镜像-ai-prod)
 6. [开发环境启停管理 (docker-compose)](#6-开发环境启停管理-docker-compose)
 7. [生产环境启停管理 (docker-compose.prod)](#7-生产环境启停管理-docker-composeprod)
 8. [日志管理](#8-日志管理)
@@ -172,7 +173,8 @@ sudo systemctl restart docker
 | 4 | `agilestar/ai-test` | `test/Dockerfile` | `python:3.11-slim` | 8002 | 模型测试与精度评估 |
 | 5 | `agilestar/ai-builder-linux-x86` | `build/Dockerfile.linux_x86` | `ubuntu:22.04` | 8004 | C++ x86_64 编译 |
 | 6 | `agilestar/ai-builder-linux-arm` | `build/Dockerfile.linux_arm` | `ubuntu:22.04` | 8004 | C++ aarch64 编译 |
-| 7 | `agilestar/ai-prod` | `prod/Dockerfile` | `ubuntu:22.04` | 8080 | 生产 AI 推理服务 |
+| 7 | `agilestar/ai-builder-windows` | `build/Dockerfile.windows` | `ubuntu:22.04` | 8004 | Windows x86_64 交叉编译 |
+| 8 | `agilestar/ai-prod` | `prod/Dockerfile` | `ubuntu:22.04` | 8080 | 生产 AI 推理服务 |
 
 ---
 
@@ -718,7 +720,67 @@ curl http://localhost:8005/api/v1/capabilities
 
 ---
 
-### 5.7 生产推理镜像 (ai-prod)
+### 5.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)
+
+**用途**：在 Linux 宿主机上使用 MinGW-w64 交叉编译器生成 Windows x86_64 DLL 文件。无需 Windows 宿主机或 Windows 容器。
+
+**Dockerfile 路径**：`build/Dockerfile.windows`（两阶段构建：Node.js 编译前端 + Ubuntu 交叉编译环境运行后端）
+
+**基础镜像**：`ubuntu:22.04`
+
+**暴露端口**：8004
+
+**内含工具**：MinGW-w64（x86_64-w64-mingw32-gcc/g++）、CMake、Ninja、OpenSSL、ONNXRuntime 1.18.1（Windows x64 版）
+
+**编译产物输出目录**：`/workspace/libs/windows_x86_64`
+
+**CMake 工具链文件**：`/opt/mingw-w64-x86_64.cmake`（容器内置，自动设置交叉编译参数）
+
+#### 构建镜像
+
+```bash
+# 标准构建
+docker build -t agilestar/ai-builder-windows:latest -f build/Dockerfile.windows .
+
+# 带版本标签
+docker build -t agilestar/ai-builder-windows:1.0.0 -f build/Dockerfile.windows .
+```
+
+#### 运行容器
+
+```bash
+docker run -d \
+  --name ai-builder-windows \
+  -p 8006:8004 \
+  -v /data/ai_platform/libs/windows_x86_64:/workspace/libs/windows_x86_64:rw \
+  -v /data/ai_platform/logs/build-windows:/app/build/backend/data/build_logs:rw \
+  -e TZ=Asia/Shanghai \
+  -e LICENSE_SERVICE_URL=http://license:8003 \
+  -e BUILD_OUTPUT_DIR=/workspace/libs/windows_x86_64 \
+  -e CMAKE_TOOLCHAIN_FILE=/opt/mingw-w64-x86_64.cmake \
+  agilestar/ai-builder-windows:latest
+```
+
+#### 验证
+
+```bash
+# 检查交叉编译器是否可用
+docker exec ai-builder-windows x86_64-w64-mingw32-gcc --version
+# 预期输出: x86_64-w64-mingw32-gcc (GCC) ...
+
+# 健康检查
+curl http://localhost:8006/health
+
+# 查看可编译能力列表
+curl http://localhost:8006/api/v1/capabilities
+```
+
+> **注意**：Windows 交叉编译产出为 `.dll` 文件，存放于 `/data/ai_platform/libs/windows_x86_64/<capability>/` 目录。
+> 客户部署时将 DLL 文件与 ONNX 模型一起发放，应用程序通过 `LoadLibrary` 动态加载。
+
+---
+
+### 5.8 生产推理镜像 (ai-prod)
 
 **用途**：生产环境 AI 推理服务，提供 REST API 接口 + Web 管理页面（API 测试、AI 编排管理）、GPU/CPU 自适应、实例池并发调度、热重载。
 
@@ -2062,7 +2124,9 @@ conn.close()
 | 8001 | ai-train / ai-train-dev | HTTP | 开发 | 训练管理 Web UI + API |
 | 8002 | ai-test | HTTP | 开发 | 测试管理 Web UI + API |
 | 8003 | ai-license-mgr | HTTP | 开发/生产 | 授权管理 Web UI + API |
-| 8004 | ai-builder-linux-x86 | HTTP | 开发 | 编译管理 API |
+| 8004 | ai-builder-linux-x86 | HTTP | 开发 | 编译管理 API（x86_64）|
+| 8005 | ai-builder-linux-arm | HTTP | 开发 | 编译管理 API（aarch64）|
+| 8006 | ai-builder-windows | HTTP | 开发 | 编译管理 API（Windows 交叉编译）|
 | 8080 | ai-prod | HTTP | 生产 | 生产推理 REST API |
 | 6379 | redis | TCP | 开发(内部) | Celery 任务队列（仅 localhost） |
 

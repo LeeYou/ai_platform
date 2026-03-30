@@ -3,12 +3,15 @@
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-## [未发布] - 0.9.0-dev
+## [1.0.0] - 2026-03-30
 
 ### 新增
 
+- **多平台支持（阶段 6）**：新增 `build/Dockerfile.windows` 支持 Windows x86_64 交叉编译（MinGW-w64）
 - **多平台支持（阶段 6）**：新增 `build/Dockerfile.linux_arm` 支持 aarch64/ARM64 交叉编译
-- **多平台支持（阶段 6）**：JNI 接口层 (`cpp/jni/`)，支持 Java/Android 集成
+- **多平台支持（阶段 6）**：JNI 接口层完整实现 (`cpp/jni/ai_jni_bridge.cpp`)，支持 Java/Android 集成
+- **多平台支持（阶段 6）**：`docker-compose.yml` 新增 `build-arm` 与 `build-windows` 服务
+- **多平台支持（阶段 6）**：交付打包脚本支持多架构 SDK 头文件与 JNI 头文件
 - **AI 编排（阶段 5B）**：流水线引擎，支持多能力串行 / 并行组合调度
 - **AI 编排（阶段 5B）**：流水线 CRUD、校验、运行 REST API
 - **AI 编排（阶段 5B）**：Vue3 流水线管理页面（创建、编辑、运行、日志查看）
@@ -47,13 +50,14 @@
 - 各子系统设计文档（训练、测试、构建、生产、许可、C++ ABI、AI 编排、生产前端）
 - C++ 编码规范 (`docs/cpp_coding_standard.md`)
 - 七阶段开发路线图 (`docs/development_plan.md`)
-- Docker 运维手册 (`docs/docker_operations_manual.md`)
+- Docker 运维手册 v1.4 (`docs/docker_operations_manual.md`)，覆盖 8 个 Docker 镜像
+- 部署手册 (`docs/deployment_manual.md`)
+- 更新手册 (`docs/update_manual.md`)
+- 验收手册 (`docs/acceptance_manual.md`)
+- 新增 AI 能力开发者指南 (`docs/new_capability_guide.md`)
 - 105 项 AI 能力市场概览 (`docs/ai_capability_market_overview.md`)
 - 性能优化路线图 (`docs/optimization_plan.md`)
 
 ---
 
-> **说明**：本项目当前处于 `0.9.0-dev` 开发阶段，v1.0.0 正式版尚未发布。  
-> 以上条目汇总了阶段 0 ~ 阶段 5B 的全部已完成功能及阶段 6（多平台）的进行中工作。
-
-[未发布]: https://github.com/AgileStar/ai_platform/compare/main...HEAD
+[1.0.0]: https://github.com/AgileStar/ai_platform/releases/tag/v1.0.0
