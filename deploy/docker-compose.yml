@@ -3,9 +3,15 @@
 # 开发/研发环境：训练子系统 + 测试子系统 + 授权子系统 + 编译管理子系统
 # 不包含生产推理服务（生产使用 docker-compose.prod.yml）
 #
-# 使用方法：
-#   docker compose up -d
+# 使用方法（x86 系统）：
+#   docker compose up -d --build          # 仅构建 x86 服务（默认）
 #   docker compose logs -f train
+#
+# 如需同时构建 ARM/Windows 交叉编译服务：
+#   docker compose --profile cross up -d --build
+#
+# 仅启动 ARM 编译服务：
+#   docker compose --profile cross up -d --build build-arm
 #
 # 前置条件：
 #   宿主机已创建 /data/ai_platform/ 目录结构（见 mount_template/）
@@ -158,9 +164,10 @@ services:
       start_period: 15s
     logging: *default-logging
 
-  # ─── ARM64 编译管理子系统 ─────────────────────────────────────────────────
+  # ─── ARM64 编译管理子系统（需 --profile cross 才会启动）─────────────────────
   build-arm:
     image: agilestar/ai-builder-linux-arm:latest
+    profiles: ["cross"]
     build:
       context: ..
       dockerfile: build/Dockerfile.linux_arm
@@ -185,9 +192,10 @@ services:
       start_period: 15s
     logging: *default-logging
 
-  # ─── Windows 交叉编译管理子系统 ───────────────────────────────────────────
+  # ─── Windows 交叉编译管理子系统（需 --profile cross 才会启动）────────────────
   build-windows:
     image: agilestar/ai-builder-windows:latest
+    profiles: ["cross"]
     build:
       context: ..
       dockerfile: build/Dockerfile.windows

@@ -1,7 +1,7 @@
 # Docker 镜像与容器构建管理手册
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.4 | 2026-03-30**  
+**文档版本：v1.5 | 2026-03-30**  
 **适用范围：AI 综合能力平台 (ai_platform) 全部 Docker 镜像**
 
 ---
@@ -904,17 +904,23 @@ curl -X POST http://localhost:8080/api/v1/admin/reload \
 
 ## 6. 开发环境启停管理 (docker-compose)
 
-开发环境使用 `deploy/docker-compose.yml`，包含训练、测试、授权管理和 Redis 四个服务。
+开发环境使用 `deploy/docker-compose.yml`，包含训练、测试、授权管理、Redis 和编译管理服务。
+
+> **架构说明**：`build-arm` 和 `build-windows` 服务使用 `profiles: ["cross"]`，默认不会启动/构建。
+> 在 x86 系统上直接运行 `docker compose up -d --build` 即可，不会触发 ARM 或 Windows 的构建。
 
 ### 6.1 启动所有服务
 
 ```bash
 cd deploy
 
+# x86 系统标准启动（构建并后台启动所有默认服务）
+docker compose up -d --build
+
 # 前台启动（可看到实时日志）
 docker compose up
 
-# 后台启动
+# 后台启动（不重新构建）
 docker compose up -d
 
 # 仅启动指定服务
@@ -922,6 +928,17 @@ docker compose up -d license        # 仅启动授权管理
 docker compose up -d train redis    # 启动训练 + Redis
 docker compose up -d test           # 仅启动测试
 docker compose up -d license build  # 启动编译管理（依赖授权服务）
+
+# ─── 交叉编译服务（需要 --profile cross）───
+# 启动 ARM64 编译服务（需先安装 QEMU 多架构支持）
+docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+docker compose --profile cross up -d --build build-arm
+
+# 启动 Windows 交叉编译服务
+docker compose --profile cross up -d --build build-windows
+
+# 启动所有服务（含交叉编译）
+docker compose --profile cross up -d --build
 ```
 
 ### 6.2 停止服务
