@@ -97,3 +97,61 @@ class ModelVersion(Base):
         "Capability", back_populates="model_versions"
     )
     job: Mapped["TrainingJob"] = relationship("TrainingJob", back_populates="model_versions")
+
+
+# ---------------------------------------------------------------------------
+# AnnotationProject
+# ---------------------------------------------------------------------------
+
+class AnnotationProject(Base):
+    """A sample annotation project linked to an AI capability."""
+    __tablename__ = "annotation_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    capability_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("capabilities.id"), nullable=False, index=True
+    )
+    annotation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # binary_classification | multi_classification | object_detection | ocr | segmentation
+    network_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    dataset_path: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    label_config: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    # in_progress | completed | archived
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="in_progress")
+    total_samples: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    annotated_samples: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    capability: Mapped["Capability"] = relationship("Capability")
+    records: Mapped[list["AnnotationRecord"]] = relationship(
+        "AnnotationRecord", back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AnnotationRecord
+# ---------------------------------------------------------------------------
+
+class AnnotationRecord(Base):
+    """A single annotation for a sample in an annotation project."""
+    __tablename__ = "annotation_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("annotation_projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    annotation_data: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    annotated_by: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    project: Mapped["AnnotationProject"] = relationship(
+        "AnnotationProject", back_populates="records"
+    )

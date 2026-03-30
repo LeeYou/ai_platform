@@ -57,7 +57,7 @@ try:
     from fastapi.staticfiles import StaticFiles
 
     from database import Base, engine
-    from routers import capabilities, datasets, jobs, models, ws
+    from routers import annotations, capabilities, datasets, jobs, models, ws
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -142,6 +142,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "服务器内部错误，请查看日志排查原因"})
 
 
+app.include_router(annotations.router)
 app.include_router(capabilities.router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)

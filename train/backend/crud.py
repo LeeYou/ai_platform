@@ -5,8 +5,15 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from models import Capability, ModelVersion, TrainingJob
-from schemas import CapabilityCreate, CapabilityUpdate, TrainingJobCreate
+from models import AnnotationProject, AnnotationRecord, Capability, ModelVersion, TrainingJob
+from schemas import (
+    AnnotationProjectCreate,
+    AnnotationProjectUpdate,
+    AnnotationRecordCreate,
+    CapabilityCreate,
+    CapabilityUpdate,
+    TrainingJobCreate,
+)
 
 
 def _utcnow() -> datetime:
@@ -167,3 +174,109 @@ def set_current_version(db: Session, version: ModelVersion) -> ModelVersion:
     db.commit()
     db.refresh(version)
     return version
+
+
+# ---------------------------------------------------------------------------
+# AnnotationProject CRUD
+# ---------------------------------------------------------------------------
+
+def get_annotation_project(db: Session, project_id: int) -> Optional[AnnotationProject]:
+    return db.get(AnnotationProject, project_id)
+
+
+def list_annotation_projects(
+    db: Session, capability_id: Optional[int] = None
+) -> list[AnnotationProject]:
+    q = db.query(AnnotationProject)
+    if capability_id is not None:
+        q = q.filter(AnnotationProject.capability_id == capability_id)
+    return q.order_by(AnnotationProject.id.desc()).all()
+
+
+def create_annotation_project(db: Session, data: AnnotationProjectCreate) -> AnnotationProject:
+    obj = AnnotationProject(**data.model_dump())
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def update_annotation_project(
+    db: Session, project: AnnotationProject, data: AnnotationProjectUpdate
+) -> AnnotationProject:
+    for field, value in data.model_dump(exclude_none=True).items():
+        setattr(project, field, value)
+    project.updated_at = _utcnow()
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def delete_annotation_project(db: Session, project: AnnotationProject) -> None:
+    db.delete(project)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# AnnotationRecord CRUD
+# ---------------------------------------------------------------------------
+
+def get_annotation_record(db: Session, record_id: int) -> Optional[AnnotationRecord]:
+    return db.get(AnnotationRecord, record_id)
+
+
+def get_annotation_record_by_path(
+    db: Session, project_id: int, file_path: str
+) -> Optional[AnnotationRecord]:
+    return (
+        db.query(AnnotationRecord)
+        .filter(
+            AnnotationRecord.project_id == project_id,
+            AnnotationRecord.file_path == file_path,
+        )
+        .first()
+    )
+
+
+def list_annotation_records(
+    db: Session, project_id: int, offset: int = 0, limit: int = 50
+) -> list[AnnotationRecord]:
+    return (
+        db.query(AnnotationRecord)
+        .filter(AnnotationRecord.project_id == project_id)
+        .order_by(AnnotationRecord.id)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def count_annotation_records(db: Session, project_id: int) -> int:
+    return (
+        db.query(AnnotationRecord)
+        .filter(AnnotationRecord.project_id == project_id)
+        .count()
+    )
+
+
+def create_or_update_annotation_record(
+    db: Session, project_id: int, data: AnnotationRecordCreate
+) -> AnnotationRecord:
+    existing = get_annotation_record_by_path(db, project_id, data.file_path)
+    if existing:
+        existing.annotation_data = data.annotation_data
+        existing.annotated_by = data.annotated_by
+        existing.updated_at = _utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
+    obj = AnnotationRecord(project_id=project_id, **data.model_dump())
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def delete_annotation_record(db: Session, record: AnnotationRecord) -> None:
+    db.delete(record)
+    db.commit()
