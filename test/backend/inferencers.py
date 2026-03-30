@@ -38,6 +38,27 @@ class RecaptureDetectInferencer(BaseInferencer):
         }
 
 
+class DesktopRecaptureDetectInferencer(BaseInferencer):
+    """桌面翻拍检测 — EfficientNet-B0 二分类（real / fake）."""
+
+    def _postprocess(self, outputs: list[np.ndarray]) -> dict[str, Any]:
+        out = outputs[0].flatten()
+        if len(out) >= 1:
+            # Single logit → sigmoid = P(fake)
+            score_fake = float(1 / (1 + np.exp(-out[0])))
+            score_real = 1.0 - score_fake
+        else:
+            score_real = score_fake = 0.5
+
+        is_fake = score_fake > 0.5
+        return {
+            "is_fake": is_fake,
+            "label": "fake" if is_fake else "real",
+            "score_real": round(score_real, 4),
+            "score_fake": round(score_fake, 4),
+        }
+
+
 class FaceDetectInferencer(BaseInferencer):
     """人脸检测 — YOLOv8 multi-face detection with NMS."""
 
@@ -1269,6 +1290,7 @@ class ContractSealDetectInferencer(BaseInferencer):
 # Registry: capability_name → inferencer class
 _REGISTRY: dict[str, type[BaseInferencer]] = {
     "recapture_detect":  RecaptureDetectInferencer,
+    "desktop_recapture_detect": DesktopRecaptureDetectInferencer,
     "face_detect":       FaceDetectInferencer,
     "handwriting_reco":  BinaryClassifyInferencer,
     "id_card_classify":  BinaryClassifyInferencer,

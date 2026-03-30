@@ -1,0 +1,35 @@
+{
+  "capability": "desktop_recapture_detect",
+  "capability_name_cn": "桌面翻拍检测",
+  "model_arch": "efficientnet_b0",
+  "input_size": [224, 224],
+  "batch_size": 32,
+  "lr": 1e-3,
+  "lr_min": 1e-5,
+  "weight_decay": 1e-4,
+  "phase1_epochs": 5,
+  "phase2_epochs": 25,
+  "early_stopping_patience": 10,
+  "train_ratio": 0.8,
+  "device": "auto",
+  "classes": ["real", "fake"],
+  "num_classes": 2,
+  "preprocessing": {
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225],
+    "scale": 0.00392156862745098,
+    "normalize": true,
+    "color_format": "RGB"
+  },
+  "generate": {
+    "variants_per_image": 2,
+    "seed": 42,
+    "include_manual_fake": true,
+    "clear_output": false,
+    "mode_weights": {
+      "viewer_blank": 0.45,
+      "viewer_real": 0.35,
+      "desktop": 0.20
+    }
+  }
+}

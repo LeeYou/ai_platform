@@ -28,6 +28,7 @@ option(BUILD_CAP_FACE_DETECT      "构建 face_detect 能力插件" OFF)
 option(BUILD_CAP_HANDWRITING_RECO "构建 handwriting_reco 能力插件" OFF)
 option(BUILD_CAP_RECAPTURE_DETECT "构建 recapture_detect 能力插件" OFF)
 option(BUILD_CAP_ID_CARD_CLASSIFY "构建 id_card_classify 能力插件" OFF)
+option(BUILD_CAP_DESKTOP_RECAPTURE_DETECT "构建 desktop_recapture_detect 能力插件" OFF)
 
 # ---------------------------------------------------------------------------
 # 输出目录
@@ -81,6 +82,10 @@ endif()
 
 if(BUILD_ALL_CAPS OR BUILD_CAP_ID_CARD_CLASSIFY)
     add_subdirectory(capabilities/id_card_classify)
+endif()
+
+if(BUILD_ALL_CAPS OR BUILD_CAP_DESKTOP_RECAPTURE_DETECT)
+    add_subdirectory(capabilities/desktop_recapture_detect)
 endif()
 
 # JNI 接口层
