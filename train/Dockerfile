@@ -48,19 +48,21 @@ COPY train/backend/requirements.txt train/backend/requirements.txt
 RUN pip install --no-cache-dir -r train/backend/requirements.txt
 
 # ---------------------------------------------------------------------------
-# Frontend build
-# ---------------------------------------------------------------------------
-COPY train/frontend/ train/frontend/
-RUN cd train/frontend && npm install && npm run build
-
-# ---------------------------------------------------------------------------
 # Training scripts requirements (cached layer — copy only requirements first)
+# Install BEFORE frontend build so frontend code changes don't invalidate
+# the heavy ML package layer (~2 GB for torch, etc.).
 # ---------------------------------------------------------------------------
 COPY train/scripts/face_detect/requirements.txt train/scripts/face_detect/requirements.txt
 COPY train/scripts/desktop_recapture_detect/requirements.txt train/scripts/desktop_recapture_detect/requirements.txt
 
-RUN pip install --no-cache-dir -r train/scripts/face_detect/requirements.txt || true
-RUN pip install --no-cache-dir -r train/scripts/desktop_recapture_detect/requirements.txt || true
+RUN pip install --no-cache-dir -r train/scripts/face_detect/requirements.txt
+RUN pip install --no-cache-dir -r train/scripts/desktop_recapture_detect/requirements.txt
+
+# ---------------------------------------------------------------------------
+# Frontend build
+# ---------------------------------------------------------------------------
+COPY train/frontend/ train/frontend/
+RUN cd train/frontend && npm install && npm run build
 
 # ---------------------------------------------------------------------------
 # Training scripts source
