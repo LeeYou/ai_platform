@@ -1082,32 +1082,67 @@ curl -sf http://localhost:8004/health && echo "OK" || echo "FAIL"
 curl -sf http://localhost:8080/api/v1/health && echo "OK" || echo "FAIL"
 ```
 
-### 9.2 批量健康检查脚本
+### 9.2 一键健康检查脚本
+
+项目内置了综合健康检查脚本 `scripts/health_check.sh`，可一键检查所有服务的容器状态、
+HTTP 健康端点、GPU 状态和磁盘使用情况。
 
 ```bash
-#!/bin/bash
-# 保存为 /data/ai_platform/check_health.sh
+# 检查所有服务（开发 + 生产）
+bash scripts/health_check.sh
 
-echo "=== AI Platform Health Check ==="
-echo "Time: $(date)"
-echo ""
+# 仅检查开发环境服务（license/train/test/build）
+bash scripts/health_check.sh dev
 
-services=(
-  "License|http://localhost:8003/health"
-  "Train|http://localhost:8001/health"
-  "Test|http://localhost:8002/health"
-  "Build|http://localhost:8004/health"
-  "Prod|http://localhost:8080/api/v1/health"
-)
+# 仅检查生产环境服务（prod）
+bash scripts/health_check.sh prod
 
-for entry in "${services[@]}"; do
-  IFS='|' read -r name url <<< "$entry"
-  if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
-    echo "  ✅ $name ($url) — healthy"
-  else
-    echo "  ❌ $name ($url) — unreachable"
-  fi
-done
+# 指定远程主机地址
+DEV_HOST=192.168.1.100 bash scripts/health_check.sh dev
+PROD_HOST=10.0.0.50 bash scripts/health_check.sh prod
+
+# 自定义超时时间（默认 5 秒）
+TIMEOUT=10 bash scripts/health_check.sh
+```
+
+脚本检查内容：
+
+| 检查项 | 说明 |
+|--------|------|
+| 容器状态 | 通过 `docker inspect` 检查容器运行状态和健康检查状态 |
+| HTTP 健康端点 | 调用各服务 `/health` 或 `/api/v1/health` 端点 |
+| GPU 状态 | 通过 `nvidia-smi` 检查 GPU 显存和使用率 |
+| 磁盘空间 | 检查 `/data/ai_platform` 分区使用率（>80% 警告，>95% 严重） |
+
+输出示例：
+
+```
+════════════════════════════════════════════════════════════
+  AI 能力平台 — 服务健康检查
+  2026-03-29 15:30:00
+════════════════════════════════════════════════════════════
+
+【开发环境服务】 Host: localhost
+
+  容器状态：
+  ai-license-mgr       docker inspect ... ✅ RUNNING (healthy)
+  ai-train             docker inspect ... ✅ RUNNING (healthy)
+  ai-test              docker inspect ... ✅ RUNNING (healthy)
+  ai-builder           docker inspect ... ✅ RUNNING (healthy)
+  ai-redis             docker inspect ... ✅ RUNNING
+
+  HTTP 健康检查：
+  License (8003)       http://localhost:8003/health ... ✅ OK (ok)
+  Train   (8001)       http://localhost:8001/health ... ✅ OK (ok)
+  Test    (8002)       http://localhost:8002/health ... ✅ OK (ok)
+  Build   (8004)       http://localhost:8004/health ... ✅ OK (ok)
+
+────────────────────────────────────────────────────────────
+  总计: 10 项检查
+  ✅ 通过: 9  ❌ 失败: 0  ⏭️  跳过: 1
+────────────────────────────────────────────────────────────
+
+所有服务运行正常。
 ```
 
 ### 9.3 Docker 内置健康检查
