@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import shutil
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -217,6 +216,11 @@ def delete_annotation_record(
 @router.get("/image")
 def serve_image(path: str = Query(..., description="图片相对路径"), base: str = Query(DATASETS_ROOT)):
     """Serve an image file from the datasets directory."""
+    # Security: ensure base is within DATASETS_ROOT to prevent arbitrary file access
+    base_resolved = os.path.realpath(base)
+    root_resolved = os.path.realpath(DATASETS_ROOT)
+    if not base_resolved.startswith(root_resolved + os.sep) and base_resolved != root_resolved:
+        raise HTTPException(status_code=400, detail="非法基础路径")
     safe = _safe_path(base, path)
     if not os.path.isfile(safe):
         raise HTTPException(status_code=404, detail="文件不存在")
