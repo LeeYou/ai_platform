@@ -39,23 +39,125 @@ class RecaptureDetectInferencer(BaseInferencer):
 
 
 class FaceDetectInferencer(BaseInferencer):
-    """人脸检测 — bounding box + confidence."""
+    """人脸检测 — YOLOv8 multi-face detection with NMS."""
+
+    LABELS = ["face", "occluded_face"]
+    CONF_THRESHOLD = 0.25
+    IOU_THRESHOLD = 0.45
+
+    def _preprocess(self, bgr_image: np.ndarray) -> np.ndarray:
+        """Letterbox resize to 640×640, /255.0, NCHW."""
+        import cv2  # type: ignore
+
+        w, h = self.input_size
+        ih, iw = bgr_image.shape[:2]
+        scale = min(w / iw, h / ih)
+        nw, nh = int(iw * scale), int(ih * scale)
+        resized = cv2.resize(bgr_image, (nw, nh))
+        canvas = np.full((h, w, 3), 114, dtype=np.uint8)
+        dx, dy = (w - nw) // 2, (h - nh) // 2
+        canvas[dy:dy + nh, dx:dx + nw] = resized
+        img = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        # Store letterbox params for coordinate mapping
+        self._lb_scale = scale
+        self._lb_dx = dx
+        self._lb_dy = dy
+        return img.transpose(2, 0, 1)[np.newaxis]  # NCHW
+
+    @staticmethod
+    def _iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
+        x1 = max(box_a[0], box_b[0])
+        y1 = max(box_a[1], box_b[1])
+        x2 = min(box_a[2], box_b[2])
+        y2 = min(box_a[3], box_b[3])
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area_a = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+        area_b = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    def _nms(self, boxes: np.ndarray, scores: np.ndarray) -> list[int]:
+        """Greedy NMS, returns kept indices."""
+        order = scores.argsort()[::-1]
+        keep: list[int] = []
+        while len(order) > 0:
+            i = order[0]
+            keep.append(int(i))
+            if len(order) == 1:
+                break
+            remaining = order[1:]
+            ious = np.array([self._iou(boxes[i], boxes[j]) for j in remaining])
+            order = remaining[ious < self.IOU_THRESHOLD]
+        return keep
 
     def _postprocess(self, outputs: list[np.ndarray]) -> dict[str, Any]:
-        bbox   = outputs[0].flatten().tolist() if len(outputs) > 0 else [0, 0, 1, 1]
-        conf_raw = outputs[1].flatten() if len(outputs) > 1 else np.array([0.9])
-        conf   = float(1 / (1 + np.exp(-conf_raw[0])))
-        face_detected = conf > 0.5
+        # YOLOv8 output: [1, num_classes+4, 8400] or [1, 8400, num_classes+4]
+        raw = outputs[0]
+        if raw.ndim == 3:
+            raw = raw[0]  # remove batch dim → [C+4, 8400] or [8400, C+4]
+
+        # Detect layout: if shape[0] < shape[1], it's [C+4, 8400], transpose
+        if raw.shape[0] < raw.shape[1]:
+            raw = raw.T  # → [8400, C+4]
+
+        num_det = raw.shape[0]
+        num_classes = raw.shape[1] - 4
+        if num_classes < 1:
+            num_classes = 2
+
+        # Parse cx, cy, w, h and class scores
+        cx = raw[:, 0]
+        cy = raw[:, 1]
+        w = raw[:, 2]
+        h = raw[:, 3]
+        class_scores = raw[:, 4:4 + num_classes]
+
+        # Convert to x1, y1, x2, y2 (in model input space 640×640)
+        x1 = cx - w / 2
+        y1 = cy - h / 2
+        x2 = cx + w / 2
+        y2 = cy + h / 2
+        boxes = np.stack([x1, y1, x2, y2], axis=1)
+
+        # Get best class per detection
+        class_ids = class_scores.argmax(axis=1)
+        max_scores = class_scores.max(axis=1)
+
+        # Filter by confidence
+        mask = max_scores > self.CONF_THRESHOLD
+        boxes = boxes[mask]
+        max_scores = max_scores[mask]
+        class_ids = class_ids[mask]
+
+        # NMS
+        if len(boxes) > 0:
+            keep = self._nms(boxes, max_scores)
+            boxes = boxes[keep]
+            max_scores = max_scores[keep]
+            class_ids = class_ids[keep]
+
+        # Map back to original image coordinates
+        scale = getattr(self, "_lb_scale", 1.0)
+        dx = getattr(self, "_lb_dx", 0)
+        dy = getattr(self, "_lb_dy", 0)
 
         detections = []
-        if face_detected and len(bbox) >= 4:
+        for i in range(len(boxes)):
+            bx1 = (float(boxes[i][0]) - dx) / scale
+            by1 = (float(boxes[i][1]) - dy) / scale
+            bx2 = (float(boxes[i][2]) - dx) / scale
+            by2 = (float(boxes[i][3]) - dy) / scale
+            cid = int(class_ids[i])
+            label = self.LABELS[cid] if cid < len(self.LABELS) else f"class_{cid}"
             detections.append({
-                "bbox": [round(v, 4) for v in bbox[:4]],
-                "confidence": round(conf, 4),
-                "label": "face",
+                "bbox": [round(bx1, 2), round(by1, 2), round(bx2, 2), round(by2, 2)],
+                "confidence": round(float(max_scores[i]), 4),
+                "label": label,
+                "class_id": cid,
             })
+
         return {
-            "face_detected": face_detected,
+            "face_detected": len(detections) > 0,
             "detections": detections,
             "count": len(detections),
         }
