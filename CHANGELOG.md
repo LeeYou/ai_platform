@@ -3,6 +3,15 @@
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [1.2.0] - 2026-03-30
+
+### 文档 (Documentation)
+
+- 新增 `docs/desktop_recapture_detect_guide.md` — 桌面翻拍检测能力专用操作指南
+  - 覆盖素材准备、假样本生成、模型训练、评估、ONNX 导出、测试、编译、部署全流程
+  - 包含 API 调用示例、训练超参数说明、假样本生成详解、常见问题及性能基准
+  - 遵循与 `face_detect_guide.md` 相同的文档结构模板
+
 ## [1.1.0] - 2026-03-30
 
 ### 新增 (Added)
@@ -79,5 +88,6 @@
 
 ---
 
+[1.2.0]: https://github.com/AgileStar/ai_platform/releases/tag/v1.2.0
 [1.1.0]: https://github.com/AgileStar/ai_platform/releases/tag/v1.1.0
 [1.0.0]: https://github.com/AgileStar/ai_platform/releases/tag/v1.0.0
