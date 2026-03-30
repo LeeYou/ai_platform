@@ -54,10 +54,18 @@ COPY train/frontend/ train/frontend/
 RUN cd train/frontend && npm install && npm run build
 
 # ---------------------------------------------------------------------------
-# Training scripts dependencies (optional — torch is large)
+# Training scripts requirements (cached layer — copy only requirements first)
+# ---------------------------------------------------------------------------
+COPY train/scripts/face_detect/requirements.txt train/scripts/face_detect/requirements.txt
+COPY train/scripts/desktop_recapture_detect/requirements.txt train/scripts/desktop_recapture_detect/requirements.txt
+
+RUN pip install --no-cache-dir -r train/scripts/face_detect/requirements.txt || true
+RUN pip install --no-cache-dir -r train/scripts/desktop_recapture_detect/requirements.txt || true
+
+# ---------------------------------------------------------------------------
+# Training scripts source
 # ---------------------------------------------------------------------------
 COPY train/scripts/ train/scripts/
-RUN pip install --no-cache-dir -r train/scripts/face_detect/requirements.txt || true
 
 # ---------------------------------------------------------------------------
 # Backend source

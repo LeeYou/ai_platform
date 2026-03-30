@@ -26,7 +26,7 @@
 
 | 宿主机路径 | 容器路径 | 模式 |
 |-----------|---------|------|
-| `/data/ai_platform/datasets/` | `/workspace/datasets` | 只读 |
+| `/data/ai_platform/datasets/` | `/workspace/datasets` | 读写 |
 | `/data/ai_platform/models/` | `/workspace/models` | 读写 |
 | `/data/ai_platform/logs/train/` | `/workspace/logs` | 读写 |
 

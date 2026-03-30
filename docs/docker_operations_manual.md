@@ -203,7 +203,7 @@ sudo mkdir -p ${AI_ROOT}/libs/{linux_x86_64,linux_aarch64,windows_x86_64}
 
 # 设置权限
 sudo chmod 700 ${AI_ROOT}/licenses           # 授权文件：仅 root 可读
-sudo chmod -R a-w ${AI_ROOT}/datasets         # 数据集：只读（防止训练容器误写）
+sudo chmod -R 755 ${AI_ROOT}/datasets         # 数据集：读写（训练工具需写入生成的样本）
 sudo chmod -R 777 ${AI_ROOT}/logs             # 日志目录：容器可写
 ```
 
@@ -211,7 +211,7 @@ sudo chmod -R 777 ${AI_ROOT}/logs             # 日志目录：容器可写
 
 ```
 /data/ai_platform/
-├── datasets/                   # 训练数据集（只读挂载到训练容器）
+├── datasets/                   # 训练数据集（读写挂载到训练容器）
 │   ├── face_detect/
 │   ├── handwriting_reco/
 │   ├── recapture_detect/

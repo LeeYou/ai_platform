@@ -83,8 +83,8 @@ fi
 # licenses 目录：仅 root 可读（防止未授权访问）
 chmod 700 "${ROOT}/licenses"
 
-# datasets 目录：只读（防止训练进程误写）
-chmod -R a-w "${ROOT}/datasets" 2>/dev/null || true
+# datasets 目录：读写（训练工具如 generate_fake.py 需要写入生成的样本）
+chmod -R 755 "${ROOT}/datasets"
 
 # logs 目录：所有用户可写（容器以非 root 用户运行时需要）
 chmod -R 777 "${ROOT}/logs"

@@ -82,7 +82,7 @@
 
 ```
 /data/ai_platform/
-├── datasets/                         # 训练数据集（宿主机只读挂载到训练容器）
+├── datasets/                         # 训练数据集（读写挂载到训练容器）
 │   ├── face_detect/
 │   ├── handwriting_reco/
 │   ├── recapture_detect/
@@ -135,7 +135,7 @@
 
 | 容器 | 挂载源（宿主机） | 挂载目标（容器内） | 读写 |
 |------|----------------|-----------------|------|
-| 训练容器 | `/data/ai_platform/datasets/` | `/workspace/datasets` | 只读 |
+| 训练容器 | `/data/ai_platform/datasets/` | `/workspace/datasets` | 读写 |
 | 训练容器 | `/data/ai_platform/models/` | `/workspace/models` | 读写 |
 | 训练容器 | `/data/ai_platform/logs/train/` | `/workspace/logs` | 读写 |
 | 测试容器 | `/data/ai_platform/models/` | `/workspace/models` | 只读 |
