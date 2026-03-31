@@ -2,7 +2,7 @@
 # 使用 torch 2.4.x 确保与 CUDA 11.8 兼容
 torch>=2.0.0,<2.5.0
 torchvision>=0.15.0,<0.20.0
-ultralytics>=8.1.0
+ultralytics==8.2.0
 onnx>=1.16.0
 onnxruntime>=1.18.0
 onnxslim>=0.1.0
