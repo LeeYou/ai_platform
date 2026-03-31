@@ -3,6 +3,99 @@
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [1.3.0] - 2026-03-31
+
+### 新增 (Added)
+
+- **模型校验和验证** — 生产推理引擎自动验证模型完整性
+  - 在模型加载时自动检查 `checksum.sha256` 文件
+  - SHA256 哈希验证防止模型文件损坏或篡改
+  - 校验失败时抛出 RuntimeError 并拒绝加载
+  - 开发/测试模式下无 checksum 文件则跳过验证
+
+- **性能剖析增强** — 推理结果包含详细的性能分解数据
+  - 新增 `performance` 字段包含三个阶段耗时：
+    - `preprocess_ms`: 图像预处理耗时
+    - `inference_ms`: 模型推理耗时
+    - `postprocess_ms`: 后处理耗时
+  - 便于识别性能瓶颈并针对性优化
+  - 所有耗时精确到 0.01 毫秒
+
+- **A/B 测试框架** — 支持多模型版本的灰度发布和流量分配
+  - 基于权重的随机流量分配策略
+  - 基于会话 ID 的粘性会话策略（用户体验一致）
+  - JSON 配置文件热重载（无需重启服务）
+  - 管理 API：查看活动测试、重新加载配置
+  - 推理响应包含 `_ab_test_version` 用于分析
+  - 配置示例：70% v1.0.0 + 30% v1.1.0 灰度发布
+
+- **CI/CD 自动化流水线** — 完整的 GitHub Actions 工作流
+  - 多平台 Docker 镜像构建验证（train/test/license/prod）
+  - Builder 镜像构建验证（linux_x86/linux_arm）
+  - Python 代码质量检查（flake8, mypy, black, isort）
+  - 前端构建测试（4 个 Vue3 应用）
+  - C++ SDK 和 Runtime 构建验证
+  - 模型包结构完整性检查
+  - 文档完整性验证
+  - Docker Compose 配置验证
+  - 安全漏洞扫描（Trivy）
+
+### 文档 (Documentation)
+
+- 新增 `docs/troubleshooting_guide.md` — 全面的故障排查指南
+  - 20+ 常见问题诊断和解决方案
+  - 覆盖 Docker 构建、训练、测试、授权、编译、生产推理
+  - 性能问题诊断和网络连接问题
+  - 包含完整的命令示例和配置建议
+  - 紧急恢复步骤和数据备份指南
+
+- 新增 `docs/performance_optimization_guide.md` — 性能优化最佳实践
+  - 推理性能优化：GPU 加速、TensorRT、模型量化、实例池调优
+  - 训练性能优化：混合精度、数据加载、分布式训练、梯度累积
+  - Docker 容器优化：共享内存、资源限制、日志轮转
+  - 网络和 I/O 优化：文件系统选择、数据集缓存、HTTP 连接池
+  - 资源配置建议：小/中/大规模部署方案
+  - 监控和诊断工具：性能分析、GPU 监控、基准测试
+
+- 新增 `.github/workflows/ci.yml` — CI/CD 配置文档（YAML 即文档）
+
+### 改进 (Improved)
+
+- **Docker 构建优化** — 使用国内镜像源加速构建
+  - pip 使用清华大学镜像源（下载速度提升 50-100 倍）
+  - npm 使用淘宝镜像源（下载速度提升 20-30 倍）
+  - 优化层缓存策略（源代码改动不触发依赖重新下载）
+  - 首次构建时间从 30-60 分钟降低到 3-5 分钟
+
+- **训练管理 Web UI 增强** — 专业级训练监控和管理界面
+  - 实时训练进度显示（Epoch X/Y 进度条）
+  - 实时指标显示（loss、accuracy、speed、ETA）
+  - 专业监控仪表板（4 状态卡片 + 双图表）
+  - Loss 和 Accuracy 曲线图（渐变填充、实时更新）
+  - 训练参数和系统信息展示面板
+  - 增强的日志终端（自动滚动控制）
+  - 自动刷新机制（运行中任务每 10 秒刷新）
+  - WebSocket 实时日志流
+
+- **训练超参数管理优化**
+  - TrainingJob 模型新增 `hyperparams` 字段
+  - 支持任务级超参数覆盖能力级默认配置
+  - 前端表单支持常用参数（epochs、batch、imgsz、lr0、device、pretrained）
+  - 高级参数 JSON 编辑器（完整控制所有超参数）
+  - 数据库迁移脚本（向后兼容）
+
+### 修复 (Fixed)
+
+- **能力删除级联失败** — 修复删除 AI 能力时关联数据未级联删除的问题
+  - 在 Capability 模型的关系中添加 `cascade="all, delete-orphan"`
+  - 自动删除关联的 TrainingJob、ModelVersion、AnnotationProject
+  - 确保数据完整性和一致性
+
+### 安全 (Security)
+
+- 模型文件完整性验证（SHA256 checksum）
+- CI/CD 安全扫描（Trivy 漏洞检测）
+
 ## [1.2.0] - 2026-03-30
 
 ### 文档 (Documentation)
