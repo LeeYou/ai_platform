@@ -68,6 +68,7 @@ services:
       dockerfile: train/Dockerfile
     container_name: ai-train
     <<: *default-restart
+    shm_size: '2gb'  # 共享内存大小，用于 PyTorch DataLoader 多进程
     ports:
       - "8001:8001"
     volumes:

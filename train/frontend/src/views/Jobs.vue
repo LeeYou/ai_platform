@@ -747,7 +747,7 @@ const doCreate = async () => {
   const hyperparams = {}
 
   if (newForm.value.params.epochs !== null) hyperparams.epochs = newForm.value.params.epochs
-  if (newForm.value.params.batch !== null) hyperparams.batch = newForm.value.params.batch
+  if (newForm.value.params.batch !== null) hyperparams.batch_size = newForm.value.params.batch
   if (newForm.value.params.imgsz !== null) hyperparams.imgsz = newForm.value.params.imgsz
   if (newForm.value.params.lr0 !== null) hyperparams.lr0 = newForm.value.params.lr0
   if (newForm.value.params.device) hyperparams.device = newForm.value.params.device
