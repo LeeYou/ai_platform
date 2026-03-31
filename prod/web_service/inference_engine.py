@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 import time
 from typing import Any
 
@@ -28,6 +29,9 @@ class ProdInferenceEngine:
         with open(manifest_path, encoding="utf-8") as f:
             self.manifest = json.load(f)
         self.version = self.manifest.get("model_version", "unknown")
+
+        # Validate model checksum if checksum.sha256 exists
+        self._validate_model_checksum()
 
         preprocess_path = os.path.join(model_dir, "preprocess.json")
         self._preprocess_cfg: dict = {}
@@ -54,6 +58,48 @@ class ProdInferenceEngine:
                 import sys
                 print(f"[{capability}] ORT load failed: {exc}", file=sys.stderr)
 
+    def _validate_model_checksum(self) -> None:
+        """Validate model.onnx checksum against checksum.sha256 file.
+
+        Raises RuntimeError if checksum file exists but validation fails.
+        This prevents loading corrupted or tampered models.
+        """
+        checksum_path = os.path.join(self.model_dir, "checksum.sha256")
+        model_path = os.path.join(self.model_dir, "model.onnx")
+
+        if not os.path.exists(checksum_path):
+            # No checksum file = skip validation (dev/test mode)
+            return
+
+        if not os.path.exists(model_path):
+            raise RuntimeError(
+                f"[{self.capability}] checksum.sha256 exists but model.onnx not found"
+            )
+
+        # Read expected checksum
+        with open(checksum_path, encoding="utf-8") as f:
+            expected_hash = f.read().strip().split()[0]  # Format: "hash  filename"
+
+        # Compute actual checksum
+        sha256 = hashlib.sha256()
+        with open(model_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                sha256.update(chunk)
+        actual_hash = sha256.hexdigest()
+
+        # Verify match
+        if actual_hash != expected_hash:
+            raise RuntimeError(
+                f"[{self.capability}] Model checksum MISMATCH — possible corruption/tampering!\n"
+                f"  Expected: {expected_hash}\n"
+                f"  Actual:   {actual_hash}\n"
+                f"  Model:    {model_path}"
+            )
+
+        import sys
+        print(f"[{self.capability}] Model checksum verified: {actual_hash[:16]}...", file=sys.stderr)
+
+
     def _preprocess(self, bgr_image: np.ndarray) -> np.ndarray:
         import cv2  # type: ignore
 
@@ -69,7 +115,15 @@ class ProdInferenceEngine:
         return img.transpose(2, 0, 1)[np.newaxis]  # NCHW
 
     def infer(self, bgr_image: np.ndarray, options: dict | None = None) -> dict[str, Any]:
-        t0 = time.perf_counter()
+        """Perform inference with detailed performance profiling.
+
+        Returns result dict with added performance metrics:
+        - infer_time_ms: Total inference time
+        - preprocess_ms: Preprocessing time
+        - inference_ms: Model inference time
+        - postprocess_ms: Postprocessing time
+        """
+        t_start = time.perf_counter()
 
         if self._session is None:
             # Stub result
@@ -81,12 +135,33 @@ class ProdInferenceEngine:
                 "infer_time_ms": 0.0,
             }
 
+        # Preprocessing
+        t_preprocess_start = time.perf_counter()
         tensor = self._preprocess(bgr_image)
-        outputs = self._session.run(None, {self._input_name: tensor})
-        elapsed = (time.perf_counter() - t0) * 1000.0
+        t_preprocess_end = time.perf_counter()
+        preprocess_ms = (t_preprocess_end - t_preprocess_start) * 1000.0
 
+        # Inference
+        t_inference_start = time.perf_counter()
+        outputs = self._session.run(None, {self._input_name: tensor})
+        t_inference_end = time.perf_counter()
+        inference_ms = (t_inference_end - t_inference_start) * 1000.0
+
+        # Postprocessing
+        t_postprocess_start = time.perf_counter()
         result = self._postprocess(outputs, options or {})
-        result["infer_time_ms"] = round(elapsed, 2)
+        t_postprocess_end = time.perf_counter()
+        postprocess_ms = (t_postprocess_end - t_postprocess_start) * 1000.0
+
+        # Add performance metrics
+        total_ms = (time.perf_counter() - t_start) * 1000.0
+        result["infer_time_ms"] = round(total_ms, 2)
+        result["performance"] = {
+            "preprocess_ms": round(preprocess_ms, 2),
+            "inference_ms": round(inference_ms, 2),
+            "postprocess_ms": round(postprocess_ms, 2),
+        }
+
         return result
 
     def _postprocess(self, outputs: list[np.ndarray], options: dict) -> dict[str, Any]:

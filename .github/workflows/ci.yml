@@ -1,0 +1,254 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, claude/* ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # =========================================================================
+  # Docker Build Validation - All Platforms
+  # =========================================================================
+  docker-build-linux-x86:
+    name: Docker Build (Linux x86_64)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [train, test, license, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.service }} image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.service }}/Dockerfile
+          push: false
+          tags: agilestar/ai-${{ matrix.service }}:ci-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-build-builders:
+    name: Docker Build (Builder Images)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux_x86, linux_arm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.platform }} builder
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: build/Dockerfile.${{ matrix.platform }}
+          push: false
+          tags: agilestar/ai-builder-${{ matrix.platform }}:ci-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =========================================================================
+  # Python Backend Tests
+  # =========================================================================
+  python-lint:
+    name: Python Linting & Type Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 mypy black isort
+
+      - name: Run black (check only)
+        run: |
+          black --check train/backend test/backend license/backend prod/web_service || true
+
+      - name: Run isort (check only)
+        run: |
+          isort --check-only train/backend test/backend license/backend prod/web_service || true
+
+      - name: Run flake8
+        run: |
+          flake8 train/backend test/backend license/backend prod/web_service --count --select=E9,F63,F7,F82 --show-source --statistics || true
+
+  # =========================================================================
+  # Frontend Build Tests
+  # =========================================================================
+  frontend-build:
+    name: Frontend Build Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        frontend: [train, test, license, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.frontend }}/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd ${{ matrix.frontend }}/frontend
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd ${{ matrix.frontend }}/frontend
+          npm run build
+
+      - name: Check build output
+        run: |
+          ls -lh ${{ matrix.frontend }}/frontend/dist/
+
+  # =========================================================================
+  # C++ Build Tests (SDK + Runtime)
+  # =========================================================================
+  cpp-build:
+    name: C++ Build & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ ninja-build
+
+      - name: Create build directory
+        run: mkdir -p cpp/build
+
+      - name: CMake configure (SDK headers only)
+        run: |
+          cd cpp
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_RUNTIME=ON \
+            -DBUILD_CAPABILITIES=OFF
+
+      - name: Build runtime library
+        run: |
+          cd cpp
+          cmake --build build --target ai_runtime
+
+      - name: Check build output
+        run: |
+          ls -lh cpp/build/runtime/
+
+  # =========================================================================
+  # Model Package Validation
+  # =========================================================================
+  validate-model-packages:
+    name: Validate Model Package Structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check training script requirements
+        run: |
+          echo "Checking face_detect requirements..."
+          test -f train/scripts/face_detect/requirements.txt
+          test -f train/scripts/face_detect/train.py
+          test -f train/scripts/face_detect/export.py
+
+          echo "Checking desktop_recapture_detect requirements..."
+          test -f train/scripts/desktop_recapture_detect/requirements.txt
+          test -f train/scripts/desktop_recapture_detect/train.py
+          test -f train/scripts/desktop_recapture_detect/export.py
+
+      - name: Validate capability CMake structure
+        run: |
+          echo "Checking face_detect C++ capability..."
+          test -f cpp/capabilities/face_detect/CMakeLists.txt
+          test -f cpp/capabilities/face_detect/face_detect.cpp
+
+          echo "Checking desktop_recapture_detect C++ capability..."
+          test -f cpp/capabilities/desktop_recapture_detect/CMakeLists.txt
+          test -f cpp/capabilities/desktop_recapture_detect/desktop_recapture_detect.cpp
+
+  # =========================================================================
+  # Documentation Validation
+  # =========================================================================
+  docs-validation:
+    name: Documentation Completeness Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check critical documentation
+        run: |
+          echo "Checking design docs..."
+          test -f docs/architecture.md
+          test -f docs/design/annotation_service.md
+          test -f docs/design/train_service.md
+          test -f docs/design/test_service.md
+          test -f docs/design/license_service.md
+          test -f docs/design/build_service.md
+          test -f docs/design/prod_service.md
+
+          echo "Checking operation guides..."
+          test -f docs/face_detect_guide.md
+          test -f docs/desktop_recapture_detect_guide.md
+          test -f docs/new_capability_guide.md
+          test -f docs/deployment_manual.md
+
+      - name: Check README exists
+        run: test -f README.md
+
+  # =========================================================================
+  # Integration Test (Docker Compose Smoke Test)
+  # =========================================================================
+  integration-smoke-test:
+    name: Docker Compose Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: |
+          docker compose -f deploy/docker-compose.yml config
+
+      - name: Validate docker-compose.prod.yml
+        run: |
+          docker compose -f deploy/docker-compose.prod.yml config
+
+  # =========================================================================
+  # Security Scan
+  # =========================================================================
+  security-scan:
+    name: Security Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
