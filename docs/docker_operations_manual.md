@@ -329,24 +329,23 @@ docker compose restart redis
 
 ---
 
-## 6. Docker 构建缓存优化（推荐）
+## 6. Docker 构建缓存优化（已默认启用）
 
-### 6.1 问题背景
+### 6.1 优化说明
 
-在默认的 Docker 构建中,即使只修改了一行代码,也可能导致大量依赖包（如 PyTorch 2GB+ 下载）重新下载,严重拖慢开发迭代速度。
+从 v1.7 开始，**构建缓存优化已默认启用**，所有 Docker 构建命令无需修改即可享受优化效果。
 
-**根本原因**：Dockerfile 中将稳定依赖（如 PyTorch）和业务依赖混合在同一个 RUN 命令中,导致任何一个依赖变化都会使整层缓存失效。
-
-### 6.2 优化方案
-
-我们提供了优化后的 Dockerfile 和 BuildKit 缓存支持,实现：
-
-- ✅ **90%+ 构建时间节省**：代码变更时仅重新构建应用层,依赖层全部缓存命中
-- ✅ **分层依赖管理**：PyTorch、基础库、业务依赖分别独立安装
+**优化效果**：
+- ✅ **90%+ 构建时间节省**：代码变更时仅重新构建应用层，依赖层全部缓存命中
+- ✅ **分层依赖管理**：PyTorch（2GB）、基础库、业务依赖分别独立安装
 - ✅ **BuildKit 缓存挂载**：pip 和 npm 下载缓存持久化
 - ✅ **最小化构建上下文**：通过 `.dockerignore` 排除无关文件
 
-### 6.3 启用 BuildKit（一次性配置）
+**原理**：Dockerfile 已优化为分层结构，稳定依赖（如 PyTorch）和业务依赖分离，避免一行代码修改导致 2GB+ 依赖重新下载。
+
+### 6.2 启用 BuildKit（推荐，一次性配置）
+
+虽然优化的 Dockerfile 已是默认版本，但启用 BuildKit 可进一步提升构建性能：
 
 ```bash
 # 方法一：使用启用脚本（推荐）
@@ -360,20 +359,22 @@ export COMPOSE_DOCKER_CLI_BUILD=1
 echo $DOCKER_BUILDKIT  # 应输出 1
 ```
 
-### 6.4 快速构建命令（推荐使用）
+**注意**：deploy 目录已包含 `.env` 文件，`docker compose` 命令会自动启用 BuildKit。如使用 `docker build` 命令，需手动设置环境变量。
 
-#### 训练镜像（优化版）
+### 6.3 标准构建命令（无需修改）
+
+#### 训练镜像
 
 ```bash
-# 使用优化后的 Dockerfile
-docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+# 标准构建命令（已自动使用优化版 Dockerfile）
+docker build -t agilestar/ai-train:latest -f train/Dockerfile .
 
-# 或使用 docker compose（需在 docker-compose.yml 中配置）
+# 或使用 docker compose（推荐，自动启用 BuildKit）
 docker compose build train
 ```
 
 **预期效果**：
-- **首次构建**：与原版相同（~10-15 分钟）
+- **首次构建**：10-15 分钟（需下载 PyTorch 等依赖）
 - **代码修改后重新构建**：仅需 30-60 秒（缓存命中率 90%+）
 
 #### 其他镜像构建
@@ -392,9 +393,9 @@ docker build -t agilestar/ai-builder-linux-x86:latest -f build/Dockerfile.linux_
 docker build -t agilestar/ai-prod:latest -f prod/Dockerfile .
 ```
 
-### 6.5 构建上下文优化
+### 6.4 构建上下文优化
 
-项目已包含 `.dockerignore` 文件,自动排除以下无关文件：
+项目已包含 `.dockerignore` 文件，自动排除以下无关文件：
 
 ```
 # Python 缓存
@@ -415,13 +416,13 @@ docker build -t agilestar/ai-prod:latest -f prod/Dockerfile .
 **/.DS_Store
 ```
 
-### 6.6 常见场景构建策略
+### 6.5 常见场景构建策略
 
 #### 场景一：仅修改了训练脚本代码
 
 ```bash
-# 使用优化版 Dockerfile,仅重新构建代码层
-docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+# 使用标准构建命令，仅重新构建代码层
+docker build -t agilestar/ai-train:latest -f train/Dockerfile .
 
 # 预期时间：30-60 秒
 ```
@@ -429,8 +430,8 @@ docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
 #### 场景二：修改了 requirements.txt（添加新依赖）
 
 ```bash
-# 依赖层缓存失效,但 PyTorch 层仍然缓存命中
-docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+# 依赖层缓存失效，但 PyTorch 层仍然缓存命中
+docker build -t agilestar/ai-train:latest -f train/Dockerfile .
 
 # 预期时间：3-5 分钟（仅重新安装新增依赖）
 ```
@@ -438,8 +439,8 @@ docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
 #### 场景三：PyTorch 版本升级
 
 ```bash
-# 所有依赖层缓存失效,完整重新构建
-docker build --no-cache -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+# 所有依赖层缓存失效，完整重新构建
+docker build --no-cache -t agilestar/ai-train:latest -f train/Dockerfile .
 
 # 预期时间：10-15 分钟（完整下载）
 ```
@@ -447,26 +448,26 @@ docker build --no-cache -t agilestar/ai-train:latest -f train/Dockerfile.optimiz
 #### 场景四：修改前端代码
 
 ```bash
-# 前端依赖层缓存命中,仅重新 build
-docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+# 前端依赖层缓存命中，仅重新 build
+docker build -t agilestar/ai-train:latest -f train/Dockerfile .
 
 # 预期时间：2-3 分钟（npm run build）
 ```
 
-### 6.7 性能对比
+### 6.6 性能对比
 
-| 场景 | 原版 Dockerfile | 优化版 Dockerfile | 时间节省 |
-|-----|----------------|------------------|---------|
+| 场景 | 旧版 Dockerfile | 优化版 Dockerfile（默认） | 时间节省 |
+|-----|----------------|------------------------|---------|
 | 首次构建 | 10-15 分钟 | 10-15 分钟 | - |
 | 代码修改 | 10-15 分钟 | 30-60 秒 | **95%** |
 | 新增业务依赖 | 10-15 分钟 | 3-5 分钟 | **70%** |
 | 前端代码修改 | 10-15 分钟 | 2-3 分钟 | **80%** |
 
-### 6.8 故障排查
+### 6.7 故障排查
 
 #### BuildKit 未启用
 
-**症状**：构建时未看到缓存挂载生效,或构建输出格式为旧版样式
+**症状**：构建时未看到缓存挂载生效，或构建输出格式为旧版样式
 
 **解决**：
 ```bash
@@ -476,7 +477,7 @@ export DOCKER_BUILDKIT=1
 
 #### 缓存未命中
 
-**症状**：预期应该缓存命中,但仍然重新下载依赖
+**症状**：预期应该缓存命中，但仍然重新下载依赖
 
 **解决**：
 ```bash
@@ -488,7 +489,7 @@ cat .dockerignore
 
 #### 磁盘空间不足
 
-**症状**：构建失败,提示 `no space left on device`
+**症状**：构建失败，提示 `no space left on device`
 
 **解决**：
 ```bash
@@ -497,6 +498,14 @@ docker system prune -a --volumes
 
 # 或仅清理构建缓存
 docker builder prune -a
+```
+
+### 6.8 回退到旧版 Dockerfile
+
+如需使用旧版 Dockerfile（不推荐），可使用：
+
+```bash
+docker build -t agilestar/ai-train:latest -f train/Dockerfile.legacy .
 ```
 
 **📖 完整优化指南**：详见 `docs/design/docker_build_cache_optimization.md`

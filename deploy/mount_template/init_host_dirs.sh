@@ -95,6 +95,29 @@ chmod -R 755 "${ROOT}/datasets"
 # logs 目录：所有用户可写（容器以非 root 用户运行时需要）
 chmod -R 777 "${ROOT}/logs"
 
+# ---------------------------------------------------------------------------
+# 创建 .env 文件（BuildKit 优化配置）
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_DIR="$(dirname "${SCRIPT_DIR}")"
+ENV_FILE="${DEPLOY_DIR}/.env"
+
+if [ ! -f "${ENV_FILE}" ]; then
+    cat > "${ENV_FILE}" << 'EOF'
+# =============================================================================
+# deploy/.env
+# Docker Compose 环境变量配置
+# =============================================================================
+
+# Docker BuildKit 优化（启用构建缓存优化）
+DOCKER_BUILDKIT=1
+COMPOSE_DOCKER_CLI_BUILD=1
+EOF
+    echo "[ai_platform] 已创建 deploy/.env 文件（BuildKit 优化配置）"
+else
+    echo "[ai_platform] deploy/.env 文件已存在，跳过"
+fi
+
 echo "[ai_platform] 目录初始化完成！"
 echo ""
 echo "目录结构："

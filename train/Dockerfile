@@ -1,24 +1,26 @@
 # =============================================================================
 # train/Dockerfile
-# 训练子系统镜像
+# 训练子系统镜像（Docker 构建缓存优化版）
 # 镜像名：agilestar/ai-train:latest
 # 服务端口：8001
 #
-# CUDA 版本规范：
-#   标准版本：CUDA 11.8.0（LTS 版本，强制要求）
-#   理由：
-#     1. 最佳兼容性：支持 PyTorch 2.0-2.4 全系列
-#     2. 生态成熟：所有主流框架均有稳定支持
-#     3. 长期维护：CUDA 11.x 系列最后稳定版本
+# 优化策略：
+#   1. 依赖分层：PyTorch、基础库、业务依赖分别安装
+#   2. 顺序优化：稳定的层在前，易变的层在后
+#   3. BuildKit 缓存：pip 和 npm 缓存挂载
 #
-#   ⚠️ 不支持其他 CUDA 版本，避免依赖冲突
-#   详见：docs/cuda_version_standard.md
+# 使用方法：
+#   DOCKER_BUILDKIT=1 docker build -t agilestar/ai-train:latest -f train/Dockerfile .
+#
+# 注意：
+#   - 推荐启用 BuildKit 以获得最佳构建性能（运行 source scripts/enable_buildkit.sh）
+#   - 旧版 Dockerfile 已备份为 train/Dockerfile.legacy
 # =============================================================================
 
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 # ---------------------------------------------------------------------------
-# System dependencies
+# Level 0: 系统依赖（很少变化）
 # ---------------------------------------------------------------------------
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -33,7 +35,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     libxrender1 \
     libxext6 \
-    # Additional OpenCV dependencies
     libgl1 \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
@@ -50,55 +51,73 @@ RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 \
 WORKDIR /app
 
 # ---------------------------------------------------------------------------
-# Python backend dependencies (cached layer)
-# Use Tsinghua mirror for faster downloads in China
+# Level 1: 核心框架 - PyTorch (2GB, 很少变化)
+# 🔑 关键优化：单独一层安装 PyTorch，避免与业务依赖混合
+# 使用 BuildKit 缓存挂载加速下载
+# ---------------------------------------------------------------------------
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir \
+    torch==2.4.1 \
+    torchvision==0.19.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+
+# ---------------------------------------------------------------------------
+# Level 2: 框架基础库（偶尔变化）
+# 🔑 关键优化：numpy、opencv 等基础库单独一层
+# ---------------------------------------------------------------------------
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    numpy==1.24.3 \
+    opencv-python-headless==4.8.1.78 \
+    Pillow==10.0.0 \
+    pyyaml==6.0.1 \
+    tqdm==4.66.1 \
+    scipy==1.11.3
+
+# ---------------------------------------------------------------------------
+# Level 2.5: FastAPI 后端依赖（相对稳定）
 # ---------------------------------------------------------------------------
 COPY train/backend/requirements.txt train/backend/requirements.txt
-RUN pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     -r train/backend/requirements.txt
 
 # ---------------------------------------------------------------------------
-# Training scripts requirements (cached layer — copy only requirements first)
-# Install BEFORE frontend build so frontend code changes don't invalidate
-# the heavy ML package layer (~2 GB for torch, etc.).
-#
-# 安装策略（CUDA 11.8 专用）：
-#   1. 先从 PyTorch 官方 index 安装 torch/torchvision（cu118 版本）
-#   2. 再从清华镜像安装其他依赖
-#   3. 验证 CUDA 可用性
-#
-#   ⚠️ 必须使用 cu118 索引，确保与 CUDA 11.8 匹配
+# Level 3: 训练脚本依赖（经常变化）
+# 🔑 关键优化：业务特定依赖（ultralytics、onnxslim 等）单独安装
+#             即使这些包更新，也不会影响 PyTorch 层的缓存
 # ---------------------------------------------------------------------------
-COPY train/scripts/face_detect/requirements.txt train/scripts/face_detect/requirements.txt
-COPY train/scripts/desktop_recapture_detect/requirements.txt train/scripts/desktop_recapture_detect/requirements.txt
+COPY train/scripts/face_detect/requirements.txt /tmp/face_detect_req.txt
+COPY train/scripts/desktop_recapture_detect/requirements.txt /tmp/desktop_req.txt
 
-RUN pip install --no-cache-dir \
-    torch torchvision --index-url https://download.pytorch.org/whl/cu118 \
-    && pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    -r train/scripts/face_detect/requirements.txt \
-    -r train/scripts/desktop_recapture_detect/requirements.txt \
+    -r /tmp/face_detect_req.txt \
+    -r /tmp/desktop_req.txt \
     && python3 -c "import torch; import cv2; from PIL import Image; print(f'[OK] PyTorch {torch.__version__} CUDA {torch.version.cuda}, cv2 + Pillow importable')"
 
 # ---------------------------------------------------------------------------
-# Frontend build
-# Use Taobao npm registry for faster downloads in China
+# Level 4: Frontend dependencies（npm 包）
+# 🔑 关键优化：只 COPY package*.json，先安装依赖，再 COPY 源码
 # ---------------------------------------------------------------------------
-COPY train/frontend/ train/frontend/
-RUN cd train/frontend \
+COPY train/frontend/package*.json train/frontend/
+RUN --mount=type=cache,target=/root/.npm \
+    cd train/frontend \
     && npm config set registry https://registry.npmmirror.com \
-    && npm install \
-    && npm run build
+    && npm ci
+
+# Frontend source and build
+COPY train/frontend/ train/frontend/
+RUN cd train/frontend && npm run build
 
 # ---------------------------------------------------------------------------
-# Training scripts source
+# Level 5: 应用代码（最频繁变化）
+# 🔑 放在最后，确保代码变更不影响任何依赖层的缓存
 # ---------------------------------------------------------------------------
 COPY train/scripts/ train/scripts/
-
-# ---------------------------------------------------------------------------
-# Backend source
-# ---------------------------------------------------------------------------
 COPY train/backend/ train/backend/
 
 # ---------------------------------------------------------------------------

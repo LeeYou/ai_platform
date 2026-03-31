@@ -1,8 +1,27 @@
 # Docker 构建缓存优化方案
 
 **北京爱知之星科技股份有限公司 (Agile Star)**
-**版本:** v1.0 | **日期:** 2026-03-31 | **文档编号:** OPT-DOCKER-001
+**版本:** v1.1 | **日期:** 2026-03-31 | **文档编号:** OPT-DOCKER-001
 **官网：[agilestar.cn](https://agilestar.cn)**
+
+---
+
+## 📢 重要更新（v1.1）
+
+**从 v1.7 开始，本优化方案已作为默认配置集成到项目中：**
+
+1. ✅ **train/Dockerfile 已替换为优化版本** - 无需使用 `-f train/Dockerfile.optimized`
+2. ✅ **deploy/.env 文件已创建** - `docker compose` 命令自动启用 BuildKit
+3. ✅ **旧版 Dockerfile 保留为 train/Dockerfile.legacy** - 可选回退
+
+**用户操作**：无需任何修改，直接使用标准构建命令即可享受优化效果：
+```bash
+# 标准命令（已自动使用优化版）
+docker build -t agilestar/ai-train:latest -f train/Dockerfile .
+docker compose build train
+```
+
+**本文档内容**：以下内容详细说明了优化的原理、实现细节和最佳实践，供深入了解和问题排查使用。
 
 ---
 
