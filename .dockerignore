@@ -12,6 +12,9 @@
 **/*.so
 **/*.egg
 **/*.egg-info
+# Python package build artifacts (但不排除顶级 build/ 服务目录)
+# Python build/ directories are typically inside package directories, not at repo root
+# 如需排除特定的 Python build 目录，请使用具体路径，如：train/scripts/*/build
 **/.pytest_cache
 **/.mypy_cache
 **/.coverage
