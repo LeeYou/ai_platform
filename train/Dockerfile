@@ -28,6 +28,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     curl \
     ca-certificates \
+    # Runtime libraries for opencv-python-headless
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 18 (for frontend build)
@@ -55,8 +60,10 @@ RUN pip install --no-cache-dir -r train/backend/requirements.txt
 COPY train/scripts/face_detect/requirements.txt train/scripts/face_detect/requirements.txt
 COPY train/scripts/desktop_recapture_detect/requirements.txt train/scripts/desktop_recapture_detect/requirements.txt
 
-RUN pip install --no-cache-dir -r train/scripts/face_detect/requirements.txt
-RUN pip install --no-cache-dir -r train/scripts/desktop_recapture_detect/requirements.txt
+RUN pip install --no-cache-dir \
+    -r train/scripts/face_detect/requirements.txt \
+    -r train/scripts/desktop_recapture_detect/requirements.txt \
+    && python3 -c "import cv2; from PIL import Image; print('[OK] cv2 + Pillow importable')"
 
 # ---------------------------------------------------------------------------
 # Frontend build

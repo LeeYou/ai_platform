@@ -166,6 +166,65 @@ def _wider_to_yolo(box, img_w, img_h):
     return class_id, cx, cy, bw, bh
 
 
+def _jpeg_dimensions(path):
+    """Return (width, height) of a JPEG file using only the stdlib.
+
+    Parses JPEG markers to find the SOFn frame header which contains the
+    image dimensions.  Returns *None* on any error or if the file is not
+    a valid JPEG.
+    """
+    import struct
+
+    try:
+        with open(path, "rb") as fh:
+            # Check JPEG SOI marker
+            if fh.read(2) != b"\xff\xd8":
+                return None
+            while True:
+                marker = fh.read(2)
+                if len(marker) < 2:
+                    return None
+                if marker[0] != 0xFF:
+                    return None
+                # Skip padding 0xFF bytes
+                while marker[1] == 0xFF:
+                    marker = marker[1:] + fh.read(1)
+                    if len(marker) < 2:
+                        return None
+                mtype = marker[1]
+                # SOFn markers: 0xC0–0xCF except 0xC4 (DHT), 0xC8, 0xCC (DAC)
+                if mtype in (0xC4, 0xC8, 0xCC):
+                    length_data = fh.read(2)
+                    if len(length_data) < 2:
+                        return None
+                    length = struct.unpack(">H", length_data)[0]
+                    fh.seek(length - 2, 1)
+                    continue
+                if 0xC0 <= mtype <= 0xCF:
+                    length_data = fh.read(2)
+                    if len(length_data) < 2:
+                        return None
+                    # SOF payload: precision(1) + height(2) + width(2)
+                    data = fh.read(5)
+                    if len(data) < 5:
+                        return None
+                    height = struct.unpack(">H", data[1:3])[0]
+                    width = struct.unpack(">H", data[3:5])[0]
+                    return width, height
+                # For other markers, read length and skip
+                if mtype == 0xD9:  # EOI
+                    return None
+                if mtype == 0xDA:  # SOS — no dimensions before this
+                    return None
+                length_data = fh.read(2)
+                if len(length_data) < 2:
+                    return None
+                length = struct.unpack(">H", length_data)[0]
+                fh.seek(length - 2, 1)
+    except (OSError, struct.error):
+        return None
+
+
 def _image_dimensions(path):
     """Return (width, height) for an image without heavy dependencies."""
     try:
@@ -185,9 +244,15 @@ def _image_dimensions(path):
     except ImportError:
         pass
 
+    # Pure-Python JPEG fallback — no external dependencies needed.
+    result = _jpeg_dimensions(path)
+    if result is not None:
+        return result
+
     print(
         "[ERROR] Neither OpenCV nor Pillow is available to read image "
-        "dimensions.  Install one of them:\n"
+        "dimensions, and the pure-Python JPEG fallback failed.\n"
+        "        Install one of them:\n"
         "        pip install opencv-python-headless   OR\n"
         "        pip install Pillow",
         file=sys.stderr,
