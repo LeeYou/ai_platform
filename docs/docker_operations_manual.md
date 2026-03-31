@@ -6,33 +6,34 @@
 
 ---
 
+
 ## 目录
 
 1. [概述](#1-概述)
 2. [环境准备](#2-环境准备)
 3. [镜像总览](#3-镜像总览)
 4. [宿主机目录初始化](#4-宿主机目录初始化)
-5. [各镜像构建详解](#5-各镜像构建详解)
-   - [5.1 授权管理镜像 (ai-license-mgr)](#51-授权管理镜像-ai-license-mgr)
-   - [5.2 训练镜像 (ai-train)](#52-训练镜像-ai-train)
-   - [5.3 训练开发镜像 (ai-train-dev)](#53-训练开发镜像-ai-train-dev)
-   - [5.4 测试镜像 (ai-test)](#54-测试镜像-ai-test)
-   - [5.5 编译镜像 (ai-builder-linux-x86)](#55-编译镜像-ai-builder-linux-x86)
-   - [5.6 编译镜像 — ARM64 (ai-builder-linux-arm)](#56-编译镜像--arm64-ai-builder-linux-arm)
-   - [5.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)](#57-编译镜像--windows-交叉编译-ai-builder-windows)
-   - [5.8 生产推理镜像 (ai-prod)](#58-生产推理镜像-ai-prod)
-6. [开发环境启停管理 (docker-compose)](#6-开发环境启停管理-docker-compose)
-7. [生产环境启停管理 (docker-compose.prod)](#7-生产环境启停管理-docker-composeprod)
-8. [日志管理](#8-日志管理)
-9. [健康检查](#9-健康检查)
-10. [镜像推送与仓库管理](#10-镜像推送与仓库管理)
-11. [交付包打包](#11-交付包打包)
-12. [常用运维命令速查表](#12-常用运维命令速查表)
-13. [新增 AI 能力模块完整操作流程](#13-新增-ai-能力模块完整操作流程)
-14. [故障排查指南](#14-故障排查指南)
-15. [附录：端口分配表](#15-附录端口分配表)
-16. [附录：授权安全模型](#16-附录授权安全模型)
-
+5. [数据持久化架构](#5-数据持久化架构)
+6. [各镜像构建详解](#6-各镜像构建详解)
+   - [6.1 授权管理镜像 (ai-license-mgr)](#61-授权管理镜像-ai-license-mgr)
+   - [6.2 训练镜像 (ai-train)](#62-训练镜像-ai-train)
+   - [6.3 训练开发镜像 (ai-train-dev)](#63-训练开发镜像-ai-train-dev)
+   - [6.4 测试镜像 (ai-test)](#64-测试镜像-ai-test)
+   - [6.5 编译镜像 (ai-builder-linux-x86)](#65-编译镜像-ai-builder-linux-x86)
+   - [6.6 编译镜像 — ARM64 (ai-builder-linux-arm)](#66-编译镜像--arm64-ai-builder-linux-arm)
+   - [6.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)](#67-编译镜像--windows-交叉编译-ai-builder-windows)
+   - [6.8 生产推理镜像 (ai-prod)](#68-生产推理镜像-ai-prod)
+7. [开发环境启停管理 (docker-compose)](#7-开发环境启停管理-docker-compose)
+8. [生产环境启停管理 (docker-compose.prod)](#8-生产环境启停管理-docker-composeprod)
+9. [日志管理](#9-日志管理)
+10. [健康检查](#10-健康检查)
+11. [镜像推送与仓库管理](#11-镜像推送与仓库管理)
+12. [交付包打包](#12-交付包打包)
+13. [常用运维命令速查表](#13-常用运维命令速查表)
+14. [新增 AI 能力模块完整操作流程](#14-新增-ai-能力模块完整操作流程)
+15. [故障排查指南](#15-故障排查指南)
+16. [附录：端口分配表](#16-附录端口分配表)
+17. [附录：授权安全模型](#17-附录授权安全模型)
 ---
 
 ## 1. 概述
@@ -211,6 +212,13 @@ sudo chmod -R 777 ${AI_ROOT}/logs             # 日志目录：容器可写
 
 ```
 /data/ai_platform/
+├── data/                       # 【新增】持久化数据根目录（数据库、Redis 等）
+│   ├── train/                 # 训练服务数据库
+│   │   └── train.db          # 训练任务、能力配置、标注项目数据库
+│   ├── license/               # 授权服务数据库
+│   │   └── license.db        # 客户授权记录数据库
+│   └── redis/                 # Redis 持久化数据
+│       └── appendonly.aof    # AOF 持久化文件
 ├── datasets/                   # 训练数据集（读写挂载到训练容器）
 │   ├── face_detect/
 │   ├── handwriting_reco/
@@ -224,8 +232,8 @@ sudo chmod -R 777 ${AI_ROOT}/logs             # 日志目录：容器可写
 │   ├── linux_x86_64/<capability>/<version>/
 │   ├── linux_aarch64/
 │   └── windows_x86_64/
-├── licenses/                   # 授权文件（RSA-2048 签名）
-│   └── license.bin
+├── licenses/                   # 授权文件（RSA-2048 签名的 license.bin）
+│   └── <customer_id>/license.bin
 ├── logs/                       # 各容器日志
 │   ├── train/
 │   ├── test/
@@ -236,13 +244,95 @@ sudo chmod -R 777 ${AI_ROOT}/logs             # 日志目录：容器可写
 └── output/                     # 交付产物归档
 ```
 
+**⚠️ 重要变更 (v1.6)**：
+- 新增 `/data/ai_platform/data/` 目录，用于存储所有数据库和持久化数据
+- 所有服务的数据库文件现在存储在宿主机，容器重建后数据不丢失
+- Redis 数据也持久化到宿主机，不再使用 Docker 匿名卷
+- 详见 [第5节：数据持久化架构](#5-数据持久化架构)
+
 ---
 
-## 5. 各镜像构建详解
+## 5. 数据持久化架构
+
+### 5.1 设计原则
+
+**问题背景**：在 v1.5 及之前版本中，部分数据（如训练服务数据库、Redis 数据）存储在容器内部或 Docker 匿名卷中，导致容器重建后配置丢失，用户需要重新设置。
+
+**解决方案**：从 v1.6 开始，**所有持久化数据统一存储在宿主机** `/data/ai_platform/data/` 目录下，确保：
+- ✅ 容器重建后数据不丢失
+- ✅ 便于数据备份和迁移
+- ✅ 支持多服务器间数据同步
+- ✅ 数据与容器生命周期解耦
+
+### 6.2 数据存储映射表
+
+| 服务 | 宿主机路径 | 容器内路径 | 环境变量 | 存储内容 |
+|------|-----------|-----------|---------|---------|
+| **训练服务** | `/data/ai_platform/data/train/` | `/app/data/` | `TRAIN_DB_PATH=/app/data/train.db` | 训练任务、能力配置、标注项目 |
+| **授权服务** | `/data/ai_platform/data/license/` | `/app/data/` | `AI_LICENSE_DB=/app/data/license.db` | 客户授权记录、密钥对 |
+| **Redis** | `/data/ai_platform/data/redis/` | `/data/` | - | AOF 持久化文件、任务队列 |
+
+### 6.3 数据备份与恢复
+
+#### 完整备份（推荐）
+```bash
+# 备份所有持久化数据（包含数据库、Redis 数据等）
+tar -czf ai_platform_data_$(date +%Y%m%d).tar.gz /data/ai_platform/data/
+
+# 恢复
+tar -xzf ai_platform_data_20260331.tar.gz -C /
+```
+
+#### 分模块备份
+```bash
+# 仅备份训练相关数据
+tar -czf train_backup.tar.gz /data/ai_platform/data/train/
+
+# 仅备份授权相关数据
+tar -czf license_backup.tar.gz /data/ai_platform/data/license/
+```
+
+### 6.4 数据迁移到新服务器
+
+```bash
+# 在旧服务器上
+docker compose down
+tar -czf ai_platform_full.tar.gz /data/ai_platform/
+scp ai_platform_full.tar.gz newserver:/tmp/
+
+# 在新服务器上
+tar -xzf /tmp/ai_platform_full.tar.gz -C /
+cd /path/to/ai_platform/deploy
+docker compose up -d
+```
+
+### 6.5 故障排查
+
+#### 数据库权限问题
+```bash
+# 症状：容器日志显示 "Permission denied: /app/data/train.db"
+# 解决：
+chmod -R 755 /data/ai_platform/data/
+```
+
+#### Redis AOF 文件损坏
+```bash
+# 症状：Redis 容器无法启动
+# 解决：
+docker run --rm -v /data/ai_platform/data/redis:/data \
+    redis:7-alpine redis-check-aof --fix /data/appendonly.aof
+docker compose restart redis
+```
+
+**📖 完整数据持久化架构文档**：详见 `docs/design/data_persistence.md`
+
+---
+
+## 6_OLD. 各镜像构建详解
 
 > 以下所有命令均在仓库根目录执行：`cd /path/to/ai_platform`
 
-### 5.1 授权管理镜像 (ai-license-mgr)
+### 6.1 授权管理镜像 (ai-license-mgr)
 
 **用途**：提供授权管理 Web UI 和 API，生成/管理/吊销 License 文件。
 
@@ -304,7 +394,7 @@ curl http://localhost:8003/health
 
 ---
 
-### 5.2 训练镜像 (ai-train)
+### 6.2 训练镜像 (ai-train)
 
 **用途**：提供 GPU 训练环境，支持样本标注、PyTorch/PaddlePaddle 训练、模型导出和训练进度监控 Web UI。内置样本标注功能支持二分类、多分类、目标检测、OCR 和图像分割五种标注类型，可直接导出训练兼容格式。
 
@@ -391,7 +481,7 @@ docker exec ai-train python3 -c "import torch; print(torch.cuda.is_available())"
 
 ---
 
-### 5.3 训练开发镜像 (ai-train-dev)
+### 6.3 训练开发镜像 (ai-train-dev)
 
 **用途**：本地开发/调试用轻量训练镜像，无 CUDA 依赖，适合在笔记本/无 GPU 服务器上运行。
 
@@ -453,7 +543,7 @@ curl http://localhost:8001/health
 
 ---
 
-### 5.4 测试镜像 (ai-test)
+### 6.4 测试镜像 (ai-test)
 
 **用途**：提供模型测试与精度评估服务，支持单样本测试、批量精度评估、版本对比和结果可视化。
 
@@ -517,7 +607,7 @@ curl http://localhost:8002/health
 
 ---
 
-### 5.5 编译镜像 (ai-builder-linux-x86)
+### 6.5 编译镜像 (ai-builder-linux-x86)
 
 **用途**：提供 C++ 编译环境 + Web 编译管理界面，将 AI 能力插件编译为 SO 动态库（Linux x86_64 平台）。支持在 Web 页面上选择 AI 能力、绑定客户密钥对，自动将客户公钥指纹编译到 SO 库中。
 
@@ -660,7 +750,7 @@ curl http://localhost:8004/api/v1/builds
 
 ---
 
-### 5.6 编译镜像 — ARM64 (ai-builder-linux-arm)
+### 6.6 编译镜像 — ARM64 (ai-builder-linux-arm)
 
 **用途**：提供 ARM64/aarch64 平台 C++ 编译环境，编译 AI 能力插件为 aarch64 架构 SO 动态库。结构与 x86 编译镜像一致，仅 ONNXRuntime 和目标架构不同。
 
@@ -720,7 +810,7 @@ curl http://localhost:8005/api/v1/capabilities
 
 ---
 
-### 5.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)
+### 6.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)
 
 **用途**：在 Linux 宿主机上使用 MinGW-w64 交叉编译器生成 Windows x86_64 DLL 文件。无需 Windows 宿主机或 Windows 容器。
 
@@ -780,7 +870,7 @@ curl http://localhost:8006/api/v1/capabilities
 
 ---
 
-### 5.8 生产推理镜像 (ai-prod)
+### 6.8 生产推理镜像 (ai-prod)
 
 **用途**：生产环境 AI 推理服务，提供 REST API 接口 + Web 管理页面（API 测试、AI 编排管理）、GPU/CPU 自适应、实例池并发调度、热重载。
 
@@ -902,7 +992,7 @@ curl -X POST http://localhost:8080/api/v1/admin/reload \
 
 ---
 
-## 6. 开发环境启停管理 (docker-compose)
+## 6_OLD. 开发环境启停管理 (docker-compose)
 
 开发环境使用 `deploy/docker-compose.yml`，包含训练、测试、授权管理、Redis 和编译管理服务。
 
@@ -1015,7 +1105,7 @@ docker compose up -d --build build      # 编译管理
 
 ---
 
-## 7. 生产环境启停管理 (docker-compose.prod)
+## 7_OLD. 生产环境启停管理 (docker-compose.prod)
 
 生产环境使用 `deploy/docker-compose.prod.yml`，仅包含生产推理服务（含 Web 管理页面和 AI 编排引擎）。
 
@@ -1103,7 +1193,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 ---
 
-## 8. 日志管理
+## 8_OLD. 日志管理
 
 > **日志架构**：每个服务使用 Python `logging` 模块同时输出到 **文件** 和 **stdout**。
 > 文件日志通过 Docker 卷挂载持久化到宿主机，stdout 日志由 Docker json-file 驱动管理。
@@ -1202,7 +1292,7 @@ find /data/ai_platform/logs -name "*.log" -mtime +30 -delete
 
 ---
 
-## 9. 健康检查
+## 9_OLD. 健康检查
 
 ### 9.1 手动健康检查
 
@@ -1310,7 +1400,7 @@ docker inspect --format='{{json .State.Health}}' ai-prod | python3 -m json.tool
 
 ---
 
-## 10. 镜像推送与仓库管理
+## 10_OLD. 镜像推送与仓库管理
 
 ### 10.1 一键构建并推送所有镜像
 
@@ -1374,7 +1464,7 @@ docker system prune -a --volumes
 
 ---
 
-## 11. 交付包打包
+## 11_OLD. 交付包打包
 
 ### 11.1 使用打包脚本
 
@@ -1603,7 +1693,7 @@ docker build --build-arg TRUSTED_PUBKEY_SHA256=<新指纹> ...
 
 ---
 
-## 12. 常用运维命令速查表
+## 12_OLD. 常用运维命令速查表
 
 ### 镜像操作
 
@@ -1672,7 +1762,7 @@ docker build --build-arg TRUSTED_PUBKEY_SHA256=<新指纹> ...
 
 ---
 
-## 13. 新增 AI 能力模块完整操作流程
+## 13_OLD. 新增 AI 能力模块完整操作流程
 
 > 本节描述从零开始新增一个 AI 能力模块的完整端到端流程，确保所有子系统同步更新。
 
@@ -1939,7 +2029,7 @@ curl -X POST http://localhost:8080/api/v1/pipeline/my_pipeline/run \
 
 ---
 
-## 14. 故障排查指南
+## 14_OLD. 故障排查指南
 
 ### 14.1 容器无法启动
 
@@ -2134,7 +2224,7 @@ conn.close()
 
 ---
 
-## 15. 附录：端口分配表
+## 15_OLD. 附录：端口分配表
 
 | 端口 | 服务 | 协议 | 环境 | 说明 |
 |------|------|------|------|------|
@@ -2151,7 +2241,7 @@ conn.close()
 
 ---
 
-## 16. 附录：授权安全模型
+## 16_OLD. 附录：授权安全模型
 
 ### 16.1 威胁分析与防御
 
