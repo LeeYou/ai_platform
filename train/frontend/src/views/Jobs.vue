@@ -893,15 +893,32 @@ const _connectWs = (jobId) => {
       }
       if (msg.type === 'log') {
         logText.value += msg.line
+
+        // Parse and update metrics in real-time
         const ep = _parseEpoch(msg.line)
-        if (ep) {
+        if (ep && selectedJob.value) {
+          // Update chart data
           chartData.value.epochs.push(ep.epoch)
           chartData.value.loss.push(ep.loss)
           chartData.value.accuracy.push(ep.accuracy)
 
-          // Update job metrics in real-time
-          if (selectedJob.value) {
-            updateJobMetrics(selectedJob.value)
+          // Update jobProgress immediately for responsive UI
+          const epochMatch = msg.line.match(/\[EPOCH\s+(\d+)\/(\d+)\]/)
+          if (epochMatch) {
+            const currentEpoch = parseInt(epochMatch[1])
+            const totalEpochs = parseInt(epochMatch[2])
+            jobProgress.value[selectedJob.value.id] = {
+              current: currentEpoch,
+              total: totalEpochs
+            }
+          }
+
+          // Update jobMetrics immediately with latest values
+          jobMetrics.value[selectedJob.value.id] = {
+            loss: ep.loss,
+            accuracy: ep.accuracy,
+            speed: jobMetrics.value[selectedJob.value.id]?.speed || null,
+            eta: jobMetrics.value[selectedJob.value.id]?.eta || null
           }
         }
 
