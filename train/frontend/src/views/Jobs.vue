@@ -392,6 +392,7 @@ const logText = ref('')
 const logContainer = ref(null)
 const autoScroll = ref(true)
 let wsConn = null
+let monitorRefreshTimer = null
 
 const chartData = ref({ epochs: [], loss: [], accuracy: [] })
 
@@ -823,8 +824,51 @@ const openMonitor = async (row) => {
     }
   } catch (e) { /* ignore */ }
 
+  // Update metrics immediately
+  await updateJobMetrics(row)
+
+  // Start real-time updates for running/pending jobs
   if (['running', 'pending'].includes(row.status)) {
     _connectWs(row.id)
+    _startMonitorRefresh()
+  }
+}
+
+const _startMonitorRefresh = () => {
+  _stopMonitorRefresh()
+  monitorRefreshTimer = setInterval(async () => {
+    if (!selectedJob.value || !monitorDrawerVisible.value) {
+      _stopMonitorRefresh()
+      return
+    }
+
+    // Refresh job data
+    try {
+      const res = await listJobs()
+      const updated = res.data.find(j => j.id === selectedJob.value.id)
+      if (updated) {
+        selectedJob.value = updated
+        await updateJobMetrics(updated)
+
+        // If job is no longer running, stop refresh and close WebSocket
+        if (!['running', 'pending'].includes(updated.status)) {
+          _stopMonitorRefresh()
+          if (wsConn) {
+            wsConn.close()
+            wsConn = null
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to refresh monitor data:', e)
+    }
+  }, 3000) // Refresh every 3 seconds for responsive UI
+}
+
+const _stopMonitorRefresh = () => {
+  if (monitorRefreshTimer) {
+    clearInterval(monitorRefreshTimer)
+    monitorRefreshTimer = null
   }
 }
 
@@ -832,10 +876,16 @@ const _connectWs = (jobId) => {
   if (wsConn) { wsConn.close(); wsConn = null }
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
   wsConn = new WebSocket(`${protocol}://${location.host}/ws/logs/${jobId}`)
+
+  wsConn.onopen = () => {
+    console.log('WebSocket connected for job', jobId)
+  }
+
   wsConn.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data)
       if (msg.type === 'done') {
+        console.log('Training completed, closing WebSocket')
         wsConn.close()
         load() // Refresh job list
         return
@@ -853,22 +903,49 @@ const _connectWs = (jobId) => {
             updateJobMetrics(selectedJob.value)
           }
         }
-      }
-    } catch { logText.value += ev.data }
 
-    if (autoScroll.value) {
-      nextTick(() => {
-        if (logContainer.value) {
-          logContainer.value.scrollTop = logContainer.value.scrollHeight
+        // Auto-scroll to bottom if enabled
+        if (autoScroll.value) {
+          nextTick(() => {
+            if (logContainer.value) {
+              logContainer.value.scrollTop = logContainer.value.scrollHeight
+            }
+          })
         }
-      })
+      }
+    } catch (e) {
+      // If not JSON, append as plain text
+      logText.value += ev.data
+
+      // Auto-scroll for plain text too
+      if (autoScroll.value) {
+        nextTick(() => {
+          if (logContainer.value) {
+            logContainer.value.scrollTop = logContainer.value.scrollHeight
+          }
+        })
+      }
     }
   }
-  wsConn.onerror = () => { if (wsConn) wsConn.close() }
+
+  wsConn.onerror = (err) => {
+    console.error('WebSocket error:', err)
+    if (wsConn) wsConn.close()
+  }
+
+  wsConn.onclose = () => {
+    console.log('WebSocket closed for job', jobId)
+  }
 }
 
 watch(monitorDrawerVisible, (v) => {
-  if (!v && wsConn) { wsConn.close(); wsConn = null }
+  if (!v) {
+    _stopMonitorRefresh()
+    if (wsConn) {
+      wsConn.close()
+      wsConn = null
+    }
+  }
 })
 
 onMounted(async () => {
@@ -880,6 +957,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopAutoRefresh()
+  _stopMonitorRefresh()
   if (wsConn) wsConn.close()
 })
 </script>
