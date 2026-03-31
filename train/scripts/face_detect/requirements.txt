@@ -1,7 +1,7 @@
-# PyTorch 2.x 支持 CUDA 11.8 和 CUDA 12.1
-# 使用 pip install 时会自动匹配容器内 CUDA 版本
-torch>=2.0.0
-torchvision>=0.15.0
+# PyTorch 2.x for CUDA 11.8
+# 使用 torch 2.4.x 确保与 CUDA 11.8 兼容
+torch>=2.0.0,<2.5.0
+torchvision>=0.15.0,<0.20.0
 ultralytics>=8.1.0
 onnx>=1.16.0
 onnxruntime>=1.18.0

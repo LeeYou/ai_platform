@@ -62,16 +62,21 @@ RUN pip install --no-cache-dir \
 # Training scripts requirements (cached layer — copy only requirements first)
 # Install BEFORE frontend build so frontend code changes don't invalidate
 # the heavy ML package layer (~2 GB for torch, etc.).
-# Use Tsinghua mirror for faster downloads in China
+#
+# 安装策略：
+#   1. 先从官方 PyTorch index 安装 torch/torchvision (CUDA 11.8)
+#   2. 再从清华镜像安装其他依赖
 # ---------------------------------------------------------------------------
 COPY train/scripts/face_detect/requirements.txt train/scripts/face_detect/requirements.txt
 COPY train/scripts/desktop_recapture_detect/requirements.txt train/scripts/desktop_recapture_detect/requirements.txt
 
 RUN pip install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/cu118 \
+    && pip install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     -r train/scripts/face_detect/requirements.txt \
     -r train/scripts/desktop_recapture_detect/requirements.txt \
-    && python3 -c "import cv2; from PIL import Image; print('[OK] cv2 + Pillow importable')"
+    && python3 -c "import torch; import cv2; from PIL import Image; print(f'[OK] PyTorch {torch.__version__} CUDA {torch.version.cuda}, cv2 + Pillow importable')"
 
 # ---------------------------------------------------------------------------
 # Frontend build
