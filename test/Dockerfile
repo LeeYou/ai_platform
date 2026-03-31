@@ -20,12 +20,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Python deps
+# Use Tsinghua mirror for faster downloads in China
 COPY test/backend/requirements.txt test/backend/requirements.txt
-RUN pip install --no-cache-dir -r test/backend/requirements.txt
+RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r test/backend/requirements.txt
 
 # Frontend build
+# Use Taobao npm registry for faster downloads in China
 COPY test/frontend/ test/frontend/
-RUN cd test/frontend && npm install && npm run build
+RUN cd test/frontend \
+    && npm config set registry https://registry.npmmirror.com \
+    && npm install \
+    && npm run build
 
 # Backend source
 COPY test/backend/ test/backend/

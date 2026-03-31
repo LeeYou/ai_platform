@@ -11,7 +11,10 @@ FROM node:18-slim AS frontend-builder
 
 WORKDIR /app
 COPY prod/frontend/ prod/frontend/
-RUN cd prod/frontend && npm install && npm run build
+RUN cd prod/frontend \
+    && npm config set registry https://registry.npmmirror.com \
+    && npm install \
+    && npm run build
 
 # ─── Stage 2: Runtime ───────────────────────────────────────────────────────
 FROM ubuntu:22.04
@@ -37,9 +40,12 @@ WORKDIR /app
 
 # ---------------------------------------------------------------------------
 # Python dependencies
+# Use Tsinghua mirror for faster downloads in China
 # ---------------------------------------------------------------------------
 COPY prod/web_service/requirements.txt prod/web_service/requirements.txt
-RUN pip install --no-cache-dir -r prod/web_service/requirements.txt
+RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r prod/web_service/requirements.txt
 
 # ---------------------------------------------------------------------------
 # Web service source

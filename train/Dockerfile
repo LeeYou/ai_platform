@@ -48,28 +48,37 @@ WORKDIR /app
 
 # ---------------------------------------------------------------------------
 # Python backend dependencies (cached layer)
+# Use Tsinghua mirror for faster downloads in China
 # ---------------------------------------------------------------------------
 COPY train/backend/requirements.txt train/backend/requirements.txt
-RUN pip install --no-cache-dir -r train/backend/requirements.txt
+RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r train/backend/requirements.txt
 
 # ---------------------------------------------------------------------------
 # Training scripts requirements (cached layer — copy only requirements first)
 # Install BEFORE frontend build so frontend code changes don't invalidate
 # the heavy ML package layer (~2 GB for torch, etc.).
+# Use Tsinghua mirror for faster downloads in China
 # ---------------------------------------------------------------------------
 COPY train/scripts/face_detect/requirements.txt train/scripts/face_detect/requirements.txt
 COPY train/scripts/desktop_recapture_detect/requirements.txt train/scripts/desktop_recapture_detect/requirements.txt
 
 RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
     -r train/scripts/face_detect/requirements.txt \
     -r train/scripts/desktop_recapture_detect/requirements.txt \
     && python3 -c "import cv2; from PIL import Image; print('[OK] cv2 + Pillow importable')"
 
 # ---------------------------------------------------------------------------
 # Frontend build
+# Use Taobao npm registry for faster downloads in China
 # ---------------------------------------------------------------------------
 COPY train/frontend/ train/frontend/
-RUN cd train/frontend && npm install && npm run build
+RUN cd train/frontend \
+    && npm config set registry https://registry.npmmirror.com \
+    && npm install \
+    && npm run build
 
 # ---------------------------------------------------------------------------
 # Training scripts source
