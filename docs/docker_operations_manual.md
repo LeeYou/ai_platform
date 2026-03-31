@@ -1,7 +1,7 @@
 # Docker 镜像与容器构建管理手册
 
-**北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.5 | 2026-03-30**  
+**北京爱知之星科技股份有限公司 (Agile Star)**
+**文档版本：v1.7 | 2026-03-31**
 **适用范围：AI 综合能力平台 (ai_platform) 全部 Docker 镜像**
 
 ---
@@ -14,26 +14,27 @@
 3. [镜像总览](#3-镜像总览)
 4. [宿主机目录初始化](#4-宿主机目录初始化)
 5. [数据持久化架构](#5-数据持久化架构)
-6. [各镜像构建详解](#6-各镜像构建详解)
-   - [6.1 授权管理镜像 (ai-license-mgr)](#61-授权管理镜像-ai-license-mgr)
-   - [6.2 训练镜像 (ai-train)](#62-训练镜像-ai-train)
-   - [6.3 训练开发镜像 (ai-train-dev)](#63-训练开发镜像-ai-train-dev)
-   - [6.4 测试镜像 (ai-test)](#64-测试镜像-ai-test)
-   - [6.5 编译镜像 (ai-builder-linux-x86)](#65-编译镜像-ai-builder-linux-x86)
-   - [6.6 编译镜像 — ARM64 (ai-builder-linux-arm)](#66-编译镜像--arm64-ai-builder-linux-arm)
-   - [6.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)](#67-编译镜像--windows-交叉编译-ai-builder-windows)
-   - [6.8 生产推理镜像 (ai-prod)](#68-生产推理镜像-ai-prod)
-7. [开发环境启停管理 (docker-compose)](#7-开发环境启停管理-docker-compose)
-8. [生产环境启停管理 (docker-compose.prod)](#8-生产环境启停管理-docker-composeprod)
-9. [日志管理](#9-日志管理)
-10. [健康检查](#10-健康检查)
-11. [镜像推送与仓库管理](#11-镜像推送与仓库管理)
-12. [交付包打包](#12-交付包打包)
-13. [常用运维命令速查表](#13-常用运维命令速查表)
-14. [新增 AI 能力模块完整操作流程](#14-新增-ai-能力模块完整操作流程)
-15. [故障排查指南](#15-故障排查指南)
-16. [附录：端口分配表](#16-附录端口分配表)
-17. [附录：授权安全模型](#17-附录授权安全模型)
+6. [Docker 构建缓存优化（推荐）](#6-docker-构建缓存优化推荐)
+7. [各镜像构建详解](#7-各镜像构建详解)
+   - [7.1 授权管理镜像 (ai-license-mgr)](#71-授权管理镜像-ai-license-mgr)
+   - [7.2 训练镜像 (ai-train)](#72-训练镜像-ai-train)
+   - [7.3 训练开发镜像 (ai-train-dev)](#73-训练开发镜像-ai-train-dev)
+   - [7.4 测试镜像 (ai-test)](#74-测试镜像-ai-test)
+   - [7.5 编译镜像 (ai-builder-linux-x86)](#75-编译镜像-ai-builder-linux-x86)
+   - [7.6 编译镜像 — ARM64 (ai-builder-linux-arm)](#76-编译镜像--arm64-ai-builder-linux-arm)
+   - [7.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)](#77-编译镜像--windows-交叉编译-ai-builder-windows)
+   - [7.8 生产推理镜像 (ai-prod)](#78-生产推理镜像-ai-prod)
+8. [开发环境启停管理 (docker-compose)](#8-开发环境启停管理-docker-compose)
+9. [生产环境启停管理 (docker-compose.prod)](#9-生产环境启停管理-docker-composeprod)
+10. [日志管理](#10-日志管理)
+11. [健康检查](#11-健康检查)
+12. [镜像推送与仓库管理](#12-镜像推送与仓库管理)
+13. [交付包打包](#13-交付包打包)
+14. [常用运维命令速查表](#14-常用运维命令速查表)
+15. [新增 AI 能力模块完整操作流程](#15-新增-ai-能力模块完整操作流程)
+16. [故障排查指南](#16-故障排查指南)
+17. [附录：端口分配表](#17-附录端口分配表)
+18. [附录：授权安全模型](#18-附录授权安全模型)
 ---
 
 ## 1. 概述
@@ -328,11 +329,185 @@ docker compose restart redis
 
 ---
 
-## 6_OLD. 各镜像构建详解
+## 6. Docker 构建缓存优化（推荐）
+
+### 6.1 问题背景
+
+在默认的 Docker 构建中,即使只修改了一行代码,也可能导致大量依赖包（如 PyTorch 2GB+ 下载）重新下载,严重拖慢开发迭代速度。
+
+**根本原因**：Dockerfile 中将稳定依赖（如 PyTorch）和业务依赖混合在同一个 RUN 命令中,导致任何一个依赖变化都会使整层缓存失效。
+
+### 6.2 优化方案
+
+我们提供了优化后的 Dockerfile 和 BuildKit 缓存支持,实现：
+
+- ✅ **90%+ 构建时间节省**：代码变更时仅重新构建应用层,依赖层全部缓存命中
+- ✅ **分层依赖管理**：PyTorch、基础库、业务依赖分别独立安装
+- ✅ **BuildKit 缓存挂载**：pip 和 npm 下载缓存持久化
+- ✅ **最小化构建上下文**：通过 `.dockerignore` 排除无关文件
+
+### 6.3 启用 BuildKit（一次性配置）
+
+```bash
+# 方法一：使用启用脚本（推荐）
+source scripts/enable_buildkit.sh
+
+# 方法二：手动设置环境变量
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
+# 验证启用成功
+echo $DOCKER_BUILDKIT  # 应输出 1
+```
+
+### 6.4 快速构建命令（推荐使用）
+
+#### 训练镜像（优化版）
+
+```bash
+# 使用优化后的 Dockerfile
+docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+
+# 或使用 docker compose（需在 docker-compose.yml 中配置）
+docker compose build train
+```
+
+**预期效果**：
+- **首次构建**：与原版相同（~10-15 分钟）
+- **代码修改后重新构建**：仅需 30-60 秒（缓存命中率 90%+）
+
+#### 其他镜像构建
+
+```bash
+# 授权管理镜像
+docker build -t agilestar/ai-license-mgr:latest -f license/backend/Dockerfile .
+
+# 测试镜像
+docker build -t agilestar/ai-test:latest -f test/Dockerfile .
+
+# 编译镜像（x86）
+docker build -t agilestar/ai-builder-linux-x86:latest -f build/Dockerfile.linux_x86 .
+
+# 生产镜像
+docker build -t agilestar/ai-prod:latest -f prod/Dockerfile .
+```
+
+### 6.5 构建上下文优化
+
+项目已包含 `.dockerignore` 文件,自动排除以下无关文件：
+
+```
+# Python 缓存
+**/__pycache__/
+**/*.pyc
+
+# Node.js
+**/node_modules/
+
+# 数据文件（不参与构建）
+**/datasets/
+**/models/*.onnx
+**/models/*.pth
+
+# 日志和临时文件
+**/logs/
+**/*.log
+**/.DS_Store
+```
+
+### 6.6 常见场景构建策略
+
+#### 场景一：仅修改了训练脚本代码
+
+```bash
+# 使用优化版 Dockerfile,仅重新构建代码层
+docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+
+# 预期时间：30-60 秒
+```
+
+#### 场景二：修改了 requirements.txt（添加新依赖）
+
+```bash
+# 依赖层缓存失效,但 PyTorch 层仍然缓存命中
+docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+
+# 预期时间：3-5 分钟（仅重新安装新增依赖）
+```
+
+#### 场景三：PyTorch 版本升级
+
+```bash
+# 所有依赖层缓存失效,完整重新构建
+docker build --no-cache -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+
+# 预期时间：10-15 分钟（完整下载）
+```
+
+#### 场景四：修改前端代码
+
+```bash
+# 前端依赖层缓存命中,仅重新 build
+docker build -t agilestar/ai-train:latest -f train/Dockerfile.optimized .
+
+# 预期时间：2-3 分钟（npm run build）
+```
+
+### 6.7 性能对比
+
+| 场景 | 原版 Dockerfile | 优化版 Dockerfile | 时间节省 |
+|-----|----------------|------------------|---------|
+| 首次构建 | 10-15 分钟 | 10-15 分钟 | - |
+| 代码修改 | 10-15 分钟 | 30-60 秒 | **95%** |
+| 新增业务依赖 | 10-15 分钟 | 3-5 分钟 | **70%** |
+| 前端代码修改 | 10-15 分钟 | 2-3 分钟 | **80%** |
+
+### 6.8 故障排查
+
+#### BuildKit 未启用
+
+**症状**：构建时未看到缓存挂载生效,或构建输出格式为旧版样式
+
+**解决**：
+```bash
+export DOCKER_BUILDKIT=1
+# 或重新运行 source scripts/enable_buildkit.sh
+```
+
+#### 缓存未命中
+
+**症状**：预期应该缓存命中,但仍然重新下载依赖
+
+**解决**：
+```bash
+# 检查 .dockerignore 是否存在
+cat .dockerignore
+
+# 确认 COPY 命令顺序是否正确（应先 COPY requirements.txt 再 COPY 源码）
+```
+
+#### 磁盘空间不足
+
+**症状**：构建失败,提示 `no space left on device`
+
+**解决**：
+```bash
+# 清理未使用的镜像和构建缓存
+docker system prune -a --volumes
+
+# 或仅清理构建缓存
+docker builder prune -a
+```
+
+**📖 完整优化指南**：详见 `docs/design/docker_build_cache_optimization.md`
+
+---
+
+## 7. 各镜像构建详解
 
 > 以下所有命令均在仓库根目录执行：`cd /path/to/ai_platform`
 
-### 6.1 授权管理镜像 (ai-license-mgr)
+### 7.1 授权管理镜像 (ai-license-mgr)
 
 **用途**：提供授权管理 Web UI 和 API，生成/管理/吊销 License 文件。
 
@@ -394,7 +569,7 @@ curl http://localhost:8003/health
 
 ---
 
-### 6.2 训练镜像 (ai-train)
+### 7.2 训练镜像 (ai-train)
 
 **用途**：提供 GPU 训练环境，支持样本标注、PyTorch/PaddlePaddle 训练、模型导出和训练进度监控 Web UI。内置样本标注功能支持二分类、多分类、目标检测、OCR 和图像分割五种标注类型，可直接导出训练兼容格式。
 
@@ -481,7 +656,7 @@ docker exec ai-train python3 -c "import torch; print(torch.cuda.is_available())"
 
 ---
 
-### 6.3 训练开发镜像 (ai-train-dev)
+### 7.3 训练开发镜像 (ai-train-dev)
 
 **用途**：本地开发/调试用轻量训练镜像，无 CUDA 依赖，适合在笔记本/无 GPU 服务器上运行。
 
@@ -543,7 +718,7 @@ curl http://localhost:8001/health
 
 ---
 
-### 6.4 测试镜像 (ai-test)
+### 7.4 测试镜像 (ai-test)
 
 **用途**：提供模型测试与精度评估服务，支持单样本测试、批量精度评估、版本对比和结果可视化。
 
@@ -607,7 +782,7 @@ curl http://localhost:8002/health
 
 ---
 
-### 6.5 编译镜像 (ai-builder-linux-x86)
+### 7.5 编译镜像 (ai-builder-linux-x86)
 
 **用途**：提供 C++ 编译环境 + Web 编译管理界面，将 AI 能力插件编译为 SO 动态库（Linux x86_64 平台）。支持在 Web 页面上选择 AI 能力、绑定客户密钥对，自动将客户公钥指纹编译到 SO 库中。
 
@@ -750,7 +925,7 @@ curl http://localhost:8004/api/v1/builds
 
 ---
 
-### 6.6 编译镜像 — ARM64 (ai-builder-linux-arm)
+### 7.6 编译镜像 — ARM64 (ai-builder-linux-arm)
 
 **用途**：提供 ARM64/aarch64 平台 C++ 编译环境，编译 AI 能力插件为 aarch64 架构 SO 动态库。结构与 x86 编译镜像一致，仅 ONNXRuntime 和目标架构不同。
 
@@ -810,7 +985,7 @@ curl http://localhost:8005/api/v1/capabilities
 
 ---
 
-### 6.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)
+### 7.7 编译镜像 — Windows 交叉编译 (ai-builder-windows)
 
 **用途**：在 Linux 宿主机上使用 MinGW-w64 交叉编译器生成 Windows x86_64 DLL 文件。无需 Windows 宿主机或 Windows 容器。
 
@@ -870,7 +1045,7 @@ curl http://localhost:8006/api/v1/capabilities
 
 ---
 
-### 6.8 生产推理镜像 (ai-prod)
+### 7.8 生产推理镜像 (ai-prod)
 
 **用途**：生产环境 AI 推理服务，提供 REST API 接口 + Web 管理页面（API 测试、AI 编排管理）、GPU/CPU 自适应、实例池并发调度、热重载。
 
@@ -992,14 +1167,14 @@ curl -X POST http://localhost:8080/api/v1/admin/reload \
 
 ---
 
-## 6_OLD. 开发环境启停管理 (docker-compose)
+## 8. 开发环境启停管理 (docker-compose)
 
 开发环境使用 `deploy/docker-compose.yml`，包含训练、测试、授权管理、Redis 和编译管理服务。
 
 > **架构说明**：`build-arm` 和 `build-windows` 服务使用 `profiles: ["cross"]`，默认不会启动/构建。
 > 在 x86 系统上直接运行 `docker compose up -d --build` 即可，不会触发 ARM 或 Windows 的构建。
 
-### 6.1 启动所有服务
+### 8.1 启动所有服务
 
 ```bash
 cd deploy
@@ -1031,7 +1206,7 @@ docker compose --profile cross up -d --build build-windows
 docker compose --profile cross up -d --build
 ```
 
-### 6.2 停止服务
+### 8.2 停止服务
 
 ```bash
 cd deploy
@@ -1052,7 +1227,7 @@ docker compose stop license
 docker compose stop build
 ```
 
-### 6.3 重启服务
+### 8.3 重启服务
 
 ```bash
 cd deploy
@@ -1067,7 +1242,7 @@ docker compose restart license
 docker compose restart build
 ```
 
-### 6.4 查看服务状态
+### 8.4 查看服务状态
 
 ```bash
 cd deploy
@@ -1079,7 +1254,7 @@ docker compose ps
 docker compose ps -a
 ```
 
-### 6.5 扩缩容
+### 8.5 扩缩容
 
 ```bash
 cd deploy
@@ -1088,7 +1263,7 @@ cd deploy
 docker compose up -d --scale test=2
 ```
 
-### 6.6 重新构建后启动
+### 8.6 重新构建后启动
 
 ```bash
 cd deploy
@@ -1105,11 +1280,11 @@ docker compose up -d --build build      # 编译管理
 
 ---
 
-## 7_OLD. 生产环境启停管理 (docker-compose.prod)
+## 9. 生产环境启停管理 (docker-compose.prod)
 
 生产环境使用 `deploy/docker-compose.prod.yml`，仅包含生产推理服务（含 Web 管理页面和 AI 编排引擎）。
 
-### 7.1 启动
+### 9.1 启动
 
 ```bash
 cd deploy
@@ -1128,7 +1303,7 @@ docker compose -f docker-compose.prod.yml up -d
 # API 文档:     http://<host>:8080/api/v1/docs
 ```
 
-### 7.2 停止
+### 9.2 停止
 
 ```bash
 cd deploy
@@ -1140,7 +1315,7 @@ docker compose -f docker-compose.prod.yml stop
 docker compose -f docker-compose.prod.yml down
 ```
 
-### 7.3 重启
+### 9.3 重启
 
 ```bash
 cd deploy
@@ -1149,7 +1324,7 @@ cd deploy
 docker compose -f docker-compose.prod.yml restart
 ```
 
-### 7.4 查看状态
+### 9.4 查看状态
 
 ```bash
 cd deploy
@@ -1157,7 +1332,7 @@ cd deploy
 docker compose -f docker-compose.prod.yml ps
 ```
 
-### 7.5 热重载（不停服更新模型/SO）
+### 9.5 热重载（不停服更新模型/SO）
 
 ```bash
 # 1. 将新的模型或 SO 文件放到宿主机挂载目录
@@ -1171,7 +1346,7 @@ curl -X POST http://localhost:8080/api/v1/admin/reload \
 curl http://localhost:8080/api/v1/capabilities
 ```
 
-### 7.6 无 GPU 的生产部署
+### 9.6 无 GPU 的生产部署
 
 编辑 `docker-compose.prod.yml`，注释掉 GPU 相关配置：
 
@@ -1193,12 +1368,12 @@ docker compose -f docker-compose.prod.yml up -d
 
 ---
 
-## 8_OLD. 日志管理
+## 10. 日志管理
 
 > **日志架构**：每个服务使用 Python `logging` 模块同时输出到 **文件** 和 **stdout**。
 > 文件日志通过 Docker 卷挂载持久化到宿主机，stdout 日志由 Docker json-file 驱动管理。
 
-### 8.1 应用日志文件路径
+### 10.1 应用日志文件路径
 
 每个服务会自动创建带轮转的日志文件，格式为 `时间 | 级别 | 模块 | 消息`：
 
@@ -1217,7 +1392,7 @@ docker compose -f docker-compose.prod.yml up -d
 - ✅ 服务启停事件
 - ✅ 能力加载/重载结果
 
-### 8.2 查看宿主机日志文件
+### 10.2 查看宿主机日志文件
 
 ```bash
 # 授权管理日志（排查"添加客户失败"等问题）
@@ -1240,7 +1415,7 @@ grep "Validation error" /data/ai_platform/logs/license/license.log
 tail -100 /data/ai_platform/logs/prod/prod.log
 ```
 
-### 8.3 查看容器实时日志（stdout）
+### 10.3 查看容器实时日志（stdout）
 
 ```bash
 # docker compose 方式（开发环境）
@@ -1261,7 +1436,7 @@ docker logs --since 2026-03-28T10:00:00 ai-train  # 指定时间之后
 docker logs -f --until 2026-03-28T12:00:00 ai-train  # 指定时间之前
 ```
 
-### 8.4 Docker 日志文件位置
+### 10.4 Docker 日志文件位置
 
 Docker 容器的 stdout/stderr 日志默认保存在：
 
@@ -1271,7 +1446,7 @@ docker inspect --format='{{.LogPath}}' ai-prod
 # 通常在：/var/lib/docker/containers/<container-id>/<container-id>-json.log
 ```
 
-### 8.5 日志轮转配置
+### 10.5 日志轮转配置
 
 日志轮转已在 docker-compose 文件中配置：
 
@@ -1280,7 +1455,7 @@ docker inspect --format='{{.LogPath}}' ai-prod
 | 开发环境 | 50 MB | 5 | 250 MB/服务 |
 | 生产环境 | 100 MB | 10 | 1 GB/服务 |
 
-### 8.6 清理旧日志
+### 10.6 清理旧日志
 
 ```bash
 # 清理指定容器的 Docker 日志（需要 root）
@@ -1292,9 +1467,9 @@ find /data/ai_platform/logs -name "*.log" -mtime +30 -delete
 
 ---
 
-## 9_OLD. 健康检查
+## 11. 健康检查
 
-### 9.1 手动健康检查
+### 11.1 手动健康检查
 
 ```bash
 # 授权管理服务
@@ -1313,7 +1488,7 @@ curl -sf http://localhost:8004/health && echo "OK" || echo "FAIL"
 curl -sf http://localhost:8080/api/v1/health && echo "OK" || echo "FAIL"
 ```
 
-### 9.2 一键健康检查脚本
+### 11.2 一键健康检查脚本
 
 项目内置了综合健康检查脚本 `scripts/health_check.sh`，可一键检查所有服务的容器状态、
 HTTP 健康端点、GPU 状态和磁盘使用情况。
@@ -1376,7 +1551,7 @@ TIMEOUT=10 bash scripts/health_check.sh
 所有服务运行正常。
 ```
 
-### 9.3 Docker 内置健康检查
+### 11.3 Docker 内置健康检查
 
 docker-compose 文件中已为所有服务配置了健康检查，可通过以下方式查看：
 
@@ -1400,9 +1575,9 @@ docker inspect --format='{{json .State.Health}}' ai-prod | python3 -m json.tool
 
 ---
 
-## 10_OLD. 镜像推送与仓库管理
+## 12. 镜像推送与仓库管理
 
-### 10.1 一键构建并推送所有镜像
+### 12.1 一键构建并推送所有镜像
 
 ```bash
 # 使用内置脚本
@@ -1464,9 +1639,9 @@ docker system prune -a --volumes
 
 ---
 
-## 11_OLD. 交付包打包
+## 13. 交付包打包
 
-### 11.1 使用打包脚本
+### 13.1 使用打包脚本
 
 ```bash
 # 打包完整交付包
@@ -1693,7 +1868,7 @@ docker build --build-arg TRUSTED_PUBKEY_SHA256=<新指纹> ...
 
 ---
 
-## 12_OLD. 常用运维命令速查表
+## 14. 常用运维命令速查表
 
 ### 镜像操作
 
@@ -1762,11 +1937,11 @@ docker build --build-arg TRUSTED_PUBKEY_SHA256=<新指纹> ...
 
 ---
 
-## 13_OLD. 新增 AI 能力模块完整操作流程
+## 15. 新增 AI 能力模块完整操作流程
 
 > 本节描述从零开始新增一个 AI 能力模块的完整端到端流程，确保所有子系统同步更新。
 
-### 13.1 流程总览
+### 15.1 流程总览
 
 ```
 训练 → 模型导出 → 测试验证 → C++插件开发 → 授权配置 → SO编译 → 生产集成 → AI编排(可选)
@@ -2029,9 +2204,9 @@ curl -X POST http://localhost:8080/api/v1/pipeline/my_pipeline/run \
 
 ---
 
-## 14_OLD. 故障排查指南
+## 16. 故障排查指南
 
-### 14.1 容器无法启动
+### 16.1 容器无法启动
 
 ```bash
 # 检查容器启动日志
@@ -2224,7 +2399,7 @@ conn.close()
 
 ---
 
-## 15_OLD. 附录：端口分配表
+## 17. 附录：端口分配表
 
 | 端口 | 服务 | 协议 | 环境 | 说明 |
 |------|------|------|------|------|
@@ -2241,9 +2416,9 @@ conn.close()
 
 ---
 
-## 16_OLD. 附录：授权安全模型
+## 18. 附录：授权安全模型
 
-### 16.1 威胁分析与防御
+### 18.1 威胁分析与防御
 
 | 攻击场景 | 防御措施 |
 |----------|---------|
