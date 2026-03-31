@@ -1,6 +1,10 @@
 # desktop_recapture_detect 训练依赖
 # EfficientNet-B0 二分类：真人肖像 vs 桌面翻拍
-# PyTorch 2.x for CUDA 11.8
+#
+# PyTorch 版本要求（CUDA 11.8 兼容）：
+#   - 使用 torch 2.0-2.4 系列
+#   - 安装时必须指定 cu118 索引
+#   - 详见：docs/cuda_version_standard.md
 torch>=2.0.0,<2.5.0
 torchvision>=0.15.0,<0.20.0
 onnx>=1.15.0

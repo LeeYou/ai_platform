@@ -139,6 +139,7 @@ ai_platform/
 | [授权子系统](docs/design/license_service.md) | License 格式、机器指纹、双层校验、管理 Web |
 | [C++ ABI 接口规范](docs/design/cpp_abi.md) | 统一 C ABI、生命周期接口、错误码 |
 | [C++ 编码规范](docs/cpp_coding_standard.md) | Google C++ 风格 + 公司定制规则 |
+| **[CUDA 版本规范](docs/cuda_version_standard.md)** | **标准 CUDA 11.8、依赖兼容性、验证脚本** |
 | [开发计划](docs/development_plan.md) | 7 个阶段、里程碑、交付物清单 |
 | [AI 能力超市总览](docs/ai_capability_market_overview.md) | 整体架构图、流程图、105 种能力全景、业务场景 |
 | [Docker 镜像与容器管理手册](docs/docker_operations_manual.md) | 6 种镜像构建、启停、日志、健康检查、故障排查 |
@@ -159,7 +160,8 @@ ai_platform/
 
 | 组件 | 技术 |
 |------|------|
-| 训练框架 | PyTorch、PaddlePaddle |
+| **CUDA 版本** | **CUDA 11.8.0（LTS 标准版本）** |
+| 训练框架 | PyTorch 2.0-2.4、PaddlePaddle |
 | 推理框架 | ONNXRuntime、TensorRT |
 | C++ HTTP 服务 | Crow / cpp-httplib |
 | 管理面 HTTP 服务 | Python FastAPI |

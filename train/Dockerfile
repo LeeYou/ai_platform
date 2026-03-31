@@ -4,18 +4,18 @@
 # 镜像名：agilestar/ai-train:latest
 # 服务端口：8001
 #
-# CUDA 版本说明：
-#   默认使用 CUDA 11.8（兼容性最广，支持 PyTorch 2.x 所有版本）
-#   如需 CUDA 12.x，构建时指定：
-#     docker build --build-arg CUDA_BASE_IMAGE=nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04 ...
+# CUDA 版本规范：
+#   标准版本：CUDA 11.8.0（LTS 版本，强制要求）
+#   理由：
+#     1. 最佳兼容性：支持 PyTorch 2.0-2.4 全系列
+#     2. 生态成熟：所有主流框架均有稳定支持
+#     3. 长期维护：CUDA 11.x 系列最后稳定版本
 #
-# 支持的基础镜像（已验证）：
-#   - nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04  (默认，推荐)
-#   - nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+#   ⚠️ 不支持其他 CUDA 版本，避免依赖冲突
+#   详见：docs/cuda_version_standard.md
 # =============================================================================
 
-ARG CUDA_BASE_IMAGE=nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
-FROM ${CUDA_BASE_IMAGE}
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 # ---------------------------------------------------------------------------
 # System dependencies
@@ -63,9 +63,12 @@ RUN pip install --no-cache-dir \
 # Install BEFORE frontend build so frontend code changes don't invalidate
 # the heavy ML package layer (~2 GB for torch, etc.).
 #
-# 安装策略：
-#   1. 先从官方 PyTorch index 安装 torch/torchvision (CUDA 11.8)
+# 安装策略（CUDA 11.8 专用）：
+#   1. 先从 PyTorch 官方 index 安装 torch/torchvision（cu118 版本）
 #   2. 再从清华镜像安装其他依赖
+#   3. 验证 CUDA 可用性
+#
+#   ⚠️ 必须使用 cu118 索引，确保与 CUDA 11.8 匹配
 # ---------------------------------------------------------------------------
 COPY train/scripts/face_detect/requirements.txt train/scripts/face_detect/requirements.txt
 COPY train/scripts/desktop_recapture_detect/requirements.txt train/scripts/desktop_recapture_detect/requirements.txt
