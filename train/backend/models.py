@@ -32,9 +32,14 @@ class Capability(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
 
-    jobs: Mapped[list["TrainingJob"]] = relationship("TrainingJob", back_populates="capability")
+    jobs: Mapped[list["TrainingJob"]] = relationship(
+        "TrainingJob", back_populates="capability", cascade="all, delete-orphan"
+    )
     model_versions: Mapped[list["ModelVersion"]] = relationship(
-        "ModelVersion", back_populates="capability"
+        "ModelVersion", back_populates="capability", cascade="all, delete-orphan"
+    )
+    annotation_projects: Mapped[list["AnnotationProject"]] = relationship(
+        "AnnotationProject", back_populates="capability", cascade="all, delete-orphan"
     )
 
 
@@ -54,6 +59,7 @@ class TrainingJob(Base):
     version: Mapped[str] = mapped_column(String(32), nullable=False)
     # pending | running | paused | done | failed
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    hyperparams: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     celery_task_id: Mapped[str] = mapped_column(String(128), nullable=True)
     pid: Mapped[int] = mapped_column(Integer, nullable=True)
     log_path: Mapped[str] = mapped_column(String(512), nullable=True)
@@ -126,7 +132,7 @@ class AnnotationProject(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
 
-    capability: Mapped["Capability"] = relationship("Capability")
+    capability: Mapped["Capability"] = relationship("Capability", back_populates="annotation_projects")
     records: Mapped[list["AnnotationRecord"]] = relationship(
         "AnnotationRecord", back_populates="project", cascade="all, delete-orphan"
     )

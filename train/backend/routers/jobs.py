@@ -35,17 +35,26 @@ def create_job(data: TrainingJobCreate, db: Session = Depends(get_db)):
     job = crud.create_job(db, data)
 
     output_path = os.path.join(MODELS_ROOT, cap.name, data.version)
-    config_path = cap.hyperparams  # script reads config from path; pass inline path or tmp
 
-    # Write hyperparams to a temp config file the worker can read
+    # Merge capability-level hyperparams with job-specific overrides
     import json, tempfile
     try:
-        hp = json.loads(cap.hyperparams)
+        cap_hp = json.loads(cap.hyperparams)
     except Exception:
-        hp = {}
+        cap_hp = {}
+
+    # Job-specific hyperparams override capability defaults
+    if job.hyperparams:
+        try:
+            job_hp = json.loads(job.hyperparams)
+            cap_hp.update(job_hp)
+        except Exception:
+            pass
+
+    # Write merged hyperparams to temp config file
     tmp_cfg = os.path.join(tempfile.gettempdir(), f"train_cfg_{job.id}.json")
     with open(tmp_cfg, "w") as f:
-        json.dump(hp, f)
+        json.dump(cap_hp, f)
 
     task = run_training.delay(
         job_id=job.id,

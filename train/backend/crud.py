@@ -82,6 +82,7 @@ def create_job(db: Session, data: TrainingJobCreate) -> TrainingJob:
         capability_id=data.capability_id,
         version=data.version,
         status="pending",
+        hyperparams=data.hyperparams or "{}",
     )
     db.add(obj)
     db.commit()

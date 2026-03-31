@@ -78,6 +78,17 @@ class CapabilityOut(BaseModel):
 class TrainingJobCreate(BaseModel):
     capability_id: int
     version: str
+    hyperparams: Optional[str] = None  # Optional job-specific overrides
+
+    @field_validator("hyperparams")
+    @classmethod
+    def validate_json(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            try:
+                json.loads(v)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"hyperparams must be valid JSON: {exc}") from exc
+        return v
 
 
 class TrainingJobOut(BaseModel):
@@ -87,6 +98,7 @@ class TrainingJobOut(BaseModel):
     capability_id: int
     version: str
     status: str
+    hyperparams: Any
     celery_task_id: Optional[str]
     pid: Optional[int]
     log_path: Optional[str]
@@ -94,6 +106,16 @@ class TrainingJobOut(BaseModel):
     finished_at: Optional[datetime]
     error_msg: Optional[str]
     created_at: datetime
+
+    @field_validator("hyperparams", mode="before")
+    @classmethod
+    def parse_hyperparams(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        return v
 
 
 # ---------------------------------------------------------------------------
