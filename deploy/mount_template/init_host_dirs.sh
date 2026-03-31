@@ -39,6 +39,9 @@ LOG_SERVICES=(train test build license prod)
 # ---------------------------------------------------------------------------
 mkdir -p "${ROOT}"/{output,licenses,pipelines}
 
+# 数据持久化目录（数据库等）
+mkdir -p "${ROOT}"/data/{train,license,redis}
+
 # 日志目录
 for svc in "${LOG_SERVICES[@]}"; do
     mkdir -p "${ROOT}/logs/${svc}"
@@ -83,6 +86,9 @@ fi
 # licenses 目录：仅 root 可读（防止未授权访问）
 chmod 700 "${ROOT}/licenses"
 
+# data 目录：容器需要读写数据库文件
+chmod -R 755 "${ROOT}/data"
+
 # datasets 目录：读写（训练工具如 generate_fake.py 需要写入生成的样本）
 chmod -R 755 "${ROOT}/datasets"
 
@@ -94,7 +100,18 @@ echo ""
 echo "目录结构："
 find "${ROOT}" -maxdepth 3 -type d | sort | sed 's|'"${ROOT}"'||' | sed 's|^|  /data/ai_platform|'
 echo ""
+echo "数据持久化说明："
+echo "  - 数据库文件: ${ROOT}/data/{train,license}/"
+echo "  - Redis 数据: ${ROOT}/data/redis/"
+echo "  - 授权文件: ${ROOT}/licenses/"
+echo "  - 训练数据集: ${ROOT}/datasets/"
+echo "  - 训练模型: ${ROOT}/models/"
+echo "  - 编译产物: ${ROOT}/libs/"
+echo ""
 echo "下一步："
 echo "  1. 将训练数据集放入 ${ROOT}/datasets/<capability>/"
 echo "  2. 将 license.bin 放入 ${ROOT}/licenses/<customer_id>/"
 echo "  3. 运行 docker-compose up -d 启动服务"
+echo ""
+echo "数据备份建议："
+echo "  备份整个 ${ROOT}/data/ 目录即可保留所有配置和训练记录"

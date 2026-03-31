@@ -49,9 +49,10 @@ services:
     volumes:
       - /data/ai_platform/licenses:/data/licenses:rw
       - /data/ai_platform/logs/license:/app/logs:rw
+      - /data/ai_platform/data/license:/app/data:rw
     environment:
       - TZ=Asia/Shanghai
-      - AI_LICENSE_DB=/data/licenses/license.db
+      - AI_LICENSE_DB=/app/data/license.db
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 30s
@@ -75,11 +76,13 @@ services:
       - /data/ai_platform/datasets:/workspace/datasets:rw
       - /data/ai_platform/models:/workspace/models:rw
       - /data/ai_platform/logs/train:/workspace/logs:rw
+      - /data/ai_platform/data/train:/app/data:rw
     environment:
       - TZ=Asia/Shanghai
       - REDIS_URL=redis://redis:6379/0
       - DATASETS_ROOT=/workspace/datasets
       - MODELS_ROOT=/workspace/models
+      - TRAIN_DB_PATH=/app/data/train.db
     depends_on:
       - redis
     deploy:
@@ -129,7 +132,7 @@ services:
     ports:
       - "127.0.0.1:6379:6379"   # 仅宿主机本地可访问，不对外暴露
     volumes:
-      - redis-data:/data
+      - /data/ai_platform/data/redis:/data:rw
     command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -224,6 +227,5 @@ services:
 # ---------------------------------------------------------------------------
 # 数据卷
 # ---------------------------------------------------------------------------
-volumes:
-  redis-data:
-    driver: local
+# 注：所有持久化数据已迁移到宿主机 /data/ai_platform/data/ 目录，
+# 不再使用 Docker volumes，便于数据备份和迁移
