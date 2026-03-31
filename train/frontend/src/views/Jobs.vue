@@ -15,24 +15,75 @@
 
       <el-table :data="jobs" style="width:100%" v-loading="loading">
         <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column label="能力" width="120">
-          <template #default="{row}">{{ capName(row.capability_id) }}</template>
-        </el-table-column>
-        <el-table-column prop="version" label="版本" width="90" />
-        <el-table-column label="状态" width="90">
+        <el-table-column label="能力" width="140">
           <template #default="{row}">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <div>{{ capName(row.capability_id) }}</div>
+            <div style="color:#909399;font-size:12px;">v{{ row.version }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="开始时间" width="160">
-          <template #default="{row}">{{ fmtTime(row.started_at) }}</template>
+        <el-table-column label="状态与进度" width="200">
+          <template #default="{row}">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+              <span v-if="jobProgress[row.id]" style="font-size:12px;color:#606266;">
+                {{ jobProgress[row.id].current }}/{{ jobProgress[row.id].total }}
+              </span>
+            </div>
+            <el-progress
+              v-if="jobProgress[row.id] && jobProgress[row.id].total > 0"
+              :percentage="Math.round((jobProgress[row.id].current / jobProgress[row.id].total) * 100)"
+              :status="row.status === 'done' ? 'success' : (row.status === 'failed' ? 'exception' : undefined)"
+              :stroke-width="6"
+            />
+          </template>
         </el-table-column>
-        <el-table-column label="完成时间" width="160">
-          <template #default="{row}">{{ fmtTime(row.finished_at) }}</template>
+        <el-table-column label="训练指标" width="180">
+          <template #default="{row}">
+            <div v-if="jobMetrics[row.id]" style="font-size:12px;">
+              <div v-if="jobMetrics[row.id].loss !== null">
+                <span style="color:#909399;">损失:</span> {{ jobMetrics[row.id].loss.toFixed(4) }}
+              </div>
+              <div v-if="jobMetrics[row.id].accuracy !== null">
+                <span style="color:#909399;">精度:</span> {{ (jobMetrics[row.id].accuracy * 100).toFixed(2) }}%
+              </div>
+              <div v-if="jobMetrics[row.id].speed">
+                <span style="color:#909399;">速度:</span> {{ jobMetrics[row.id].speed }}
+              </div>
+            </div>
+            <span v-else style="color:#c0c4cc;font-size:12px;">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="时长" width="120">
+          <template #default="{row}">
+            <div style="font-size:12px;">
+              <div v-if="row.started_at">
+                <el-icon><Timer /></el-icon>
+                {{ formatDuration(row) }}
+              </div>
+              <div v-if="jobMetrics[row.id]?.eta" style="color:#909399;">
+                剩余: {{ jobMetrics[row.id].eta }}
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="时间信息" width="160">
+          <template #default="{row}">
+            <div style="font-size:12px;">
+              <div v-if="row.started_at" style="color:#606266;">
+                开始: {{ fmtTime(row.started_at, true) }}
+              </div>
+              <div v-if="row.finished_at" style="color:#909399;">
+                结束: {{ fmtTime(row.finished_at, true) }}
+              </div>
+              <div v-if="!row.started_at" style="color:#c0c4cc;">
+                等待中...
+              </div>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="220">
           <template #default="{row}">
-            <el-button link type="primary" @click="openLogs(row)">查看日志</el-button>
+            <el-button link type="primary" @click="openMonitor(row)">监控</el-button>
             <el-button v-if="row.status==='running'" link type="warning" @click="doPause(row)">暂停</el-button>
             <el-button v-if="row.status==='paused'" link type="success" @click="doResume(row)">继续</el-button>
             <el-button v-if="['running','paused'].includes(row.status)" link type="danger" @click="doStop(row)">停止</el-button>
@@ -118,43 +169,201 @@
       </template>
     </el-dialog>
 
-    <!-- Log drawer -->
-    <el-drawer v-model="logDrawerVisible" :title="`训练日志 — Job #${selectedJob?.id}`" size="680px" destroy-on-close>
-      <div style="display:flex;flex-direction:column;height:100%;gap:12px;">
-        <!-- ECharts loss/accuracy chart -->
-        <el-card shadow="never" style="flex-shrink:0;" v-if="chartData.loss.length">
-          <v-chart :option="chartOption" style="height:200px;" autoresize />
+    <!-- Professional Training Monitor Drawer -->
+    <el-drawer
+      v-model="monitorDrawerVisible"
+      :title="`训练监控 — ${selectedJob?.id ? `Job #${selectedJob.id}` : ''} — ${selectedJob ? capName(selectedJob.capability_id) : ''}`"
+      size="85%"
+      destroy-on-close
+    >
+      <div v-if="selectedJob" style="display:flex;flex-direction:column;height:100%;gap:16px;">
+        <!-- Status Overview Cards -->
+        <el-row :gutter="16">
+          <el-col :span="6">
+            <el-card shadow="hover" :body-style="{padding: '16px'}">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <el-icon :size="32" :color="statusType(selectedJob.status) === 'success' ? '#67C23A' : '#409EFF'">
+                  <CircleCheck v-if="selectedJob.status === 'done'" />
+                  <CircleClose v-else-if="selectedJob.status === 'failed'" />
+                  <Loading v-else-if="selectedJob.status === 'running'" />
+                  <VideoPause v-else-if="selectedJob.status === 'paused'" />
+                  <Clock v-else />
+                </el-icon>
+                <div style="flex:1;">
+                  <div style="color:#909399;font-size:12px;">训练状态</div>
+                  <div style="font-size:18px;font-weight:bold;">{{ statusLabel(selectedJob.status) }}</div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+          <el-col :span="6">
+            <el-card shadow="hover" :body-style="{padding: '16px'}">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <el-icon :size="32" color="#E6A23C"><Timer /></el-icon>
+                <div style="flex:1;">
+                  <div style="color:#909399;font-size:12px;">运行时长</div>
+                  <div style="font-size:18px;font-weight:bold;">{{ formatDuration(selectedJob) }}</div>
+                  <div v-if="monitorMetrics.eta" style="color:#909399;font-size:11px;">剩余: {{ monitorMetrics.eta }}</div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+          <el-col :span="6">
+            <el-card shadow="hover" :body-style="{padding: '16px'}">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <el-icon :size="32" color="#67C23A"><Promotion /></el-icon>
+                <div style="flex:1;">
+                  <div style="color:#909399;font-size:12px;">训练进度</div>
+                  <div style="font-size:18px;font-weight:bold;">
+                    {{ monitorProgress.current }}/{{ monitorProgress.total }}
+                  </div>
+                  <el-progress
+                    :percentage="monitorProgress.total > 0 ? Math.round((monitorProgress.current / monitorProgress.total) * 100) : 0"
+                    :stroke-width="4"
+                    :show-text="false"
+                  />
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+          <el-col :span="6">
+            <el-card shadow="hover" :body-style="{padding: '16px'}">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <el-icon :size="32" color="#409EFF"><DataLine /></el-icon>
+                <div style="flex:1;">
+                  <div style="color:#909399;font-size:12px;">训练速度</div>
+                  <div style="font-size:14px;font-weight:bold;">{{ monitorMetrics.speed || '-' }}</div>
+                  <div v-if="monitorMetrics.samplesPerSec" style="color:#909399;font-size:11px;">
+                    {{ monitorMetrics.samplesPerSec }} samples/s
+                  </div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+        </el-row>
+
+        <!-- Training Metrics Charts -->
+        <el-row :gutter="16" style="flex:1;min-height:0;">
+          <el-col :span="12" style="height:100%;">
+            <el-card shadow="never" style="height:100%;display:flex;flex-direction:column;">
+              <template #header>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span><el-icon><TrendCharts /></el-icon> 损失曲线</span>
+                  <el-tag v-if="chartData.loss.length" size="small">
+                    当前: {{ chartData.loss[chartData.loss.length - 1]?.toFixed(4) || '-' }}
+                  </el-tag>
+                </div>
+              </template>
+              <div style="flex:1;min-height:0;">
+                <v-chart v-if="chartData.loss.length" :option="lossChartOption" style="height:100%;" autoresize />
+                <el-empty v-else description="等待训练数据..." :image-size="80" />
+              </div>
+            </el-card>
+          </el-col>
+          <el-col :span="12" style="height:100%;">
+            <el-card shadow="never" style="height:100%;display:flex;flex-direction:column;">
+              <template #header>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span><el-icon><TrendCharts /></el-icon> 精度曲线</span>
+                  <el-tag v-if="chartData.accuracy.length" size="small" type="success">
+                    当前: {{ (chartData.accuracy[chartData.accuracy.length - 1] * 100)?.toFixed(2) || '-' }}%
+                  </el-tag>
+                </div>
+              </template>
+              <div style="flex:1;min-height:0;">
+                <v-chart v-if="chartData.accuracy.length" :option="accuracyChartOption" style="height:100%;" autoresize />
+                <el-empty v-else description="等待训练数据..." :image-size="80" />
+              </div>
+            </el-card>
+          </el-col>
+        </el-row>
+
+        <!-- Training Hyperparameters & System Info -->
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-card shadow="never">
+              <template #header><el-icon><Setting /></el-icon> 训练参数</template>
+              <el-descriptions :column="2" size="small" border>
+                <el-descriptions-item v-for="(value, key) in displayHyperparams" :key="key" :label="key">
+                  {{ value }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+          </el-col>
+          <el-col :span="12">
+            <el-card shadow="never">
+              <template #header><el-icon><Monitor /></el-icon> 系统信息</template>
+              <el-descriptions :column="1" size="small" border>
+                <el-descriptions-item label="任务ID">{{ selectedJob.id }}</el-descriptions-item>
+                <el-descriptions-item label="版本">{{ selectedJob.version }}</el-descriptions-item>
+                <el-descriptions-item label="创建时间">{{ fmtTime(selectedJob.created_at) }}</el-descriptions-item>
+                <el-descriptions-item v-if="selectedJob.started_at" label="开始时间">
+                  {{ fmtTime(selectedJob.started_at) }}
+                </el-descriptions-item>
+                <el-descriptions-item v-if="selectedJob.finished_at" label="完成时间">
+                  {{ fmtTime(selectedJob.finished_at) }}
+                </el-descriptions-item>
+                <el-descriptions-item v-if="selectedJob.error_msg" label="错误信息">
+                  <el-text type="danger">{{ selectedJob.error_msg }}</el-text>
+                </el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+          </el-col>
+        </el-row>
+
+        <!-- Training Logs Terminal -->
+        <el-card shadow="never" style="flex:1;min-height:200px;display:flex;flex-direction:column;">
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span><el-icon><Document /></el-icon> 训练日志</span>
+              <el-button-group size="small">
+                <el-button @click="autoScroll = !autoScroll" :type="autoScroll ? 'primary' : ''">
+                  <el-icon><Bottom /></el-icon> 自动滚动
+                </el-button>
+                <el-button @click="logText = ''"><el-icon><Delete /></el-icon> 清空</el-button>
+              </el-button-group>
+            </div>
+          </template>
+          <div
+            ref="logContainer"
+            style="flex:1;background:#1e1e1e;color:#d4d4d4;font-family:'Consolas','Monaco','Courier New',monospace;font-size:13px;padding:12px;border-radius:4px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.5;"
+          >{{ logText || '等待日志输出...' }}</div>
         </el-card>
-        <!-- Log terminal -->
-        <div
-          ref="logContainer"
-          style="flex:1;background:#1e1e1e;color:#d4d4d4;font-family:monospace;font-size:13px;padding:12px;border-radius:4px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"
-        >{{ logText }}</div>
       </div>
     </el-drawer>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'
+import {
+  Plus, Timer, CircleCheck, CircleClose, Loading, VideoPause, Clock,
+  Promotion, DataLine, TrendCharts, Setting, Monitor, Document, Bottom, Delete
+} from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { GridComponent, TooltipComponent, LegendComponent, TitleComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   listCapabilities, listJobs, createJob,
   stopJob, pauseJob, resumeJob, getJobLogs, extractErrorMessage
 } from '../api/index.js'
 
-use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
 
 const loading = ref(false)
 const capabilities = ref([])
 const jobs = ref([])
 const filterCapId = ref(null)
+
+// Job progress and metrics tracking for table display
+const jobProgress = ref({})  // { jobId: { current: 10, total: 100 } }
+const jobMetrics = ref({})   // { jobId: { loss, accuracy, speed, eta } }
+
+// Auto-refresh for running jobs
+let autoRefreshTimer = null
 
 const newDialogVisible = ref(false)
 const newFormRef = ref(null)
@@ -177,31 +386,193 @@ const selectedCapability = computed(() =>
   capabilities.value.find(c => c.id === newForm.value.capability_id)
 )
 
-const logDrawerVisible = ref(false)
+const monitorDrawerVisible = ref(false)
 const selectedJob = ref(null)
 const logText = ref('')
 const logContainer = ref(null)
+const autoScroll = ref(true)
 let wsConn = null
 
 const chartData = ref({ epochs: [], loss: [], accuracy: [] })
 
-const chartOption = computed(() => ({
-  tooltip: { trigger: 'axis' },
-  legend: { data: ['损失值', '准确率'] },
-  xAxis: { type: 'category', data: chartData.value.epochs, name: '轮次' },
-  yAxis: { type: 'value' },
-  series: [
-    { name: '损失值', type: 'line', data: chartData.value.loss, smooth: true },
-    { name: '准确率', type: 'line', data: chartData.value.accuracy, smooth: true },
-  ]
+// Monitor-specific metrics
+const monitorProgress = computed(() => {
+  if (!selectedJob.value) return { current: 0, total: 0 }
+  return jobProgress.value[selectedJob.value.id] || { current: 0, total: 0 }
+})
+
+const monitorMetrics = computed(() => {
+  if (!selectedJob.value) return {}
+  return jobMetrics.value[selectedJob.value.id] || {}
+})
+
+const displayHyperparams = computed(() => {
+  if (!selectedJob.value?.hyperparams) return {}
+  const params = typeof selectedJob.value.hyperparams === 'object'
+    ? selectedJob.value.hyperparams
+    : {}
+  // Filter out empty values and format
+  const filtered = {}
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== '') {
+      filtered[key] = value
+    }
+  }
+  return filtered
+})
+
+// Enhanced chart options
+const lossChartOption = computed(() => ({
+  title: { show: false },
+  tooltip: {
+    trigger: 'axis',
+    axisPointer: { type: 'cross' },
+    formatter: (params) => {
+      const point = params[0]
+      return `Epoch ${point.axisValue}<br/>Loss: ${point.value?.toFixed(6) || '-'}`
+    }
+  },
+  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  xAxis: {
+    type: 'category',
+    data: chartData.value.epochs,
+    name: 'Epoch',
+    nameLocation: 'center',
+    nameGap: 30
+  },
+  yAxis: {
+    type: 'value',
+    name: 'Loss',
+    nameLocation: 'center',
+    nameGap: 45,
+    scale: true
+  },
+  series: [{
+    name: '损失值',
+    type: 'line',
+    data: chartData.value.loss,
+    smooth: true,
+    symbol: 'circle',
+    symbolSize: 6,
+    lineStyle: { width: 2, color: '#409EFF' },
+    itemStyle: { color: '#409EFF' },
+    areaStyle: {
+      color: {
+        type: 'linear',
+        x: 0, y: 0, x2: 0, y2: 1,
+        colorStops: [
+          { offset: 0, color: 'rgba(64, 158, 255, 0.3)' },
+          { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
+        ]
+      }
+    }
+  }]
+}))
+
+const accuracyChartOption = computed(() => ({
+  title: { show: false },
+  tooltip: {
+    trigger: 'axis',
+    axisPointer: { type: 'cross' },
+    formatter: (params) => {
+      const point = params[0]
+      return `Epoch ${point.axisValue}<br/>Accuracy: ${(point.value * 100)?.toFixed(2) || '-'}%`
+    }
+  },
+  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  xAxis: {
+    type: 'category',
+    data: chartData.value.epochs,
+    name: 'Epoch',
+    nameLocation: 'center',
+    nameGap: 30
+  },
+  yAxis: {
+    type: 'value',
+    name: 'Accuracy',
+    nameLocation: 'center',
+    nameGap: 45,
+    min: 0,
+    max: 1,
+    axisLabel: {
+      formatter: (value) => `${(value * 100).toFixed(0)}%`
+    }
+  },
+  series: [{
+    name: '准确率',
+    type: 'line',
+    data: chartData.value.accuracy,
+    smooth: true,
+    symbol: 'circle',
+    symbolSize: 6,
+    lineStyle: { width: 2, color: '#67C23A' },
+    itemStyle: { color: '#67C23A' },
+    areaStyle: {
+      color: {
+        type: 'linear',
+        x: 0, y: 0, x2: 0, y2: 1,
+        colorStops: [
+          { offset: 0, color: 'rgba(103, 194, 58, 0.3)' },
+          { offset: 1, color: 'rgba(103, 194, 58, 0.05)' }
+        ]
+      }
+    }
+  }]
 }))
 
 const capName = (id) => {
   const c = capabilities.value.find(c => c.id === id)
   return c ? (c.name_cn || c.name) : `#${id}`
 }
-const statusType = (s) => ({ running:'primary', done:'success', failed:'danger', paused:'warning', pending:'info' }[s] || 'info')
-const fmtTime = (t) => t ? new Date(t).toLocaleString('zh-CN') : '-'
+
+const statusType = (s) => ({
+  running: 'primary',
+  done: 'success',
+  failed: 'danger',
+  paused: 'warning',
+  pending: 'info'
+}[s] || 'info')
+
+const statusLabel = (s) => ({
+  running: '训练中',
+  done: '已完成',
+  failed: '失败',
+  paused: '已暂停',
+  pending: '等待中'
+}[s] || s)
+
+const fmtTime = (t, short = false) => {
+  if (!t) return '-'
+  const date = new Date(t)
+  if (short) {
+    return date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  }
+  return date.toLocaleString('zh-CN')
+}
+
+const formatDuration = (job) => {
+  if (!job.started_at) return '-'
+  const start = new Date(job.started_at).getTime()
+  const end = job.finished_at ? new Date(job.finished_at).getTime() : Date.now()
+  const duration = Math.floor((end - start) / 1000) // seconds
+
+  const hours = Math.floor(duration / 3600)
+  const minutes = Math.floor((duration % 3600) / 60)
+  const seconds = duration % 60
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds}s`
+  } else {
+    return `${seconds}s`
+  }
+}
 
 const load = async () => {
   loading.value = true
@@ -209,11 +580,108 @@ const load = async () => {
     const params = filterCapId.value ? { capability_id: filterCapId.value } : {}
     const res = await listJobs(params)
     jobs.value = res.data
-  } finally { loading.value = false }
+
+    // Update progress and metrics for each job
+    for (const job of jobs.value) {
+      await updateJobMetrics(job)
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+const updateJobMetrics = async (job) => {
+  // Only fetch logs for running/done jobs to extract metrics
+  if (!['running', 'done', 'paused'].includes(job.status)) return
+
+  try {
+    const res = await getJobLogs(job.id)
+    const logs = res.data || ''
+
+    // Parse metrics from logs
+    const lines = logs.split('\n')
+    let currentEpoch = 0
+    let totalEpochs = 0
+    let lastLoss = null
+    let lastAccuracy = null
+    let epochStartTime = null
+    let totalTime = 0
+    let epochCount = 0
+
+    for (const line of lines) {
+      // Parse epoch progress: [EPOCH 10/100]
+      const epochMatch = line.match(/\[EPOCH\s+(\d+)\/(\d+)\]/)
+      if (epochMatch) {
+        currentEpoch = parseInt(epochMatch[1])
+        totalEpochs = parseInt(epochMatch[2])
+      }
+
+      // Parse loss and accuracy
+      const metricsMatch = line.match(/loss=([\d.]+)\s+accuracy=([\d.]+)/)
+      if (metricsMatch) {
+        lastLoss = parseFloat(metricsMatch[1])
+        lastAccuracy = parseFloat(metricsMatch[2])
+      }
+
+      // Parse time per epoch
+      const timeMatch = line.match(/(\d+\.?\d*)s\/epoch/)
+      if (timeMatch) {
+        const timePerEpoch = parseFloat(timeMatch[1])
+        totalTime += timePerEpoch
+        epochCount++
+      }
+    }
+
+    // Calculate metrics
+    const avgTimePerEpoch = epochCount > 0 ? totalTime / epochCount : 0
+    const remainingEpochs = totalEpochs - currentEpoch
+    const etaSeconds = Math.floor(avgTimePerEpoch * remainingEpochs)
+
+    jobProgress.value[job.id] = {
+      current: currentEpoch,
+      total: totalEpochs
+    }
+
+    jobMetrics.value[job.id] = {
+      loss: lastLoss,
+      accuracy: lastAccuracy,
+      speed: avgTimePerEpoch > 0 ? `${avgTimePerEpoch.toFixed(1)}s/epoch` : null,
+      samplesPerSec: null, // Could be calculated if batch size is known
+      eta: etaSeconds > 0 ? formatSeconds(etaSeconds) : null
+    }
+  } catch (e) {
+    // Silently ignore errors in metrics fetching
+  }
+}
+
+const formatSeconds = (seconds) => {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = seconds % 60
+
+  if (h > 0) return `${h}h${m}m`
+  if (m > 0) return `${m}m${s}s`
+  return `${s}s`
+}
+
+const startAutoRefresh = () => {
+  stopAutoRefresh()
+  autoRefreshTimer = setInterval(async () => {
+    const hasRunningJobs = jobs.value.some(j => j.status === 'running')
+    if (hasRunningJobs) {
+      await load()
+    }
+  }, 10000) // Refresh every 10 seconds
+}
+
+const stopAutoRefresh = () => {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
 }
 
 const onCapabilityChange = () => {
-  // Reset params when capability changes
   newForm.value.params = {
     epochs: null,
     batch: null,
@@ -276,10 +744,8 @@ const doCreate = async () => {
     return
   }
 
-  // Build hyperparams object
   const hyperparams = {}
 
-  // Add non-null basic params
   if (newForm.value.params.epochs !== null) hyperparams.epochs = newForm.value.params.epochs
   if (newForm.value.params.batch !== null) hyperparams.batch = newForm.value.params.batch
   if (newForm.value.params.imgsz !== null) hyperparams.imgsz = newForm.value.params.imgsz
@@ -287,7 +753,6 @@ const doCreate = async () => {
   if (newForm.value.params.device) hyperparams.device = newForm.value.params.device
   if (newForm.value.params.pretrained) hyperparams.pretrained = newForm.value.params.pretrained
 
-  // Merge with custom params (custom params override)
   if (newForm.value.customParams.trim()) {
     try {
       const custom = JSON.parse(newForm.value.customParams)
@@ -314,9 +779,23 @@ const doCreate = async () => {
   }
 }
 
-const doPause = async (row) => { await pauseJob(row.id); await load() }
-const doResume = async (row) => { await resumeJob(row.id); await load() }
-const doStop = async (row) => { await stopJob(row.id); await load() }
+const doPause = async (row) => {
+  await pauseJob(row.id)
+  ElMessage.success('已暂停')
+  await load()
+}
+
+const doResume = async (row) => {
+  await resumeJob(row.id)
+  ElMessage.success('已继续')
+  await load()
+}
+
+const doStop = async (row) => {
+  await stopJob(row.id)
+  ElMessage.success('已停止')
+  await load()
+}
 
 const _parseEpoch = (line) => {
   const m = line.match(/\[EPOCH\s+(\d+)\/(\d+)\]\s+loss=([\d.]+)\s+accuracy=([\d.]+)/)
@@ -324,11 +803,11 @@ const _parseEpoch = (line) => {
   return null
 }
 
-const openLogs = async (row) => {
+const openMonitor = async (row) => {
   selectedJob.value = row
   logText.value = ''
   chartData.value = { epochs: [], loss: [], accuracy: [] }
-  logDrawerVisible.value = true
+  monitorDrawerVisible.value = true
 
   // Load existing logs
   try {
@@ -356,7 +835,11 @@ const _connectWs = (jobId) => {
   wsConn.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data)
-      if (msg.type === 'done') { wsConn.close(); return }
+      if (msg.type === 'done') {
+        wsConn.close()
+        load() // Refresh job list
+        return
+      }
       if (msg.type === 'log') {
         logText.value += msg.line
         const ep = _parseEpoch(msg.line)
@@ -364,17 +847,27 @@ const _connectWs = (jobId) => {
           chartData.value.epochs.push(ep.epoch)
           chartData.value.loss.push(ep.loss)
           chartData.value.accuracy.push(ep.accuracy)
+
+          // Update job metrics in real-time
+          if (selectedJob.value) {
+            updateJobMetrics(selectedJob.value)
+          }
         }
       }
     } catch { logText.value += ev.data }
-    nextTick(() => {
-      if (logContainer.value) logContainer.value.scrollTop = logContainer.value.scrollHeight
-    })
+
+    if (autoScroll.value) {
+      nextTick(() => {
+        if (logContainer.value) {
+          logContainer.value.scrollTop = logContainer.value.scrollHeight
+        }
+      })
+    }
   }
   wsConn.onerror = () => { if (wsConn) wsConn.close() }
 }
 
-watch(logDrawerVisible, (v) => {
+watch(monitorDrawerVisible, (v) => {
   if (!v && wsConn) { wsConn.close(); wsConn = null }
 })
 
@@ -382,6 +875,12 @@ onMounted(async () => {
   const [c] = await Promise.all([listCapabilities()])
   capabilities.value = c.data
   await load()
+  startAutoRefresh()
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
+  if (wsConn) wsConn.close()
 })
 </script>
 
