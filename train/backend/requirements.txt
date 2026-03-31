@@ -7,3 +7,4 @@ websockets==13.0
 pydantic==2.9.0
 python-multipart==0.0.22
 aiofiles==24.1.0
+psutil==6.1.0

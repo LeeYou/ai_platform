@@ -85,9 +85,44 @@ def stop_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
     if job.pid and job.status in ("running", "paused"):
         try:
-            os.kill(job.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+            # Kill process group to terminate child processes too
+            import psutil
+            try:
+                parent = psutil.Process(job.pid)
+                children = parent.children(recursive=True)
+                # Terminate children first
+                for child in children:
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
+                # Terminate parent
+                parent.terminate()
+                # Wait for processes to terminate
+                import time
+                time.sleep(0.5)
+                # Force kill if still alive
+                for child in children:
+                    try:
+                        if child.is_running():
+                            child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                if parent.is_running():
+                    parent.kill()
+            except psutil.NoSuchProcess:
+                # Process already terminated
+                pass
+        except ImportError:
+            # Fallback if psutil not available - try killing process group
+            try:
+                os.killpg(os.getpgid(job.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                # Fallback to single process
+                try:
+                    os.kill(job.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
     return crud.update_job_status(db, job, "failed", error_msg="Stopped by user")
 
 

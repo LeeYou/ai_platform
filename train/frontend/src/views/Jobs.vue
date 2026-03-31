@@ -617,8 +617,8 @@ const updateJobMetrics = async (job) => {
         totalEpochs = parseInt(epochMatch[2])
       }
 
-      // Parse loss and accuracy
-      const metricsMatch = line.match(/loss=([\d.]+)\s+accuracy=([\d.]+)/)
+      // Parse loss and mAP50/accuracy (YOLO outputs mAP50, other models may output accuracy)
+      const metricsMatch = line.match(/loss=([\d.]+)\s+(?:mAP50|accuracy|mAP)=([\d.]+)/)
       if (metricsMatch) {
         lastLoss = parseFloat(metricsMatch[1])
         lastAccuracy = parseFloat(metricsMatch[2])
@@ -799,8 +799,9 @@ const doStop = async (row) => {
 }
 
 const _parseEpoch = (line) => {
-  const m = line.match(/\[EPOCH\s+(\d+)\/(\d+)\]\s+loss=([\d.]+)\s+accuracy=([\d.]+)/)
-  if (m) return { epoch: m[1], loss: parseFloat(m[3]), accuracy: parseFloat(m[4]) }
+  // Match both accuracy and mAP50 formats
+  const m = line.match(/\[EPOCH\s+(\d+)\/(\d+)\]\s+loss=([\d.]+)\s+(?:mAP50|accuracy|mAP)=([\d.]+)/)
+  if (m) return { epoch: parseInt(m[1]), loss: parseFloat(m[3]), accuracy: parseFloat(m[4]) }
   return null
 }
 
