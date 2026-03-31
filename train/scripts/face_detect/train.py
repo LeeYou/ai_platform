@@ -102,7 +102,8 @@ def _train_yolo(args, config):
 
     # --- Map config.json to Ultralytics train() kwargs --------------------
     device = _resolve_device(config)
-    imgsz = config.get("input_size", [640, 640])
+    # Support both 'imgsz' (from frontend) and 'input_size' (legacy)
+    imgsz = config.get("imgsz", config.get("input_size", 640))
     if isinstance(imgsz, list):
         imgsz = imgsz[0]
 
