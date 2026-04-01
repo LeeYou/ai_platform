@@ -108,9 +108,9 @@ def _train_yolo(args, config):
         imgsz = imgsz[0]
 
     # Auto-detect optimal workers count based on CPU cores
-    # Default: max(8, cpu_count * 1.5) for better GPU utilization
+    # Default: max(8, cpu_count * 1.5), capped at 16 for better GPU utilization
     cpu_count = os.cpu_count() or 8
-    default_workers = max(8, int(cpu_count * 1.5))
+    default_workers = min(16, max(8, int(cpu_count * 1.5)))
     workers = config.get("workers", default_workers)
     print(f"[INFO] DataLoader workers: {workers} (CPU cores: {cpu_count})", flush=True)
 
