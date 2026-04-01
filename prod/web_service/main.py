@@ -266,7 +266,7 @@ def _license_status() -> dict:
 
         # Compute days remaining until expiration
         days = _compute_days_remaining(data.get("valid_until"))
-        if days < 0:
+        if days <= 0:
             status = "expired"
             days = 0  # Don't return negative days to client
         else:
@@ -440,11 +440,22 @@ def health():
         }
         for cap, eng in _engines.items()
     ]
+
+    # Detect GPU availability by checking if ORT has CUDAExecutionProvider
+    gpu_available = False
+    try:
+        import onnxruntime as ort  # type: ignore
+        avail_providers = ort.get_available_providers()
+        gpu_available = "CUDAExecutionProvider" in avail_providers
+    except Exception:
+        pass
+
     return {
-        "status":       "healthy" if _engines else "degraded",
-        "capabilities": caps,
-        "license":      lic,
-        "server_time":  datetime.now(CST).isoformat(),
+        "status":        "healthy" if _engines else "degraded",
+        "capabilities":  caps,
+        "license":       lic,
+        "server_time":   datetime.now(CST).isoformat(),
+        "gpu_available": gpu_available,
     }
 
 

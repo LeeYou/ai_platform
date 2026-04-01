@@ -32,8 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     curl \
     ca-certificates \
+    tzdata \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3 /usr/bin/python \
+    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -72,7 +75,8 @@ ENV PYTHONUNBUFFERED=1 \
     BUILTIN_ROOT=/app \
     AI_BACKEND=auto \
     LOG_LEVEL=info \
-    UVICORN_WORKERS=2
+    UVICORN_WORKERS=2 \
+    TZ=Asia/Shanghai
 
 EXPOSE 8080
 
