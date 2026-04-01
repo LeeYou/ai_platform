@@ -14,13 +14,18 @@ echo "[ai-prod] Server time: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 # ---------------------------------------------------------------------------
 # GPU detection
 # ---------------------------------------------------------------------------
+# Note: AI_BACKEND defaults to "auto" which enables smart provider selection
+# - Small models (<50MB): CPU (faster due to less GPU transfer overhead)
+# - Large models (≥50MB): GPU (benefits from parallel computation)
+# Override with AI_BACKEND=onnxruntime-cpu or onnxruntime-gpu to force a specific backend
 if nvidia-smi > /dev/null 2>&1; then
-    echo "[ai-prod] GPU detected — using ONNXRuntime CUDA backend"
-    export AI_BACKEND="${AI_BACKEND:-onnxruntime-gpu}"
+    echo "[ai-prod] GPU detected (nvidia-smi OK)"
+    export AI_BACKEND="${AI_BACKEND:-auto}"
 else
     echo "[ai-prod] No GPU detected — using CPU backend"
     export AI_BACKEND="${AI_BACKEND:-onnxruntime-cpu}"
 fi
+echo "[ai-prod] AI_BACKEND=${AI_BACKEND}"
 
 # ---------------------------------------------------------------------------
 # Resource path resolution (mount > built-in)

@@ -45,15 +45,56 @@ class ProdInferenceEngine:
             try:
                 import onnxruntime as ort  # type: ignore
 
+                # Session options for optimization
+                sess_options = ort.SessionOptions()
+                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                sess_options.intra_op_num_threads = 4
+                sess_options.inter_op_num_threads = 2
+
                 backend = os.getenv("AI_BACKEND", "auto")
-                if backend in ("onnxruntime-gpu", "auto"):
-                    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                else:
-                    providers = ["CPUExecutionProvider"]
                 avail = ort.get_available_providers()
-                providers = [p for p in providers if p in avail]
-                self._session = ort.InferenceSession(model_path, providers=providers)
+
+                # Provider selection: GPU for large models, CPU for small models
+                # Small models (like EfficientNet-B0) have high GPU overhead from memory transfers
+                if backend == "onnxruntime-cpu":
+                    providers = ["CPUExecutionProvider"]
+                elif backend == "onnxruntime-gpu":
+                    # Forced GPU mode with optimized settings
+                    if "CUDAExecutionProvider" in avail:
+                        providers = [
+                            ("CUDAExecutionProvider", {
+                                "arena_extend_strategy": "kSameAsRequested",
+                                "gpu_mem_limit": 2 * 1024 * 1024 * 1024,  # 2GB
+                                "cudnn_conv_algo_search": "DEFAULT",
+                            }),
+                            "CPUExecutionProvider"
+                        ]
+                    else:
+                        providers = ["CPUExecutionProvider"]
+                else:  # auto mode
+                    # For small models (<50MB), prefer CPU to avoid GPU transfer overhead
+                    model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
+                    if "CUDAExecutionProvider" in avail and model_size_mb >= 50:
+                        # Use GPU only for large models
+                        providers = [
+                            ("CUDAExecutionProvider", {
+                                "arena_extend_strategy": "kSameAsRequested",
+                                "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
+                                "cudnn_conv_algo_search": "DEFAULT",
+                            }),
+                            "CPUExecutionProvider"
+                        ]
+                    else:
+                        # Use CPU for small models or when GPU unavailable
+                        providers = ["CPUExecutionProvider"]
+
+                self._session = ort.InferenceSession(model_path, sess_options, providers=providers)
                 self._input_name = self._session.get_inputs()[0].name
+
+                # Log which provider is actually being used
+                import sys
+                actual_provider = self._session.get_providers()[0]
+                print(f"[{capability}] Using {actual_provider} (model: {model_size_mb:.1f}MB)", file=sys.stderr)
             except Exception as exc:
                 import sys
                 print(f"[{capability}] ORT load failed: {exc}", file=sys.stderr)
