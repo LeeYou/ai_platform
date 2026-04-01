@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/api/v1/capabilities", tags=["capabilities"])
 
-TRAIN_SERVICE_URL = os.getenv("TRAIN_SERVICE_URL", "http://train:8000")
+TRAIN_SERVICE_URL = os.getenv("TRAIN_SERVICE_URL", "http://train:8001")
 
 
 @router.get("", response_model=list[dict[str, Any]])
