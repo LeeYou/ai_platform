@@ -546,6 +546,27 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
     api->SetSessionGraphOptimizationLevel(ctx->ort_session_opts,
                                           ORT_ENABLE_EXTENDED);
 
+    /* GPU-first strategy: Try CUDA, fallback to CPU */
+    OrtCUDAProviderOptions cuda_options;
+    std::memset(&cuda_options, 0, sizeof(cuda_options));
+    cuda_options.device_id = 0;
+    cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
+    cuda_options.gpu_mem_limit = SIZE_MAX;
+    cuda_options.arena_extend_strategy = 0;
+    cuda_options.do_copy_in_default_stream = 1;
+
+    OrtStatus* cuda_status = api->SessionOptionsAppendExecutionProvider_CUDA(
+        ctx->ort_session_opts, &cuda_options);
+
+    if (cuda_status == nullptr) {
+        std::fprintf(stdout, "[face_detect] GPU mode enabled (CUDA ExecutionProvider)\n");
+    } else {
+        // CUDA unavailable, will use CPU automatically
+        const char* err_msg = api->GetErrorMessage(cuda_status);
+        std::fprintf(stderr, "[face_detect] CUDA unavailable (%s), using CPU\n", err_msg);
+        api->ReleaseStatus(cuda_status);
+    }
+
     /* Load model.onnx */
     std::string model_path = ctx->model_dir + "/model.onnx";
     if (!_ort_ok(api,

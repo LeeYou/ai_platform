@@ -232,6 +232,21 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
     ctx->session_opts.SetIntraOpNumThreads(1);
     ctx->session_opts.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
 
+    /* GPU-first strategy: Try CUDA, fallback to CPU */
+    try {
+        OrtCUDAProviderOptions cuda_options;
+        cuda_options.device_id = 0;
+        cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
+        cuda_options.gpu_mem_limit = SIZE_MAX;
+        cuda_options.arena_extend_strategy = 0;
+        cuda_options.do_copy_in_default_stream = 1;
+        ctx->session_opts.AppendExecutionProvider_CUDA(cuda_options);
+        std::fprintf(stdout, "[recapture_detect] GPU mode enabled (CUDA ExecutionProvider)\n");
+    } catch (const Ort::Exception& e) {
+        // CUDA unavailable, will use CPU automatically
+        std::fprintf(stderr, "[recapture_detect] CUDA unavailable (%s), using CPU\n", e.what());
+    }
+
     try {
         ctx->session = std::make_unique<Ort::Session>(
             ctx->ort_env,
