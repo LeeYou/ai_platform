@@ -191,6 +191,9 @@ def _compute_days_remaining(valid_until: str | None) -> int:
         # Parse ISO-8601 (with or without Z/offset)
         exp_str = valid_until.replace("Z", "+00:00")
         exp = dt.fromisoformat(exp_str)
+        # If naive datetime (no timezone), treat as UTC
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
         now = dt.now(timezone.utc)
         diff = (exp - now).total_seconds() / 86400  # Use total_seconds for precision
         return int(diff)  # Return integer days (can be negative if expired)
@@ -210,6 +213,9 @@ def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
         # Parse ISO-8601 (with or without Z/offset)
         start_str = valid_from.replace("Z", "+00:00")
         start = dt.fromisoformat(start_str)
+        # If naive datetime (no timezone), treat as UTC
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
         now = dt.now(timezone.utc)
         diff = (start - now).total_seconds() / 86400
         days_until = int(diff)
