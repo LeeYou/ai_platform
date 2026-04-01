@@ -3,7 +3,7 @@
     <el-card shadow="never" header="模型版本对比">
       <el-form :model="form" label-width="100px" style="max-width:560px;">
         <el-form-item label="AI 能力">
-          <el-input v-model="form.capability" placeholder="如 recapture_detect" />
+          <el-input v-model="form.capability" placeholder="如 desktop_recapture_detect" />
         </el-form-item>
         <el-form-item label="版本 A">
           <el-input v-model="form.version_a" placeholder="如 1.0.0" />
@@ -12,7 +12,7 @@
           <el-input v-model="form.version_b" placeholder="如 1.1.0" />
         </el-form-item>
         <el-form-item label="数据集路径">
-          <el-input v-model="form.dataset_path" placeholder="/workspace/datasets/recapture_detect/test" />
+          <el-input v-model="form.dataset_path" placeholder="/workspace/datasets/desktop_recapture_detect/test" />
         </el-form-item>
         <el-form-item label="最大样本数">
           <el-input-number v-model="form.max_samples" :min="1" :max="100" />

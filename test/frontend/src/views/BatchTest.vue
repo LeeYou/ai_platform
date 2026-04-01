@@ -3,13 +3,13 @@
     <el-card shadow="never" header="批量推理测试">
       <el-form :model="form" label-width="100px" style="max-width:560px;">
         <el-form-item label="AI 能力">
-          <el-input v-model="form.capability" placeholder="如 recapture_detect" />
+          <el-input v-model="form.capability" placeholder="如 desktop_recapture_detect" />
         </el-form-item>
         <el-form-item label="模型版本">
           <el-input v-model="form.version" placeholder="如 1.0.0" />
         </el-form-item>
         <el-form-item label="数据集路径">
-          <el-input v-model="form.dataset_path" placeholder="/workspace/datasets/recapture_detect/test" />
+          <el-input v-model="form.dataset_path" placeholder="/workspace/datasets/desktop_recapture_detect/test" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="doSubmit" :loading="submitting">提交批量测试</el-button>

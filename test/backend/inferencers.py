@@ -1289,7 +1289,6 @@ class ContractSealDetectInferencer(BaseInferencer):
 
 # Registry: capability_name → inferencer class
 _REGISTRY: dict[str, type[BaseInferencer]] = {
-    "recapture_detect":  RecaptureDetectInferencer,
     "desktop_recapture_detect": DesktopRecaptureDetectInferencer,
     "face_detect":       FaceDetectInferencer,
     "handwriting_reco":  BinaryClassifyInferencer,

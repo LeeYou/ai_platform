@@ -22,7 +22,7 @@ echo "[ai_platform] 初始化宿主机挂载目录: ${ROOT}"
 CAPABILITIES=(
     face_detect
     handwriting_reco
-    recapture_detect
+    desktop_recapture_detect
     id_card_classify
 )
 

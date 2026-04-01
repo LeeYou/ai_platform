@@ -205,7 +205,7 @@ def _draw_result(img: np.ndarray, result: dict, capability: str) -> np.ndarray:
     vis = img.copy()
     h, w = vis.shape[:2]
 
-    if capability in ("recapture_detect",):
+    if capability in ("desktop_recapture_detect",):
         label = result.get("label", "")
         score = result.get("score_recaptured", 0)
         color = (0, 0, 255) if result.get("is_recaptured") else (0, 200, 0)
@@ -270,7 +270,7 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
             continue
         total_valid += 1
         label_dir = os.path.basename(os.path.dirname(r["file"])).lower()
-        if capability == "recapture_detect":
+        if capability == "desktop_recapture_detect":
             gt = "recaptured" in label_dir
             pred = r.get("is_recaptured", False)
             if gt == pred:

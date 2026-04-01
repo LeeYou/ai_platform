@@ -168,7 +168,7 @@ class ProdInferenceEngine:
         threshold = float(options.get("threshold", self.manifest.get("threshold", 0.5)))
         cap = self.capability
 
-        if cap == "recapture_detect":
+        if cap == "desktop_recapture_detect":
             out = outputs[0].flatten()
             if len(out) >= 2:
                 exp  = np.exp(out - out.max())

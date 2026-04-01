@@ -21,7 +21,7 @@
     },
     {
       "step_id": "anti_recapture",
-      "capability": "recapture_detect",
+      "capability": "desktop_recapture_detect",
       "description": "翻拍检测，排除屏幕翻拍攻击",
       "params": {},
       "condition": "${silent_liveness.is_live} == true",

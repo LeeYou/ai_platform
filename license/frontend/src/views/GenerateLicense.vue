@@ -45,7 +45,7 @@
             <el-checkbox-group v-model="form.capabilities" :disabled="form.allCapabilities">
               <el-checkbox value="face_detect" label="face_detect" />
               <el-checkbox value="handwriting_reco" label="handwriting_reco" />
-              <el-checkbox value="recapture_detect" label="recapture_detect" />
+              <el-checkbox value="desktop_recapture_detect" label="desktop_recapture_detect" />
               <el-checkbox value="id_card_classify" label="id_card_classify" />
             </el-checkbox-group>
           </el-form-item>

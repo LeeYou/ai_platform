@@ -3,7 +3,7 @@
     <el-card shadow="never" header="单样本推理测试">
       <el-form :model="form" label-width="100px" style="max-width:520px;">
         <el-form-item label="AI 能力">
-          <el-input v-model="form.capability" placeholder="如 recapture_detect" />
+          <el-input v-model="form.capability" placeholder="如 desktop_recapture_detect" />
         </el-form-item>
         <el-form-item label="模型版本">
           <el-input v-model="form.version" placeholder="如 1.0.0" />
