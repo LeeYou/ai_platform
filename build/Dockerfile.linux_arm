@@ -1,6 +1,6 @@
 # =============================================================================
 # build/Dockerfile.linux_arm
-# Linux aarch64 编译镜像（GCC 12 + CMake 3.26 + ONNXRuntime + OpenSSL）
+# Linux aarch64 编译镜像（GCC 12 + CMake 3.22+ + ONNXRuntime + OpenSSL）
 # 两阶段构建：Node.js 编译前端 + Ubuntu 编译环境运行后端
 # 镜像名：agilestar/ai-builder-linux-arm:latest
 # =============================================================================
