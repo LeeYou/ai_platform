@@ -54,12 +54,12 @@ class ProdInferenceEngine:
                 backend = os.getenv("AI_BACKEND", "auto")
                 avail = ort.get_available_providers()
 
-                # Provider selection: GPU for large models, CPU for small models
-                # Small models (like EfficientNet-B0) have high GPU overhead from memory transfers
+                # Provider selection based on AI_BACKEND
                 if backend == "onnxruntime-cpu":
+                    # Force CPU only
                     providers = ["CPUExecutionProvider"]
                 elif backend == "onnxruntime-gpu":
-                    # Forced GPU mode with optimized settings
+                    # Force GPU with optimized settings
                     if "CUDAExecutionProvider" in avail:
                         providers = [
                             ("CUDAExecutionProvider", {
@@ -67,25 +67,21 @@ class ProdInferenceEngine:
                                 "gpu_mem_limit": 2 * 1024 * 1024 * 1024,  # 2GB
                                 "cudnn_conv_algo_search": "DEFAULT",
                             }),
-                            "CPUExecutionProvider"
+                            "CPUExecutionProvider"  # Fallback
                         ]
                     else:
                         providers = ["CPUExecutionProvider"]
-                else:  # auto mode
-                    # For small models (<50MB), prefer CPU to avoid GPU transfer overhead
-                    model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
-                    if "CUDAExecutionProvider" in avail and model_size_mb >= 50:
-                        # Use GPU only for large models
+                else:  # "auto" mode - GPU first, CPU fallback
+                    if "CUDAExecutionProvider" in avail:
                         providers = [
                             ("CUDAExecutionProvider", {
                                 "arena_extend_strategy": "kSameAsRequested",
-                                "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
+                                "gpu_mem_limit": 2 * 1024 * 1024 * 1024,  # 2GB
                                 "cudnn_conv_algo_search": "DEFAULT",
                             }),
-                            "CPUExecutionProvider"
+                            "CPUExecutionProvider"  # Fallback
                         ]
                     else:
-                        # Use CPU for small models or when GPU unavailable
                         providers = ["CPUExecutionProvider"]
 
                 self._session = ort.InferenceSession(model_path, sess_options, providers=providers)
@@ -94,6 +90,7 @@ class ProdInferenceEngine:
                 # Log which provider is actually being used
                 import sys
                 actual_provider = self._session.get_providers()[0]
+                model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
                 print(f"[{capability}] Using {actual_provider} (model: {model_size_mb:.1f}MB)", file=sys.stderr)
             except Exception as exc:
                 import sys
