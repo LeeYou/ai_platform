@@ -2,18 +2,21 @@
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.orm import Session
 
 import models
 import schemas
 
+# CST timezone (UTC+8) - Standard timezone for all license operations
+CST = timezone(timedelta(hours=8))
+
 
 # ─── License ID generation ───────────────────────────────────────────────────
 
 def generate_license_id(db: Session) -> str:
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today = datetime.now(CST).strftime("%Y%m%d")
     prefix = f"LS-{today}-"
     count = (
         db.query(models.LicenseRecord)
@@ -50,7 +53,7 @@ def update_customer(
 ) -> models.Customer:
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(customer, field, value)
-    customer.updated_at = datetime.now(timezone.utc)
+    customer.updated_at = datetime.now(CST)
     db.commit()
     db.refresh(customer)
     return customer
@@ -93,7 +96,7 @@ def get_licenses(
 def get_expiring_licenses(db: Session, days: int) -> list[models.LicenseRecord]:
     from datetime import timedelta
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(CST)
     cutoff = now + timedelta(days=days)
     return (
         db.query(models.LicenseRecord)
@@ -237,6 +240,6 @@ def delete_prod_admin_token(db: Session, token: models.ProdAdminToken) -> None:
 
 def record_token_usage(db: Session, token: models.ProdAdminToken) -> None:
     """Record that a token was used (for audit purposes)."""
-    token.last_used_at = datetime.now(timezone.utc)
+    token.last_used_at = datetime.now(CST)
     token.usage_count += 1
     db.commit()

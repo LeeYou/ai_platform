@@ -14,9 +14,12 @@ import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
+
+# CST timezone (UTC+8) - Standard timezone for all license operations
+CST = timezone(timedelta(hours=8))
 
 # ---------------------------------------------------------------------------
 # Logging setup — MUST run before any third-party / app imports so that
@@ -183,18 +186,19 @@ def _verify_license_signature(license_json: str) -> bool:
 
 
 def _compute_days_remaining(valid_until: str | None) -> int:
-    """Compute days remaining from ISO-8601 valid_until string."""
+    """Compute days remaining from ISO-8601 valid_until string.
+    All times are treated as CST (UTC+8)."""
     if not valid_until:
         return 9999  # permanent license
     try:
         from datetime import datetime as dt
         # Parse ISO-8601 (with or without Z/offset)
-        exp_str = valid_until.replace("Z", "+00:00")
+        exp_str = valid_until.replace("Z", "+08:00")
         exp = dt.fromisoformat(exp_str)
-        # If naive datetime (no timezone), treat as UTC
+        # If naive datetime (no timezone), treat as CST
         if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        now = dt.now(timezone.utc)
+            exp = exp.replace(tzinfo=CST)
+        now = dt.now(CST)
         diff = (exp - now).total_seconds() / 86400  # Use total_seconds for precision
         return int(diff)  # Return integer days (can be negative if expired)
     except Exception:
@@ -205,18 +209,19 @@ def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
     """
     Check if license has started based on valid_from.
     Returns (has_started, days_until_start).
+    All times are treated as CST (UTC+8).
     """
     if not valid_from:
         return (True, 0)  # No valid_from means license is always active
     try:
         from datetime import datetime as dt
         # Parse ISO-8601 (with or without Z/offset)
-        start_str = valid_from.replace("Z", "+00:00")
+        start_str = valid_from.replace("Z", "+08:00")
         start = dt.fromisoformat(start_str)
-        # If naive datetime (no timezone), treat as UTC
+        # If naive datetime (no timezone), treat as CST
         if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
-        now = dt.now(timezone.utc)
+            start = start.replace(tzinfo=CST)
+        now = dt.now(CST)
         diff = (start - now).total_seconds() / 86400
         days_until = int(diff)
         return (days_until <= 0, max(days_until, 0))
@@ -409,7 +414,7 @@ def _success(capability: str, version: str, result: dict, elapsed_ms: float) -> 
         "model_version":    version,
         "inference_time_ms": elapsed_ms,
         "result":           result,
-        "timestamp":        datetime.now(timezone.utc).isoformat(),
+        "timestamp":        datetime.now(CST).isoformat(),
     }
 
 
@@ -439,7 +444,7 @@ def health():
         "status":       "healthy" if _engines else "degraded",
         "capabilities": caps,
         "license":      lic,
-        "server_time":  datetime.now(timezone.utc).isoformat(),
+        "server_time":  datetime.now(CST).isoformat(),
     }
 
 

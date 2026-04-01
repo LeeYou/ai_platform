@@ -2,7 +2,7 @@
 
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 import crud
 import schemas
 from database import get_db
+
+# CST timezone (UTC+8) - Standard timezone for all license operations
+CST = timezone(timedelta(hours=8))
 
 router = APIRouter(prefix="/api/v1/prod-tokens", tags=["prod-tokens"])
 
@@ -127,7 +130,7 @@ def verify_token(plaintext_token: str, db: Session = Depends(get_db)):
                 raise HTTPException(status_code=401, detail="Token is inactive")
 
             # Check if token is expired
-            if token.expires_at and token.expires_at < datetime.now(timezone.utc):
+            if token.expires_at and token.expires_at < datetime.now(CST):
                 raise HTTPException(status_code=401, detail="Token is expired")
 
             # Record usage

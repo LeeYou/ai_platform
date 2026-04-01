@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -12,6 +12,9 @@ import crud
 import schemas
 from database import get_db
 from license_signer import sign_license, verify_license as verify_sig
+
+# CST timezone (UTC+8) - Standard timezone for all license operations
+CST = timezone(timedelta(hours=8))
 
 LICENSES_DIR = os.environ.get("LICENSES_DIR", "./data/licenses")
 
@@ -96,7 +99,7 @@ def create_license(data: schemas.LicenseCreate, db: Session = Depends(get_db)):
     # Verify private key matches the selected key pair's public key
     _verify_key_match(privkey_pem, key_pair.public_key_pem)
 
-    issued_at = datetime.now(timezone.utc)
+    issued_at = datetime.now(CST)
     license_id = crud.generate_license_id(db)
 
     license_data = {
@@ -156,7 +159,7 @@ def renew_license(license_id: str, data: schemas.LicenseRenew, db: Session = Dep
         raise HTTPException(status_code=400, detail="Cannot renew a revoked license")
 
     privkey_pem = _read_privkey(data.privkey_path)
-    issued_at = datetime.now(timezone.utc)
+    issued_at = datetime.now(CST)
 
     old_data = json.loads(record.license_content)
     old_data.pop("signature", None)

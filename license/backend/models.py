@@ -1,11 +1,13 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
+# CST timezone (UTC+8) - Standard timezone for all license operations
+CST = timezone(timedelta(hours=8))
 
 def utcnow():
-    return datetime.now(timezone.utc)
+    return datetime.now(CST)
 
 
 class Customer(Base):

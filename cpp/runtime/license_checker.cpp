@@ -262,6 +262,7 @@ private:
         }
 
         // Compute days remaining from valid_until (simplified: compare ISO date prefix)
+        // All license times are in CST (UTC+8)
         if (!cached_.valid_until.empty() && cached_.valid) {
             // Use ctime to parse
             struct tm tm_exp = {};
@@ -269,10 +270,15 @@ private:
                             &tm_exp.tm_year, &tm_exp.tm_mon, &tm_exp.tm_mday) == 3) {
                 tm_exp.tm_year -= 1900;
                 tm_exp.tm_mon  -= 1;
+                tm_exp.tm_hour = 0;
+                tm_exp.tm_min  = 0;
+                tm_exp.tm_sec  = 0;
 #ifdef _WIN32
-                time_t exp_t = _mkgmtime(&tm_exp);
+                // Convert CST time to epoch (subtract 8 hours from GMT conversion)
+                time_t exp_t = _mkgmtime(&tm_exp) - (8 * 3600);
 #else
-                time_t exp_t = timegm(&tm_exp);
+                // Convert CST time to epoch (subtract 8 hours from GMT conversion)
+                time_t exp_t = timegm(&tm_exp) - (8 * 3600);
 #endif
                 time_t now_t    = time(nullptr);
                 int64_t diff    = static_cast<int64_t>(exp_t) - static_cast<int64_t>(now_t);
