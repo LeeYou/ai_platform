@@ -249,9 +249,17 @@ def train(args, config):
     batch_size  = config.get("batch_size", 32)
     train_ratio = config.get("train_ratio", 0.8)
 
+    # Auto-detect optimal workers count based on CPU cores
+    # Default: max(8, cpu_count * 1.5), capped at 16 for better GPU utilization
+    cpu_count = os.cpu_count() or 8
+    default_workers = min(16, max(8, int(cpu_count * 1.5)))
+    workers = config.get("workers", default_workers)
+    print(f"Workers: {workers} (CPU cores: {cpu_count})", flush=True)
+
     train_loader, val_loader = build_dataloaders(
         args.dataset, image_size=image_size,
-        train_ratio=train_ratio, batch_size=batch_size)
+        train_ratio=train_ratio, batch_size=batch_size,
+        num_workers=workers)
 
     model = DesktopRecaptureDetector(pretrained=True).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
