@@ -293,29 +293,31 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
         input_shape.data(),
         input_shape.size());
 
-    std::vector<Ort::Value> out_tensors(1, Ort::Value{nullptr});
+    // Allocate output tensor
+    Ort::MemoryInfo mem_info_out = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    std::vector<int64_t> output_shape = {1, 1};  // [batch_size, num_outputs]
+    std::vector<float> output_data(1);  // Single output value
+    Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
+        mem_info_out,
+        output_data.data(),
+        output_data.size(),
+        output_shape.data(),
+        output_shape.size());
+
     try {
         ctx->session->Run(
             Ort::RunOptions{nullptr},
-            ctx->input_names.data(),  &input_tensor,           ctx->input_names.size(),
-            ctx->output_names.data(), out_tensors.data(),      ctx->output_names.size());
+            ctx->input_names.data(),  &input_tensor,      1,
+            ctx->output_names.data(), &output_tensor,     1);
     } catch (const Ort::Exception& ex) {
         _set_result(output, AI_ERR_INFER_FAILED, nullptr, ex.what());
         return AI_ERR_INFER_FAILED;
     }
 
     // EfficientNet-B0 output: single logit → sigmoid = P(fake)
-    float prob_fake = 0.5f;
-    float prob_real = 0.5f;
-    if (!out_tensors.empty()) {
-        auto* data = out_tensors[0].GetTensorData<float>();
-        size_t n   = out_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount();
-        if (n >= 1) {
-            float logit = data[0];
-            prob_fake = 1.0f / (1.0f + std::exp(-logit));
-            prob_real = 1.0f - prob_fake;
-        }
-    }
+    float logit = output_data[0];
+    float prob_fake = 1.0f / (1.0f + std::exp(-logit));
+    float prob_real = 1.0f - prob_fake;
 
     bool is_fake = (prob_fake > 0.5f);
     char json_buf[256];

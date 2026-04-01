@@ -305,30 +305,30 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
         input_shape.data(),
         input_shape.size());
 
-    std::vector<Ort::Value> out_tensors(1, Ort::Value{nullptr});
+    // Allocate output tensor (supports both 1 or 2 outputs)
+    Ort::MemoryInfo mem_info_out = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    std::vector<int64_t> output_shape = {1, 2};  // [batch_size, num_classes] - assume 2 classes
+    std::vector<float> output_data(2);  // Two output values
+    Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
+        mem_info_out,
+        output_data.data(),
+        output_data.size(),
+        output_shape.data(),
+        output_shape.size());
+
     try {
         ctx->session->Run(
             Ort::RunOptions{nullptr},
-            ctx->input_names.data(),  &input_tensor,           ctx->input_names.size(),
-            ctx->output_names.data(), out_tensors.data(),      ctx->output_names.size());
+            ctx->input_names.data(),  &input_tensor,      1,
+            ctx->output_names.data(), &output_tensor,     1);
     } catch (const Ort::Exception& ex) {
         _set_result(output, AI_ERR_INFER_FAILED, nullptr, ex.what());
         return AI_ERR_INFER_FAILED;
     }
 
     // Parse output: two-class softmax → [genuine_score, recaptured_score]
-    float score_genuine   = 0.5f;
-    float score_recaptured = 0.5f;
-    if (!out_tensors.empty()) {
-        auto* data = out_tensors[0].GetTensorData<float>();
-        size_t n   = out_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount();
-        if (n >= 2) { score_genuine = data[0]; score_recaptured = data[1]; }
-        else if (n == 1) {
-            // Single logit — sigmoid
-            float s = 1.0f / (1.0f + std::exp(-data[0]));
-            score_genuine = 1.0f - s; score_recaptured = s;
-        }
-    }
+    float score_genuine   = output_data[0];
+    float score_recaptured = output_data[1];
 
     bool is_recaptured = (score_recaptured > 0.5f);
     char json_buf[256];
