@@ -11,6 +11,25 @@ Usage (inside the train container):
                     --output /workspace/models/desktop_recapture_detect/v1.0.0/ \\
                     --version 1.0.0
 
+Parameter Compatibility:
+    The script supports parameters from both the frontend UI and native config.json:
+
+    Frontend UI (Jobs.vue) → Native config.json:
+    - imgsz → input_size (image size, default: 224)
+    - batch → batch_size (batch size, default: 32)
+    - lr0 → lr (learning rate, default: 1e-3)
+    - epochs → Not directly mapped (use phase1_epochs + phase2_epochs in custom params)
+
+    Native-only parameters (set via custom params JSON):
+    - phase1_epochs: Phase 1 training epochs (default: 5)
+    - phase2_epochs: Phase 2 training epochs (default: 25)
+    - early_stopping_patience: Early stopping patience (default: 10)
+    - train_ratio: Train/val split ratio (default: 0.8)
+    - lr_min: Minimum learning rate for cosine annealing (default: 1e-5)
+    - weight_decay: Weight decay for optimizer (default: 1e-4)
+    - workers: Number of DataLoader workers (auto-detected if not set)
+    - cache: Enable dataset caching in RAM (default: true)
+
 Migrated from LeeYou/recapture_detect (dev branch) for ai_platform integration.
 """
 
@@ -243,11 +262,15 @@ def train(args, config):
     else:
         print(f"Device : {device}", flush=True)
 
-    image_size = config.get("input_size", [224, 224])
+    # Support both 'input_size' (native) and 'imgsz' (from frontend UI)
+    image_size = config.get("input_size", config.get("imgsz", [224, 224]))
     if isinstance(image_size, list):
         image_size = image_size[0]
     batch_size  = config.get("batch_size", 32)
     train_ratio = config.get("train_ratio", 0.8)
+
+    # Support both 'lr' (native) and 'lr0' (from frontend UI)
+    learning_rate = config.get("lr", config.get("lr0", 1e-3))
 
     # Auto-detect optimal workers count based on CPU cores
     # Default: max(8, cpu_count * 1.5), capped at 16 for better GPU utilization
@@ -296,7 +319,7 @@ def train(args, config):
 
     optimizer_p1 = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
-        lr=config.get("lr", 1e-3),
+        lr=learning_rate,
         weight_decay=config.get("weight_decay", 1e-4),
     )
 
@@ -321,7 +344,7 @@ def train(args, config):
 
     optimizer_p2 = torch.optim.AdamW(
         model.parameters(),
-        lr=config.get("lr", 1e-3) * 0.1,
+        lr=learning_rate * 0.1,
         weight_decay=config.get("weight_decay", 1e-4),
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
