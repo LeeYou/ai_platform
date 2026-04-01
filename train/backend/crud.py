@@ -166,12 +166,64 @@ def create_model_version(
 
 
 def set_current_version(db: Session, version: ModelVersion) -> ModelVersion:
+    """Set a model version as current and create filesystem symlink."""
+    import logging
+    logger = logging.getLogger("train")
+
     # Unset all others for the same capability
     db.query(ModelVersion).filter(
         ModelVersion.capability_id == version.capability_id,
         ModelVersion.id != version.id,
     ).update({"is_current": False})
     version.is_current = True
+
+    # Create 'current' symlink at filesystem level
+    if version.model_path and os.path.isdir(version.model_path):
+        cap_dir = os.path.dirname(version.model_path)
+        current_link = os.path.join(cap_dir, "current")
+        version_name = os.path.basename(version.model_path)
+
+        try:
+            # Remove existing symlink if present
+            if os.path.islink(current_link):
+                os.unlink(current_link)
+            elif os.path.exists(current_link):
+                logger.warning("'current' exists but is not a symlink: %s", current_link)
+
+            # Create new symlink
+            os.symlink(version_name, current_link)
+            logger.info("Created symlink: %s -> %s", current_link, version_name)
+        except Exception as e:
+            logger.error("Failed to create symlink %s: %s", current_link, e)
+            # Don't fail the database operation if symlink creation fails
+
+    db.commit()
+    db.refresh(version)
+    return version
+
+
+def unset_current_version(db: Session, version: ModelVersion) -> ModelVersion:
+    """Unset a model version as current and remove filesystem symlink."""
+    import logging
+    logger = logging.getLogger("train")
+
+    if not version.is_current:
+        return version
+
+    version.is_current = False
+
+    # Remove 'current' symlink at filesystem level
+    if version.model_path:
+        cap_dir = os.path.dirname(version.model_path)
+        current_link = os.path.join(cap_dir, "current")
+
+        try:
+            if os.path.islink(current_link):
+                os.unlink(current_link)
+                logger.info("Removed symlink: %s", current_link)
+        except Exception as e:
+            logger.error("Failed to remove symlink %s: %s", current_link, e)
+
     db.commit()
     db.refresh(version)
     return version

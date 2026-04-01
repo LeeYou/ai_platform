@@ -37,6 +37,16 @@ def set_current(version_id: int, db: Session = Depends(get_db)):
     return crud.set_current_version(db, obj)
 
 
+@router.post("/{version_id}/unset-current", response_model=ModelVersionOut)
+def unset_current(version_id: int, db: Session = Depends(get_db)):
+    obj = crud.get_model_version(db, version_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Model version not found")
+    if not obj.is_current:
+        raise HTTPException(status_code=400, detail="Model version is not currently set as current")
+    return crud.unset_current_version(db, obj)
+
+
 @router.get("/{version_id}/download")
 def download_manifest(version_id: int, db: Session = Depends(get_db)):
     obj = crud.get_model_version(db, version_id)

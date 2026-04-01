@@ -64,6 +64,7 @@ export const getJobLogs = (id) => http.get(`/jobs/${id}/logs`)
 export const listModels = (params) => http.get('/models/', { params })
 export const getModel = (id) => http.get(`/models/${id}`)
 export const setCurrentModel = (id) => http.post(`/models/${id}/set-current`)
+export const unsetCurrentModel = (id) => http.post(`/models/${id}/unset-current`)
 
 // Annotations - Projects
 export const listAnnotationProjects = (params) => http.get('/annotations/projects', { params })

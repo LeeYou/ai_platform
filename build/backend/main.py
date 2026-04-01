@@ -189,6 +189,55 @@ class BuildJob(BaseModel):
 # Helper
 # ---------------------------------------------------------------------------
 
+def _create_lib_symlinks(capability: str, job_id: str) -> None:
+    """Create standard library symlinks (libfoo.so -> libfoo.so.1 -> libfoo.so.1.0.0)."""
+    lib_dir = os.path.join(BUILD_OUTPUT_DIR, capability, "lib")
+    if not os.path.isdir(lib_dir):
+        logger.warning("Build %s: lib directory not found: %s", job_id, lib_dir)
+        return
+
+    try:
+        for filename in os.listdir(lib_dir):
+            full_path = os.path.join(lib_dir, filename)
+            if not os.path.isfile(full_path):
+                continue
+
+            # Match versioned shared libraries: libfoo.so.1.0.0
+            import re
+            match = re.match(r'^(lib\w+)\.so\.(\d+)\.(\d+)\.(\d+)$', filename)
+            if not match:
+                continue
+
+            base_name = match.group(1)  # libfoo
+            major = match.group(2)      # 1
+            minor = match.group(3)      # 0
+            patch = match.group(4)      # 0
+
+            # Create major version symlink: libfoo.so.1 -> libfoo.so.1.0.0
+            major_link = os.path.join(lib_dir, f"{base_name}.so.{major}")
+            if os.path.islink(major_link):
+                os.unlink(major_link)
+            elif os.path.exists(major_link):
+                logger.warning("Build %s: %s exists but is not a symlink", job_id, major_link)
+                continue
+            os.symlink(filename, major_link)
+            logger.info("Build %s: Created symlink %s -> %s", job_id, os.path.basename(major_link), filename)
+
+            # Create development symlink: libfoo.so -> libfoo.so.1
+            dev_link = os.path.join(lib_dir, f"{base_name}.so")
+            if os.path.islink(dev_link):
+                os.unlink(dev_link)
+            elif os.path.exists(dev_link):
+                logger.warning("Build %s: %s exists but is not a symlink", job_id, dev_link)
+                continue
+            os.symlink(f"{base_name}.so.{major}", dev_link)
+            logger.info("Build %s: Created symlink %s -> %s.{major}", job_id, os.path.basename(dev_link), base_name)
+
+    except Exception as e:
+        logger.error("Build %s: Failed to create library symlinks: %s", job_id, e)
+        # Don't fail the build if symlink creation fails
+
+
 async def _run_build(job_id: str, req: BuildRequest) -> None:
     job = _jobs[job_id]
     log_path = os.path.join(BUILD_LOG_DIR, f"{job_id}.log")
@@ -247,6 +296,9 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
                 job["finished_at"] = datetime.now(timezone.utc).isoformat()
                 logger.error("Build %s failed at command: %s (exit code %s)", job_id, cmd_display, proc.returncode)
                 return
+
+    # Create library symlinks after successful build
+    _create_lib_symlinks(req.capability, job_id)
 
     job["status"] = "done"
     job["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -502,6 +554,43 @@ def download_artifact(job_id: str, filename: str):
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Artifact not found")
     return FileResponse(filepath, filename=os.path.basename(filename))
+
+
+@app.get("/api/v1/builds/{job_id}/download-package", tags=["artifacts"])
+def download_package(job_id: str):
+    """Download all build artifacts as a tar.gz package."""
+    import tarfile
+    import tempfile
+
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Build job not found")
+
+    job = _jobs[job_id]
+    cap = job["capability"]
+    artifact_dir = os.path.realpath(os.path.join(BUILD_OUTPUT_DIR, cap))
+
+    if not os.path.isdir(artifact_dir):
+        raise HTTPException(status_code=404, detail="No artifacts found for this build")
+
+    # Create temporary tar.gz file
+    temp_fd, temp_path = tempfile.mkstemp(suffix=".tar.gz", prefix=f"build_{job_id}_")
+    try:
+        os.close(temp_fd)
+        with tarfile.open(temp_path, "w:gz") as tar:
+            tar.add(artifact_dir, arcname=cap)
+
+        package_name = f"{cap}_{job_id[:8]}.tar.gz"
+        return FileResponse(
+            temp_path,
+            filename=package_name,
+            media_type="application/gzip",
+            background=None  # Keep file until response completes
+        )
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        logger.error("Failed to create package for build %s: %s", job_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to create package: {str(e)}")
 
 
 # ---------------------------------------------------------------------------

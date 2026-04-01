@@ -41,8 +41,35 @@
           <el-table-column label="文件" show-overflow-tooltip>
             <template #default="{row}">{{ row.file?.split('/').pop() }}</template>
           </el-table-column>
-          <el-table-column label="结果" show-overflow-tooltip>
-            <template #default="{row}">{{ JSON.stringify(row).substring(0,80) }}</template>
+          <el-table-column label="预测结果" width="150">
+            <template #default="{row}">
+              <span v-if="row.error" style="color:#f56c6c;">
+                错误: {{ row.error }}
+              </span>
+              <span v-else-if="row.is_recaptured !== undefined">
+                <el-tag :type="row.is_recaptured ? 'danger' : 'success'" size="small">
+                  {{ row.is_recaptured ? '翻拍' : '原件' }}
+                </el-tag>
+              </span>
+              <span v-else-if="row.label !== undefined">
+                {{ row.label }}
+              </span>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="置信度" width="100">
+            <template #default="{row}">
+              <span v-if="!row.error && row.confidence !== undefined">
+                {{ (row.confidence * 100).toFixed(2) }}%
+              </span>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="详细信息" show-overflow-tooltip>
+            <template #default="{row}">
+              <span v-if="row.error">-</span>
+              <span v-else>{{ formatDetails(row) }}</span>
+            </template>
           </el-table-column>
         </el-table>
         <div v-if="report?.results?.length > 50" style="margin-top:8px;color:#909399;font-size:12px;">
@@ -71,6 +98,12 @@ const report = ref(null)
 let pollTimer = null
 
 const statusType = (s) => ({ running:'primary', done:'success', failed:'danger', pending:'info' }[s] || 'info')
+
+const formatDetails = (row) => {
+  const { file, error, ...details } = row
+  if (Object.keys(details).length === 0) return '-'
+  return JSON.stringify(details)
+}
 
 const poll = async () => {
   if (!job.value) return

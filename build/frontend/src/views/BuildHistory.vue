@@ -57,6 +57,11 @@
 
     <!-- Artifacts Dialog -->
     <el-dialog v-model="showArtifactDialog" title="编译产物" width="60%">
+      <div style="margin-bottom:12px;">
+        <el-button type="primary" @click="downloadAll">
+          <el-icon><Download /></el-icon> 一键下载(tar.gz)
+        </el-button>
+      </div>
       <el-table :data="artifacts" stripe style="width:100%;" v-loading="artifactLoading">
         <el-table-column prop="filename" label="文件名" />
         <el-table-column prop="size" label="大小" width="120">
@@ -82,6 +87,7 @@ import {
   getBuildLogs,
   getArtifacts,
   downloadArtifact,
+  downloadPackage,
   extractErrorMessage,
 } from '../api/index.js'
 import { ElMessage } from 'element-plus'
@@ -165,6 +171,30 @@ async function doDownload(item) {
     a.download = item.filename
     a.click()
     window.URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error(extractErrorMessage(e))
+  }
+}
+
+async function downloadAll() {
+  try {
+    const res = await downloadPackage(currentJobId.value)
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const a = document.createElement('a')
+    a.href = url
+    // Extract filename from Content-Disposition header if available
+    const disposition = res.headers['content-disposition']
+    let filename = `build_${currentJobId.value}.tar.gz`
+    if (disposition) {
+      const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+      if (match && match[1]) {
+        filename = match[1].replace(/['"]/g, '')
+      }
+    }
+    a.download = filename
+    a.click()
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('打包下载成功')
   } catch (e) {
     ElMessage.error(extractErrorMessage(e))
   }

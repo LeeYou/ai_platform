@@ -79,6 +79,10 @@ export function downloadArtifact(jobId, filename) {
   return http.get(`/builds/${jobId}/artifacts/${filename}`, { responseType: 'blob' })
 }
 
+export function downloadPackage(jobId) {
+  return http.get(`/builds/${jobId}/download-package`, { responseType: 'blob' })
+}
+
 /**
  * Open a WebSocket connection to stream build logs.
  * Returns the WebSocket instance.

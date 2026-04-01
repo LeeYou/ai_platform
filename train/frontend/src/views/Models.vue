@@ -27,10 +27,10 @@
         <el-table-column label="导出时间" width="170">
           <template #default="{row}">{{ fmtTime(row.exported_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="120">
+        <el-table-column label="操作" width="140">
           <template #default="{row}">
             <el-button v-if="!row.is_current" link type="primary" @click="setCurrent(row)">设为当前版本</el-button>
-            <el-tag v-else type="success" size="small">已是当前版本</el-tag>
+            <el-button v-else link type="warning" @click="unsetCurrent(row)">取消当前版本</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -43,7 +43,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listCapabilities, listModels, setCurrentModel, extractErrorMessage } from '../api/index.js'
+import { listCapabilities, listModels, setCurrentModel, unsetCurrentModel, extractErrorMessage } from '../api/index.js'
 
 const loading = ref(false)
 const models = ref([])
@@ -70,6 +70,16 @@ const setCurrent = async (row) => {
   try {
     await setCurrentModel(row.id)
     ElMessage.success(`已将 ${row.version} 设为当前版本`)
+    await load()
+  } catch (e) {
+    ElMessage.error('操作失败：' + extractErrorMessage(e))
+  }
+}
+
+const unsetCurrent = async (row) => {
+  try {
+    await unsetCurrentModel(row.id)
+    ElMessage.success(`已取消 ${row.version} 的当前版本状态`)
     await load()
   } catch (e) {
     ElMessage.error('操作失败：' + extractErrorMessage(e))
