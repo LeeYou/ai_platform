@@ -181,3 +181,62 @@ def create_key_pair(db: Session, name: str, public_key_pem: str) -> models.KeyPa
     db.commit()
     db.refresh(kp)
     return kp
+
+
+# ─── ProdAdminToken CRUD ─────────────────────────────────────────────────────
+
+def get_prod_admin_tokens(db: Session) -> list[models.ProdAdminToken]:
+    return db.query(models.ProdAdminToken).order_by(models.ProdAdminToken.id.desc()).all()
+
+
+def get_prod_admin_token(db: Session, token_id: int) -> models.ProdAdminToken | None:
+    return db.query(models.ProdAdminToken).filter(models.ProdAdminToken.id == token_id).first()
+
+
+def get_prod_admin_token_by_name(db: Session, token_name: str) -> models.ProdAdminToken | None:
+    return db.query(models.ProdAdminToken).filter(models.ProdAdminToken.token_name == token_name).first()
+
+
+def create_prod_admin_token(
+    db: Session,
+    token_name: str,
+    token_hash: str,
+    environment: str | None = None,
+    created_by: str | None = None,
+    expires_at: datetime | None = None,
+) -> models.ProdAdminToken:
+    token = models.ProdAdminToken(
+        token_name=token_name,
+        token_hash=token_hash,
+        environment=environment,
+        created_by=created_by,
+        expires_at=expires_at,
+    )
+    db.add(token)
+    db.commit()
+    db.refresh(token)
+    return token
+
+
+def update_prod_admin_token(
+    db: Session,
+    token: models.ProdAdminToken,
+    data: schemas.ProdAdminTokenUpdate,
+) -> models.ProdAdminToken:
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(token, field, value)
+    db.commit()
+    db.refresh(token)
+    return token
+
+
+def delete_prod_admin_token(db: Session, token: models.ProdAdminToken) -> None:
+    db.delete(token)
+    db.commit()
+
+
+def record_token_usage(db: Session, token: models.ProdAdminToken) -> None:
+    """Record that a token was used (for audit purposes)."""
+    token.last_used_at = datetime.now(timezone.utc)
+    token.usage_count += 1
+    db.commit()

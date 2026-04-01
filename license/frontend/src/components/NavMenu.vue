@@ -26,6 +26,10 @@
       <el-icon><Key /></el-icon>
       <span>🔑 密钥管理</span>
     </el-menu-item>
+    <el-menu-item index="/prod-tokens">
+      <el-icon><Lock /></el-icon>
+      <span>🔐 生产令牌</span>
+    </el-menu-item>
   </el-menu>
 </template>
 

@@ -4,6 +4,7 @@ import Customers from '../views/Customers.vue'
 import Licenses from '../views/Licenses.vue'
 import GenerateLicense from '../views/GenerateLicense.vue'
 import KeyManagement from '../views/KeyManagement.vue'
+import ProdTokens from '../views/ProdTokens.vue'
 
 const routes = [
   { path: '/', component: Dashboard },
@@ -11,6 +12,7 @@ const routes = [
   { path: '/licenses', component: Licenses },
   { path: '/generate', component: GenerateLicense },
   { path: '/keys', component: KeyManagement },
+  { path: '/prod-tokens', component: ProdTokens },
 ]
 
 const router = createRouter({

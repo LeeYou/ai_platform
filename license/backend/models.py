@@ -65,3 +65,18 @@ class KeyPair(Base):
     # private key is NEVER stored in DB — only on disk/HSM
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class ProdAdminToken(Base):
+    __tablename__ = "prod_admin_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    token_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)  # SHA-256 hash
+    environment: Mapped[str | None] = mapped_column(String(50), nullable=True)  # production/staging/test
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)  # operator name
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    usage_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

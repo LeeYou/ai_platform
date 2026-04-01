@@ -96,3 +96,20 @@ export function downloadPublicKey(id) {
 export function getCapabilities() {
   return http.get('/capabilities')
 }
+
+// Production Admin Tokens
+export function getProdTokens() {
+  return http.get('/prod-tokens')
+}
+export function createProdToken(data) {
+  return http.post('/prod-tokens', data)
+}
+export function updateProdToken(id, data) {
+  return http.put(`/prod-tokens/${id}`, data)
+}
+export function deleteProdToken(id) {
+  return http.delete(`/prod-tokens/${id}`)
+}
+export function verifyProdToken(plaintext_token) {
+  return http.post('/prod-tokens/verify', { plaintext_token })
+}

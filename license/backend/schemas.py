@@ -110,5 +110,39 @@ class KeyPairResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ─── ProdAdminToken ───────────────────────────────────────────────────────────
+
+class ProdAdminTokenCreate(BaseModel):
+    token_name: str
+    environment: Optional[str] = None
+    created_by: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+
+class ProdAdminTokenResponse(BaseModel):
+    id: int
+    token_name: str
+    token_hash: str  # only first 8 chars for display
+    environment: Optional[str]
+    created_at: datetime
+    created_by: Optional[str]
+    expires_at: Optional[datetime]
+    is_active: bool
+    last_used_at: Optional[datetime]
+    usage_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class ProdAdminTokenWithPlaintext(ProdAdminTokenResponse):
+    """Only returned once during creation — includes the plaintext token."""
+    plaintext_token: str
+
+
+class ProdAdminTokenUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    expires_at: Optional[datetime] = None
+
+
 # Update forward references
 CustomerWithLicenses.model_rebuild()
