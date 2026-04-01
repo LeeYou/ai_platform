@@ -314,20 +314,32 @@
         <!-- Training Logs Terminal -->
         <el-card shadow="never" style="flex:1;min-height:200px;display:flex;flex-direction:column;">
           <template #header>
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span><el-icon><Document /></el-icon> 训练日志</span>
-              <el-button-group size="small">
-                <el-button @click="autoScroll = !autoScroll" :type="autoScroll ? 'primary' : ''">
-                  <el-icon><Bottom /></el-icon> 自动滚动
-                </el-button>
-                <el-button @click="logText = ''"><el-icon><Delete /></el-icon> 清空</el-button>
-              </el-button-group>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span><el-icon><Document /></el-icon> 训练日志</span>
+                <el-tag size="small" type="info">
+                  {{ displayedLogStats.total }} 行 ({{ displayedLogStats.epochLines }} epoch)
+                </el-tag>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <el-radio-group v-model="logFilterMode" size="small">
+                  <el-radio-button value="smart">智能显示</el-radio-button>
+                  <el-radio-button value="epoch-only">仅Epoch</el-radio-button>
+                  <el-radio-button value="full">全部</el-radio-button>
+                </el-radio-group>
+                <el-button-group size="small">
+                  <el-button @click="autoScroll = !autoScroll" :type="autoScroll ? 'primary' : ''">
+                    <el-icon><Bottom /></el-icon> 自动滚动
+                  </el-button>
+                  <el-button @click="clearLogs"><el-icon><Delete /></el-icon> 清空</el-button>
+                </el-button-group>
+              </div>
             </div>
           </template>
           <div
             ref="logContainer"
             style="flex:1;background:#1e1e1e;color:#d4d4d4;font-family:'Consolas','Monaco','Courier New',monospace;font-size:13px;padding:12px;border-radius:4px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.5;"
-          >{{ logText || '等待日志输出...' }}</div>
+          >{{ displayedLogs || '等待日志输出...' }}</div>
         </el-card>
       </div>
     </el-drawer>
@@ -391,10 +403,16 @@ const selectedJob = ref(null)
 const logText = ref('')
 const logContainer = ref(null)
 const autoScroll = ref(true)
+const logFilterMode = ref('smart') // 'full', 'smart', 'epoch-only'
 let wsConn = null
 let monitorRefreshTimer = null
 
 const chartData = ref({ epochs: [], loss: [], accuracy: [] })
+
+// Log filtering for performance
+const logLines = ref([]) // Store all log lines
+const MAX_HEAD_LINES = 200
+const MAX_TAIL_LINES = 200
 
 // Monitor-specific metrics
 const monitorProgress = computed(() => {
@@ -420,6 +438,36 @@ const displayHyperparams = computed(() => {
     }
   }
   return filtered
+})
+
+// Filtered logs for display - improves performance with large logs
+const displayedLogs = computed(() => {
+  if (logFilterMode.value === 'full') {
+    return logText.value
+  } else if (logFilterMode.value === 'epoch-only') {
+    // Only show EPOCH lines for compact view
+    return logLines.value
+      .filter(line => line.includes('[EPOCH'))
+      .join('\n')
+  } else {
+    // Smart mode: show first 200 + last 200 lines
+    const lines = logLines.value
+    if (lines.length <= MAX_HEAD_LINES + MAX_TAIL_LINES) {
+      return lines.join('\n')
+    }
+    const head = lines.slice(0, MAX_HEAD_LINES)
+    const tail = lines.slice(-MAX_TAIL_LINES)
+    const omitted = lines.length - MAX_HEAD_LINES - MAX_TAIL_LINES
+    return head.join('\n') +
+           `\n\n... [已省略 ${omitted} 行中间日志以提升性能] ...\n\n` +
+           tail.join('\n')
+  }
+})
+
+const displayedLogStats = computed(() => {
+  const total = logLines.value.length
+  const epochLines = logLines.value.filter(line => line.includes('[EPOCH')).length
+  return { total, epochLines }
 })
 
 // Enhanced chart options
@@ -544,7 +592,21 @@ const statusLabel = (s) => ({
 
 const fmtTime = (t, short = false) => {
   if (!t) return '-'
-  const date = new Date(t)
+  // Parse the timestamp - handle both ISO strings and Unix timestamps
+  let date
+  if (typeof t === 'string') {
+    // If timestamp doesn't include timezone info, treat as UTC
+    if (!t.includes('Z') && !t.includes('+') && !t.includes('-', 10)) {
+      date = new Date(t + 'Z')
+    } else {
+      date = new Date(t)
+    }
+  } else {
+    date = new Date(t)
+  }
+
+  if (isNaN(date.getTime())) return '-'
+
   if (short) {
     return date.toLocaleString('zh-CN', {
       month: '2-digit',
@@ -558,8 +620,34 @@ const fmtTime = (t, short = false) => {
 
 const formatDuration = (job) => {
   if (!job.started_at) return '-'
-  const start = new Date(job.started_at).getTime()
-  const end = job.finished_at ? new Date(job.finished_at).getTime() : Date.now()
+
+  // Parse timestamps properly
+  let start
+  if (typeof job.started_at === 'string') {
+    if (!job.started_at.includes('Z') && !job.started_at.includes('+') && !job.started_at.includes('-', 10)) {
+      start = new Date(job.started_at + 'Z').getTime()
+    } else {
+      start = new Date(job.started_at).getTime()
+    }
+  } else {
+    start = new Date(job.started_at).getTime()
+  }
+
+  let end
+  if (job.finished_at) {
+    if (typeof job.finished_at === 'string') {
+      if (!job.finished_at.includes('Z') && !job.finished_at.includes('+') && !job.finished_at.includes('-', 10)) {
+        end = new Date(job.finished_at + 'Z').getTime()
+      } else {
+        end = new Date(job.finished_at).getTime()
+      }
+    } else {
+      end = new Date(job.finished_at).getTime()
+    }
+  } else {
+    end = Date.now()
+  }
+
   const duration = Math.floor((end - start) / 1000) // seconds
 
   const hours = Math.floor(duration / 3600)
@@ -808,6 +896,7 @@ const _parseEpoch = (line) => {
 const openMonitor = async (row) => {
   selectedJob.value = row
   logText.value = ''
+  logLines.value = []
   chartData.value = { epochs: [], loss: [], accuracy: [] }
   monitorDrawerVisible.value = true
 
@@ -815,7 +904,8 @@ const openMonitor = async (row) => {
   try {
     const res = await getJobLogs(row.id)
     logText.value = res.data
-    for (const line of res.data.split('\n')) {
+    logLines.value = res.data.split('\n').filter(line => line.trim())
+    for (const line of logLines.value) {
       const ep = _parseEpoch(line)
       if (ep) {
         chartData.value.epochs.push(ep.epoch)
@@ -833,6 +923,11 @@ const openMonitor = async (row) => {
     _connectWs(row.id)
     _startMonitorRefresh()
   }
+}
+
+const clearLogs = () => {
+  logText.value = ''
+  logLines.value = []
 }
 
 const _startMonitorRefresh = () => {
@@ -892,7 +987,14 @@ const _connectWs = (jobId) => {
         return
       }
       if (msg.type === 'log') {
+        // Append to full log text for full mode
         logText.value += msg.line
+
+        // Append to log lines array for efficient filtering
+        const newLine = msg.line.trim()
+        if (newLine) {
+          logLines.value.push(newLine)
+        }
 
         // Parse and update metrics in real-time
         const ep = _parseEpoch(msg.line)
@@ -922,7 +1024,7 @@ const _connectWs = (jobId) => {
           }
         }
 
-        // Auto-scroll to bottom if enabled
+        // Auto-scroll to bottom if enabled (debounced for performance)
         if (autoScroll.value) {
           nextTick(() => {
             if (logContainer.value) {
@@ -934,6 +1036,10 @@ const _connectWs = (jobId) => {
     } catch (e) {
       // If not JSON, append as plain text
       logText.value += ev.data
+      const newLine = ev.data.trim()
+      if (newLine) {
+        logLines.value.push(newLine)
+      }
 
       // Auto-scroll for plain text too
       if (autoScroll.value) {

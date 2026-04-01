@@ -107,6 +107,13 @@ def _train_yolo(args, config):
     if isinstance(imgsz, list):
         imgsz = imgsz[0]
 
+    # Auto-detect optimal workers count based on CPU cores
+    # Default: max(8, cpu_count * 1.5) for better GPU utilization
+    cpu_count = os.cpu_count() or 8
+    default_workers = max(8, int(cpu_count * 1.5))
+    workers = config.get("workers", default_workers)
+    print(f"[INFO] DataLoader workers: {workers} (CPU cores: {cpu_count})", flush=True)
+
     train_kwargs = dict(
         data=data_yaml,
         epochs=config.get("epochs", 100),
@@ -120,7 +127,7 @@ def _train_yolo(args, config):
         warmup_momentum=config.get("warmup_momentum", 0.8),
         warmup_bias_lr=config.get("warmup_bias_lr", 0.1),
         patience=config.get("patience", 20),
-        workers=config.get("workers", 4),
+        workers=workers,
         device=device,
         amp=config.get("amp", True),
         augment=config.get("augment", True),
