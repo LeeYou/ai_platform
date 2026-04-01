@@ -1,9 +1,8 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
 python-multipart==0.0.22
-# Use onnxruntime-gpu for GPU support (falls back to CPU if CUDA unavailable)
-# Production principle: GPU-first, CPU fallback
-onnxruntime-gpu==1.18.1
+# Production principle: C++ SO inference only (NO Python ONNXRuntime)
+# onnxruntime-gpu is NOT needed - inference is done via libai_runtime.so
 numpy>=1.24.0
 opencv-python-headless>=4.10.0
 Pillow>=10.0.0

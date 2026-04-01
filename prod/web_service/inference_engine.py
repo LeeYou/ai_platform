@@ -1,7 +1,21 @@
-"""Production inference engine — Python layer wrapping ORT (and optionally C runtime).
+"""
+DEPRECATED: This file is no longer used in production.
+
+Production inference MUST use C++ SO libraries via ctypes (ai_runtime_ctypes.py).
+
+This Python ONNXRuntime implementation was incorrectly used and has been replaced
+with the correct architecture:
+  - Layer 1: HTTP Service (Python FastAPI) → main.py
+  - Layer 2: Runtime Layer (Python ctypes → libai_runtime.so) → ai_runtime_ctypes.py
+  - Layer 3: Capability Plugins (C++ SO files)
+  - Layer 4: Model Packages (ONNX files)
+
+DO NOT USE THIS FILE IN PRODUCTION.
 
 Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agilestar.cn
 """
+
+# This file is kept for reference only and should not be imported by main.py
 
 from __future__ import annotations
 

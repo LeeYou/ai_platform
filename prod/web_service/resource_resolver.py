@@ -46,6 +46,35 @@ def resolve_lib_path(capability: str) -> str | None:
     return None
 
 
+def resolve_runtime_so_path() -> str | None:
+    """Return path to libai_runtime.so — mount takes priority over built-in."""
+    for base in (MOUNT_ROOT, BUILTIN_ROOT):
+        path = os.path.join(base, "libs", "libai_runtime.so")
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def resolve_libs_dir() -> str:
+    """Return libs directory path — mount takes priority over built-in."""
+    for base in (MOUNT_ROOT, BUILTIN_ROOT):
+        libs_dir = os.path.join(base, "libs")
+        if os.path.isdir(libs_dir):
+            return libs_dir
+    # Fallback to built-in even if directory doesn't exist
+    return os.path.join(BUILTIN_ROOT, "libs")
+
+
+def resolve_models_dir() -> str:
+    """Return models directory path — mount takes priority over built-in."""
+    for base in (MOUNT_ROOT, BUILTIN_ROOT):
+        models_dir = os.path.join(base, "models")
+        if os.path.isdir(models_dir):
+            return models_dir
+    # Fallback to built-in even if directory doesn't exist
+    return os.path.join(BUILTIN_ROOT, "models")
+
+
 def list_available_capabilities() -> list[dict]:
     """Scan models directories (mount + built-in) and return capability metadata."""
     seen: set[str] = set()

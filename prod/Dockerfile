@@ -65,6 +65,14 @@ COPY --from=frontend-builder /app/prod/frontend/dist prod/frontend/dist
 # ---------------------------------------------------------------------------
 # Default resource directories (overridable via volume mounts)
 # ---------------------------------------------------------------------------
+# IMPORTANT: Production service requires libai_runtime.so and capability SO files
+# These must be compiled using the ai-builder service (see docs/design/build_service.md)
+# and placed in either:
+#   - Built-in path: /app/libs/
+#   - Mount path:    /mnt/ai_platform/libs/
+# Models must be trained/exported and placed in:
+#   - Built-in path: /app/models/
+#   - Mount path:    /mnt/ai_platform/models/
 RUN mkdir -p /app/models /app/libs /app/licenses /mnt/ai_platform /mnt/ai_platform/pipelines
 
 # ---------------------------------------------------------------------------

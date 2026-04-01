@@ -70,13 +70,24 @@ try:
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel
 
-    from inference_engine import ProdInferenceEngine
+    from ai_runtime_ctypes import (
+        AI_OK,
+        AI_ERR_CAPABILITY_MISSING,
+        AI_ERR_LICENSE_EXPIRED,
+        AI_ERR_LICENSE_INVALID,
+        destroy_runtime,
+        get_runtime,
+        init_runtime,
+    )
     from resource_resolver import (
         LICENSE_PATH,
         PUBKEY_PATH,
         TRUSTED_PUBKEY_SHA256,
         list_available_capabilities,
+        resolve_libs_dir,
         resolve_model_dir,
+        resolve_models_dir,
+        resolve_runtime_so_path,
     )
     from pipeline_engine import (
         delete_pipeline_file,
@@ -97,22 +108,37 @@ except Exception:
 ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme")
 
 # ---------------------------------------------------------------------------
-# Capability engine registry
+# Runtime initialization
 # ---------------------------------------------------------------------------
 
-_engines: dict[str, ProdInferenceEngine] = {}
+def _init_runtime() -> bool:
+    """Initialize C++ Runtime layer with SO directory, models, and license."""
+    runtime_so = resolve_runtime_so_path()
+    if not runtime_so:
+        logger.error("libai_runtime.so not found in mount or built-in paths")
+        logger.error("Production service REQUIRES C++ Runtime SO — cannot start")
+        return False
 
+    libs_dir = resolve_libs_dir()
+    models_dir = resolve_models_dir()
 
-def _load_engines() -> None:
-    caps = list_available_capabilities()
-    for cap_info in caps:
-        cap  = cap_info["capability"]
-        mdir = cap_info["model_dir"]
-        try:
-            _engines[cap] = ProdInferenceEngine(cap, mdir)
-            logger.info("Loaded capability: %s v%s from %s", cap, _engines[cap].version, mdir)
-        except Exception as exc:
-            logger.error("Failed to load %s: %s", cap, exc)
+    logger.info("Initializing C++ Runtime:")
+    logger.info("  Runtime SO:    %s", runtime_so)
+    logger.info("  Libs dir:      %s", libs_dir)
+    logger.info("  Models dir:    %s", models_dir)
+    logger.info("  License path:  %s", LICENSE_PATH)
+
+    success = init_runtime(runtime_so, libs_dir, models_dir, LICENSE_PATH)
+    if not success:
+        logger.error("Failed to initialize C++ Runtime — check logs above")
+        return False
+
+    runtime = get_runtime()
+    if runtime:
+        caps = runtime.get_capabilities()
+        logger.info("Runtime loaded %d capabilities: %s", len(caps), [c["name"] for c in caps])
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +349,14 @@ def _check_license(capability: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _load_engines()
-    logger.info("Production AI service started — %d capabilities loaded", len(_engines))
+    if not _init_runtime():
+        logger.critical("Failed to initialize C++ Runtime — exiting")
+        sys.exit(1)
+    runtime = get_runtime()
+    caps = runtime.get_capabilities() if runtime else []
+    logger.info("Production AI service started — %d capabilities loaded", len(caps))
     yield
+    destroy_runtime()
     logger.info("Production AI service stopped")
 
 
@@ -435,27 +466,44 @@ def _error_response(code: int, message: str, capability: str = "") -> JSONRespon
 
 @app.get("/api/v1/health", tags=["system"])
 def health():
-    lic = _license_status()
-    caps = [
-        {
-            "capability":    cap,
-            "version":       eng.version,
-            "status":        "loaded",
-        }
-        for cap, eng in _engines.items()
-    ]
+    """Health check endpoint with capabilities and license status."""
+    runtime = get_runtime()
 
-    # Detect GPU availability by checking if ORT has CUDAExecutionProvider
+    # Get license status from C++ Runtime if available
+    if runtime:
+        lic_from_runtime = runtime.get_license_status()
+        if lic_from_runtime:
+            lic = lic_from_runtime
+        else:
+            # Fallback to Python license check
+            lic = _license_status()
+    else:
+        lic = _license_status()
+
+    # Get capabilities from C++ Runtime
+    caps = []
+    if runtime:
+        caps_data = runtime.get_capabilities()
+        caps = [
+            {
+                "capability": cap_info.get("name", ""),
+                "version":    cap_info.get("version", "unknown"),
+                "status":     cap_info.get("status", "loaded"),
+            }
+            for cap_info in caps_data
+        ]
+
+    # GPU availability detection - check CUDA device files
     gpu_available = False
     try:
-        import onnxruntime as ort  # type: ignore
-        avail_providers = ort.get_available_providers()
-        gpu_available = "CUDAExecutionProvider" in avail_providers
+        # Check if NVIDIA GPU device files exist (more reliable than ORT check)
+        import os
+        gpu_available = os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version")
     except Exception:
         pass
 
     return {
-        "status":        "healthy" if _engines else "degraded",
+        "status":        "healthy" if caps else "degraded",
         "capabilities":  caps,
         "license":       lic,
         "server_time":   datetime.now(CST).isoformat(),
@@ -465,16 +513,34 @@ def health():
 
 @app.get("/api/v1/capabilities", tags=["system"])
 def list_capabilities():
-    return {
-        "capabilities": [
-            {
-                "capability": cap,
-                "version":    eng.version,
-                "manifest":   eng.manifest,
-            }
-            for cap, eng in _engines.items()
-        ]
-    }
+    """List all loaded capabilities with their versions and manifests."""
+    runtime = get_runtime()
+    if not runtime:
+        return {"capabilities": []}
+
+    caps_data = runtime.get_capabilities()
+    result = []
+
+    for cap_info in caps_data:
+        cap_name = cap_info.get("name", "")
+        # Try to read manifest from model directory
+        model_dir = resolve_model_dir(cap_name)
+        manifest = {}
+        if model_dir:
+            manifest_path = os.path.join(model_dir, "manifest.json")
+            try:
+                with open(manifest_path, encoding="utf-8") as f:
+                    manifest = json.load(f)
+            except Exception:
+                pass
+
+        result.append({
+            "capability": cap_name,
+            "version":    cap_info.get("version", "unknown"),
+            "manifest":   manifest,
+        })
+
+    return {"capabilities": result}
 
 
 # ---------------------------------------------------------------------------
@@ -496,18 +562,22 @@ async def infer(
     image: UploadFile = File(...),
     options: Optional[str] = Form(default=None),
 ):
-    """Run inference for a specific AI capability."""
+    """Run inference for a specific AI capability using C++ Runtime."""
     # License check
     _check_license(capability)
 
-    if capability not in _engines:
+    runtime = get_runtime()
+    if not runtime:
         raise HTTPException(
-            status_code=404,
-            detail={"code": 2001, "message": "Capability not found", "capability": capability},
+            status_code=500,
+            detail={"code": 5001, "message": "Runtime not initialized"},
         )
 
-    raw  = await image.read()
-    img  = _decode_image(raw)
+    # Decode image
+    raw = await image.read()
+    img = _decode_image(raw)
+
+    # Parse options (currently unused by C++ API but can be passed in future)
     opts = {}
     if options:
         try:
@@ -515,16 +585,82 @@ async def infer(
         except Exception:
             pass
 
-    engine = _engines[capability]
-    t0     = time.perf_counter()
+    # Acquire inference instance from pool (30 second timeout)
+    t0 = time.perf_counter()
+    handle = runtime.acquire(capability, timeout_ms=30000)
+    if not handle:
+        logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
+        return _error_response(3001, "Instance pool timeout or capability not available", capability)
+
     try:
-        result = engine.infer(img, opts)
+        # Prepare image data for C API
+        import cv2
+        height, width, channels = img.shape
+        img_bytes = img.tobytes()
+
+        # Call AiInfer via ctypes (need to add this method to AiRuntime class)
+        # For now, we'll use a workaround: create capability instance directly
+        # TODO: Implement AiInfer wrapper in AiRuntime class
+        from ai_runtime_ctypes import AiCapability, AiImage as CAiImage
+        import ctypes
+
+        # Get capability SO path
+        from resource_resolver import resolve_lib_path
+        cap_so = resolve_lib_path(capability)
+        if not cap_so:
+            runtime.release(handle)
+            return _error_response(2001, f"Capability SO not found: {capability}", capability)
+
+        # Load capability SO and call AiInfer
+        cap = AiCapability(cap_so)
+        model_dir = resolve_model_dir(capability)
+        if not model_dir:
+            runtime.release(handle)
+            return _error_response(2001, f"Model directory not found: {capability}", capability)
+
+        if not cap.create(model_dir):
+            runtime.release(handle)
+            return _error_response(2002, f"Failed to create capability instance", capability)
+
+        init_ret = cap.init()
+        if init_ret != AI_OK:
+            cap.destroy()
+            runtime.release(handle)
+            return _error_response(init_ret, f"Failed to initialize capability", capability)
+
+        # Run inference
+        result = cap.infer(img_bytes, width, height, channels)
+        cap.destroy()
+
+        if result.get("error_code", 0) != AI_OK:
+            runtime.release(handle)
+            return _error_response(
+                result.get("error_code", 5001),
+                result.get("error_msg", "Inference failed"),
+                capability
+            )
+
+        # Success
+        elapsed = (time.perf_counter() - t0) * 1000.0
+
+        # Extract version from manifest
+        manifest_path = os.path.join(model_dir, "manifest.json")
+        version = "unknown"
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+                version = manifest.get("model_version", "unknown")
+        except Exception:
+            pass
+
+        return _success(capability, version, result.get("result", {}), round(elapsed, 2))
+
     except Exception as exc:
         logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
         return _error_response(2004, f"Inference failed: {exc}", capability)
-
-    elapsed = (time.perf_counter() - t0) * 1000.0
-    return _success(capability, engine.version, result, round(elapsed, 2))
+    finally:
+        # Always release the instance back to pool
+        runtime.release(handle)
 
 
 # ---------------------------------------------------------------------------
@@ -541,35 +677,51 @@ def _verify_admin(request: Request) -> None:
 
 @app.post("/api/v1/admin/reload", tags=["admin"])
 async def reload_all(request: Request):
+    """Trigger hot reload for all capabilities via C++ Runtime."""
     _verify_admin(request)
+    runtime = get_runtime()
+    if not runtime:
+        raise HTTPException(status_code=500, detail="Runtime not initialized")
+
+    caps = runtime.get_capabilities()
     reloaded = []
     failed   = []
-    for cap in list(_engines.keys()):
-        mdir = resolve_model_dir(cap)
-        if not mdir:
-            failed.append(cap)
-            continue
-        try:
-            _engines[cap] = ProdInferenceEngine(cap, mdir)
-            reloaded.append(cap)
-        except Exception as exc:
-            failed.append(cap)
-            logger.error("Reload %s failed: %s", cap, exc)
+
+    for cap_info in caps:
+        cap_name = cap_info.get("name", "")
+        ret = runtime.reload(cap_name)
+        if ret == AI_OK:
+            reloaded.append(cap_name)
+        else:
+            failed.append(cap_name)
+            logger.error("Reload %s failed with error code %d", cap_name, ret)
+
     return {"reloaded": reloaded, "failed": failed}
 
 
 @app.post("/api/v1/admin/reload/{capability}", tags=["admin"])
 async def reload_capability(capability: str, request: Request):
+    """Trigger hot reload for a specific capability via C++ Runtime."""
     _verify_admin(request)
-    mdir = resolve_model_dir(capability)
-    if not mdir:
-        raise HTTPException(status_code=404,
-                            detail=f"Model directory not found for {capability}")
-    try:
-        _engines[capability] = ProdInferenceEngine(capability, mdir)
-        return {"reloaded": capability, "version": _engines[capability].version}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    runtime = get_runtime()
+    if not runtime:
+        raise HTTPException(status_code=500, detail="Runtime not initialized")
+
+    ret = runtime.reload(capability)
+    if ret != AI_OK:
+        if ret == AI_ERR_CAPABILITY_MISSING:
+            raise HTTPException(status_code=404, detail=f"Capability not found: {capability}")
+        raise HTTPException(status_code=500, detail=f"Reload failed with error code {ret}")
+
+    # Get updated version info
+    caps = runtime.get_capabilities()
+    version = "unknown"
+    for cap_info in caps:
+        if cap_info.get("name") == capability:
+            version = cap_info.get("version", "unknown")
+            break
+
+    return {"reloaded": capability, "version": version}
 
 
 # ---------------------------------------------------------------------------
