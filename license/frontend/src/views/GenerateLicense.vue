@@ -43,10 +43,7 @@
             <el-checkbox v-model="form.allCapabilities" @change="toggleAll" label="全部功能 (*)" />
             <el-divider direction="vertical" />
             <el-checkbox-group v-model="form.capabilities" :disabled="form.allCapabilities">
-              <el-checkbox value="face_detect" label="face_detect" />
-              <el-checkbox value="handwriting_reco" label="handwriting_reco" />
-              <el-checkbox value="desktop_recapture_detect" label="desktop_recapture_detect" />
-              <el-checkbox value="id_card_classify" label="id_card_classify" />
+              <el-checkbox v-for="cap in capabilityOptions" :key="cap" :value="cap" :label="cap" />
             </el-checkbox-group>
           </el-form-item>
           <el-form-item label="生效日期" prop="valid_from" :rules="[{required:true,message:'请选择生效日期'}]">
@@ -98,12 +95,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getCustomers, getKeys, createLicense, downloadLicense, extractErrorMessage } from '../api/index.js'
+import { getCustomers, getKeys, getCapabilities, createLicense, downloadLicense, extractErrorMessage } from '../api/index.js'
 
 const step = ref(0)
 const submitting = ref(false)
 const customerOptions = ref([])
 const keyPairOptions = ref([])
+const capabilityOptions = ref([])
 const configFormRef = ref()
 const bindFormRef = ref()
 
@@ -202,8 +200,18 @@ async function loadKeyPairs() {
   } catch {}
 }
 
+async function loadCapabilities() {
+  try {
+    const res = await getCapabilities()
+    capabilityOptions.value = res.data?.map(c => c.name) ?? []
+  } catch (e) {
+    ElMessage.warning('加载能力列表失败：' + extractErrorMessage(e))
+  }
+}
+
 onMounted(() => {
   loadCustomers()
   loadKeyPairs()
+  loadCapabilities()
 })
 </script>

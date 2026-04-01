@@ -59,7 +59,7 @@ try:
     from fastapi.staticfiles import StaticFiles
 
     from database import Base, engine
-    from routers import customers, keys, licenses
+    from routers import capabilities, customers, keys, licenses
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -177,6 +177,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 # API routers
+app.include_router(capabilities.router)
 app.include_router(customers.router)
 app.include_router(licenses.router)
 app.include_router(keys.router)

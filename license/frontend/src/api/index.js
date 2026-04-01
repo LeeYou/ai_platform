@@ -91,3 +91,8 @@ export function createKey(data) {
 export function downloadPublicKey(id) {
   return http.get(`/keys/${id}/public`, { responseType: 'blob' })
 }
+
+// Capabilities
+export function getCapabilities() {
+  return http.get('/capabilities')
+}
