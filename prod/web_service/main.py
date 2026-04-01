@@ -192,10 +192,30 @@ def _compute_days_remaining(valid_until: str | None) -> int:
         exp_str = valid_until.replace("Z", "+00:00")
         exp = dt.fromisoformat(exp_str)
         now = dt.now(timezone.utc)
-        diff = (exp - now).days
-        return max(diff, 0)
+        diff = (exp - now).total_seconds() / 86400  # Use total_seconds for precision
+        return int(diff)  # Return integer days (can be negative if expired)
     except Exception:
         return 0
+
+
+def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
+    """
+    Check if license has started based on valid_from.
+    Returns (has_started, days_until_start).
+    """
+    if not valid_from:
+        return (True, 0)  # No valid_from means license is always active
+    try:
+        from datetime import datetime as dt
+        # Parse ISO-8601 (with or without Z/offset)
+        start_str = valid_from.replace("Z", "+00:00")
+        start = dt.fromisoformat(start_str)
+        now = dt.now(timezone.utc)
+        diff = (start - now).total_seconds() / 86400
+        days_until = int(diff)
+        return (days_until <= 0, max(days_until, 0))
+    except Exception:
+        return (True, 0)  # On error, assume started
 
 
 def _license_status() -> dict:
@@ -222,10 +242,22 @@ def _license_status() -> dict:
                 "capabilities":   [],
             }
 
-        # Compute days remaining and detect expiration
+        # Check valid_from (has license started?)
+        has_started, days_until = _check_valid_from(data.get("valid_from"))
+        if not has_started:
+            return {
+                "status":         "not_yet_valid",
+                "license_id":     data.get("license_id"),
+                "valid_until":    data.get("valid_until"),
+                "days_remaining": -days_until,  # Negative means days until start
+                "capabilities":   [],
+            }
+
+        # Compute days remaining until expiration
         days = _compute_days_remaining(data.get("valid_until"))
-        if days <= 0 and data.get("valid_until"):
+        if days < 0:
             status = "expired"
+            days = 0  # Don't return negative days to client
         else:
             status = "active"
 
@@ -250,6 +282,10 @@ def _check_license(capability: str) -> None:
     if lic["status"] == "signature_invalid":
         raise HTTPException(status_code=403,
                             detail={"code": 4005, "message": "License signature invalid",
+                                    "capability": capability})
+    if lic["status"] == "not_yet_valid":
+        raise HTTPException(status_code=403,
+                            detail={"code": 4003, "message": "License not yet valid",
                                     "capability": capability})
     if lic["status"] == "expired":
         raise HTTPException(status_code=403,
