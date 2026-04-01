@@ -192,6 +192,7 @@ def _compute_days_remaining(valid_until: str | None) -> int:
         return 9999  # permanent license
     try:
         from datetime import datetime as dt
+        import math
         # Parse ISO-8601 (with or without Z/offset)
         exp_str = valid_until.replace("Z", "+08:00")
         exp = dt.fromisoformat(exp_str)
@@ -200,7 +201,8 @@ def _compute_days_remaining(valid_until: str | None) -> int:
             exp = exp.replace(tzinfo=CST)
         now = dt.now(CST)
         diff = (exp - now).total_seconds() / 86400  # Use total_seconds for precision
-        return int(diff)  # Return integer days (can be negative if expired)
+        # Use floor to ensure negative fractional days are rounded down (e.g., -0.5 -> -1)
+        return math.floor(diff)
     except Exception:
         return 0
 
@@ -215,6 +217,7 @@ def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
         return (True, 0)  # No valid_from means license is always active
     try:
         from datetime import datetime as dt
+        import math
         # Parse ISO-8601 (with or without Z/offset)
         start_str = valid_from.replace("Z", "+08:00")
         start = dt.fromisoformat(start_str)
@@ -223,7 +226,8 @@ def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
             start = start.replace(tzinfo=CST)
         now = dt.now(CST)
         diff = (start - now).total_seconds() / 86400
-        days_until = int(diff)
+        # Use floor for consistent rounding (e.g., 0.5 days until start -> 0 days)
+        days_until = math.floor(diff)
         return (days_until <= 0, max(days_until, 0))
     except Exception:
         return (True, 0)  # On error, assume started
