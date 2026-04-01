@@ -1,0 +1,104 @@
+# =============================================================================
+# .dockerignore
+# Docker 构建上下文排除文件 - 减少构建上下文大小，提升 COPY 效率
+# =============================================================================
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+**/*.so
+**/*.egg
+**/*.egg-info
+# Python package build artifacts (但不排除顶级 build/ 服务目录)
+# Python build/ directories are typically inside package directories, not at repo root
+# 如需排除特定的 Python build 目录，请使用具体路径，如：train/scripts/*/build
+**/.pytest_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+**/.tox
+**/.nox
+
+# IDEs
+**/.vscode
+**/.idea
+**/.vs
+**/*.swp
+**/*.swo
+**/*~
+**/.DS_Store
+
+# Git
+**/.git
+**/.gitignore
+**/.gitattributes
+
+# Node.js
+**/node_modules
+**/npm-debug.log
+**/yarn-error.log
+**/.npm
+
+# Environment
+**/.env
+**/.env.local
+**/.env.*.local
+**/venv
+**/env
+**/.venv
+
+# Documentation (构建镜像不需要)
+**/docs/**/*.md
+**/README.md
+**/CHANGELOG.md
+**/LICENSE
+
+# Development files
+**/.editorconfig
+**/.prettierrc
+**/.eslintrc*
+**/tsconfig.json
+**/jest.config.js
+
+# Docker files (避免递归复制)
+**/Dockerfile*
+**/docker-compose*.yml
+**/.dockerignore
+
+# Logs
+**/*.log
+**/logs
+
+# Temporary files
+**/tmp
+**/temp
+**/.cache
+
+# CI/CD
+**/.github
+**/.gitlab-ci.yml
+**/.travis.yml
+
+# 特定于项目的排除
+# 训练产出（不需要打包到镜像中）
+**/checkpoints
+**/wandb
+**/mlruns
+
+# 数据集（通过 volume 挂载，不需要打包）
+**/datasets
+
+# 模型文件（通过 volume 挂载）
+**/models
+**/*.pt
+**/*.pth
+**/*.onnx
+**/*.h5
+
+# 测试文件（可选：如果镜像中不需要运行测试）
+# **/tests
+# **/*_test.py
+# **/*_test.js

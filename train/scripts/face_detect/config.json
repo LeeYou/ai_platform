@@ -1,0 +1,33 @@
+{
+  "capability": "face_detect",
+  "capability_name_cn": "人脸检测",
+  "model_arch": "yolov8n",
+  "input_size": [640, 640],
+  "batch_size": 16,
+  "epochs": 100,
+  "lr0": 0.01,
+  "lrf": 0.01,
+  "momentum": 0.937,
+  "weight_decay": 0.0005,
+  "warmup_epochs": 3,
+  "warmup_momentum": 0.8,
+  "warmup_bias_lr": 0.1,
+  "augment": true,
+  "workers": 4,
+  "device": "auto",
+  "amp": true,
+  "patience": 50,
+  "val_split": 0.1,
+  "conf": 0.25,
+  "iou": 0.45,
+  "max_det": 300,
+  "classes": ["face", "occluded_face"],
+  "num_classes": 2,
+  "preprocessing": {
+    "mean": [0.0, 0.0, 0.0],
+    "std": [1.0, 1.0, 1.0],
+    "scale": 0.00392156862745098,
+    "normalize": false,
+    "color_format": "RGB"
+  }
+}

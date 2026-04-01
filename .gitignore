@@ -1,0 +1,117 @@
+# =============================================================================
+# ai_platform .gitignore
+# 覆盖 C++ / Python / Node / CMake / Docker / IDE 常见忽略规则
+# =============================================================================
+
+# --------------- C++ / CMake ---------------
+# Ignore CMake build output directories (NOT the top-level build/ subsystem source)
+cmake-build-*/
+cpp/build/
+license_build/build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+*.o
+*.a
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.ncb
+*.sdf
+*.suo
+*.pch
+*.gch
+install_manifest.txt
+compile_commands.json
+_deps/
+
+# --------------- Python ---------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg
+*.egg-info/
+dist/
+*.dist-info/
+*.whl
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+*.pot
+*.mo
+
+# --------------- Node / Frontend ---------------
+node_modules/
+.npm/
+dist/
+.nuxt/
+.next/
+.output/
+*.local
+.env
+.env.*
+!.env.example
+
+# --------------- Docker ---------------
+*.tar.gz
+*.tar
+
+# --------------- AI / ML ---------------
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.h5
+*.pb
+/data/
+datasets/
+models/
+libs/
+licenses/
+output/
+
+# --------------- IDE ---------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --------------- Secrets / Keys ---------------
+*.pem
+*.key
+*.p12
+*.pfx
+private_key*
+secret*
+
+# --------------- Logs ---------------
+logs/
+*.log

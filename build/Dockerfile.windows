@@ -1,0 +1,99 @@
+# =============================================================================
+# build/Dockerfile.windows
+# Windows x86_64 交叉编译镜像（MinGW-w64 + CMake + ONNXRuntime + OpenSSL）
+# 两阶段构建：Node.js 编译前端 + Ubuntu 交叉编译环境运行后端
+# 镜像名：agilestar/ai-builder-windows:latest
+#
+# 说明：此镜像在 Linux 宿主机上运行，使用 MinGW-w64 交叉编译器生成
+#       Windows x86_64 DLL / EXE。不需要 Windows 宿主机或 Windows 容器。
+# =============================================================================
+
+# ─── Stage 1: Frontend builder ──────────────────────────────────────────────
+FROM node:18-slim AS frontend-builder
+
+WORKDIR /app
+COPY build/frontend/ build/frontend/
+RUN cd build/frontend && npm install && npm run build
+
+# ─── Stage 2: Runtime ───────────────────────────────────────────────────────
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+LABEL platform="windows/amd64"
+LABEL description="Cross-compile AI capability DLLs for Windows x86_64 using MinGW-w64"
+
+# ---------------------------------------------------------------------------
+# Build toolchain (MinGW-w64 cross-compiler)
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    ninja-build \
+    mingw-w64 \
+    libssl-dev \
+    curl \
+    ca-certificates \
+    python3 \
+    python3-pip \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# ONNXRuntime (CPU, Windows x64)
+# ---------------------------------------------------------------------------
+ARG ONNXRUNTIME_VERSION=1.18.1
+RUN curl -fsSL \
+    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip" \
+    -o /tmp/ort.zip \
+    && mkdir -p /opt/onnxruntime-win-x64 \
+    && unzip -q /tmp/ort.zip -d /opt \
+    && mv /opt/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}/* /opt/onnxruntime-win-x64/ \
+    && rm -rf /opt/onnxruntime-win-x64-${ONNXRUNTIME_VERSION} /tmp/ort.zip
+
+ENV ONNXRUNTIME_ROOT=/opt/onnxruntime-win-x64
+
+# ---------------------------------------------------------------------------
+# Default output directory for Windows builds
+# ---------------------------------------------------------------------------
+ARG BUILD_OUTPUT_DIR=/workspace/libs/windows_x86_64
+ENV BUILD_OUTPUT_DIR=${BUILD_OUTPUT_DIR}
+
+# ---------------------------------------------------------------------------
+# CMake cross-compilation toolchain file for MinGW-w64
+# ---------------------------------------------------------------------------
+RUN cat > /opt/mingw-w64-x86_64.cmake << 'EOF'
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR AMD64)
+
+set(CMAKE_C_COMPILER   x86_64-w64-mingw32-gcc)
+set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+set(CMAKE_RC_COMPILER  x86_64-w64-mingw32-windres)
+
+set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+EOF
+
+ENV CMAKE_TOOLCHAIN_FILE=/opt/mingw-w64-x86_64.cmake
+
+# ---------------------------------------------------------------------------
+# FastAPI build management backend
+# ---------------------------------------------------------------------------
+WORKDIR /app
+
+COPY build/backend/requirements.txt build/backend/requirements.txt
+RUN pip install --no-cache-dir -r build/backend/requirements.txt
+
+COPY build/backend/ build/backend/
+COPY cpp/ cpp/
+COPY --from=frontend-builder /app/build/frontend/dist build/frontend/dist
+
+# Ensure log directory exists
+RUN mkdir -p /app/build/backend/data/build_logs
+
+EXPOSE 8004
+
+WORKDIR /app/build/backend
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8004"]

@@ -1,0 +1,16 @@
+# face_detect 训练依赖（YOLOv8n）
+#
+# PyTorch 版本要求（CUDA 11.8 兼容）：
+#   - 使用 torch 2.0-2.4 系列
+#   - 安装时必须指定 cu118 索引
+#   - 详见：docs/cuda_version_standard.md
+torch>=2.0.0,<2.5.0
+torchvision>=0.15.0,<0.20.0
+ultralytics==8.2.0
+onnx>=1.16.0
+onnxruntime>=1.18.0
+onnxslim>=0.1.0
+opencv-python-headless>=4.10.0
+numpy>=1.24.0
+Pillow>=10.0.0
+tqdm>=4.66.0

@@ -1,0 +1,14 @@
+{
+  "capabilities": ["face_detect", "handwriting_reco"],
+  "customer_id": "CUST-001",
+  "customer_name": "Test Customer",
+  "issued_at": "2024-01-01T00:00:00Z",
+  "issuer": "agilestar.cn",
+  "license_id": "LS-20240101-0001",
+  "license_type": "commercial",
+  "machine_fingerprint": "",
+  "max_instances": 4,
+  "valid_from": "2024-01-01T00:00:00Z",
+  "valid_until": "2099-12-31T23:59:59Z",
+  "version_constraint": ">=1.0.0,<2.0.0"
+}

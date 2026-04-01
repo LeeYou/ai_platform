@@ -1,0 +1,50 @@
+# =============================================================================
+# ai_platform .editorconfig
+# UTF-8 / LF 换行 / 统一缩进规则
+# =============================================================================
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# C++ 源码：4 空格缩进（与 clang-format Google 风格一致）
+[*.{c,cc,cpp,cxx,h,hh,hpp,hxx}]
+indent_style = space
+indent_size = 4
+
+# CMake
+[CMakeLists.txt]
+indent_style = space
+indent_size = 4
+
+[*.cmake]
+indent_style = space
+indent_size = 4
+
+# Python：PEP 8 标准 4 空格
+[*.py]
+indent_style = space
+indent_size = 4
+
+# JavaScript / TypeScript / Vue / CSS / HTML：2 空格（前端常用规范）
+[*.{js,ts,jsx,tsx,vue,css,scss,less,html}]
+indent_style = space
+indent_size = 2
+
+# JSON / YAML：2 空格
+[*.{json,yaml,yml}]
+indent_style = space
+indent_size = 2
+
+# Markdown：不截断行尾空格（用于硬换行）
+[*.md]
+trim_trailing_whitespace = false
+
+# Shell
+[*.sh]
+indent_style = space
+indent_size = 4

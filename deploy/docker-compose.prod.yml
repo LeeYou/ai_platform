@@ -1,0 +1,67 @@
+# =============================================================================
+# deploy/docker-compose.prod.yml
+# 生产交付环境：仅生产推理服务（单容器，极简依赖）
+#
+# 使用方法：
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml logs -f prod
+#
+# 前置条件：
+#   1. 宿主机已部署 /data/ai_platform/ 目录结构
+#   2. /data/ai_platform/licenses/license.bin   — 客户授权文件
+#   3. /data/ai_platform/licenses/pubkey.pem    — 客户对应密钥对的公钥（用于签名验证）
+#   4. /data/ai_platform/models/<capability>/current/ 已指向有效模型包
+#   5. /data/ai_platform/libs/<arch>/<capability>/current/ 已放置 SO/DLL
+# =============================================================================
+
+version: "3.9"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "100m"
+    max-file: "10"
+
+services:
+
+  # ─── 生产推理服务 ─────────────────────────────────────────────────────────
+  prod:
+    image: agilestar/ai-prod:latest
+    build:
+      context: ..
+      dockerfile: prod/Dockerfile
+    container_name: ai-prod
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      # 资源覆盖：宿主机挂载优先于镜像内置
+      - /data/ai_platform/models:/mnt/ai_platform/models:ro
+      - /data/ai_platform/libs/${AI_ARCH:-linux_x86_64}:/mnt/ai_platform/libs:ro
+      - /data/ai_platform/licenses:/mnt/ai_platform/licenses:ro
+      # AI 编排 Pipeline 配置
+      - /data/ai_platform/pipelines:/mnt/ai_platform/pipelines:rw
+      # 日志落地
+      - /data/ai_platform/logs/prod:/mnt/ai_platform/logs:rw
+    environment:
+      - TZ=Asia/Shanghai
+      # 实例池参数（可按客户环境覆盖）
+      - AI_MAX_INSTANCES=${AI_MAX_INSTANCES:-4}
+      - AI_ACQUIRE_TIMEOUT_S=${AI_ACQUIRE_TIMEOUT_S:-30}
+      # 管理接口 Token（生产部署时务必设置强随机值）
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
+    # GPU 支持（宿主机有 NVIDIA 驱动时启用，无 GPU 时注释掉此段）
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
