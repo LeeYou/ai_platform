@@ -58,6 +58,7 @@ try:
 
     from database import Base, engine
     from routers import annotations, capabilities, datasets, jobs, models, ws
+    from init_capabilities import register_capabilities_from_configs
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -72,6 +73,10 @@ async def lifespan(app: FastAPI):
     os.makedirs("./data/logs", exist_ok=True)
     os.makedirs("./data/models", exist_ok=True)
     Base.metadata.create_all(bind=engine)
+
+    # Auto-register capabilities from training script configs
+    register_capabilities_from_configs()
+
     logger.info("Train Management service started")
     yield
     logger.info("Train Management service stopped")
