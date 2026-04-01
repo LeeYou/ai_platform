@@ -293,13 +293,12 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
         input_shape.data(),
         input_shape.size());
 
-    std::vector<Ort::Value> out_tensors;
+    std::vector<Ort::Value> out_tensors(1, Ort::Value{nullptr});
     try {
-        out_tensors = ctx->session->Run(
+        ctx->session->Run(
             Ort::RunOptions{nullptr},
-            ctx->input_names.data(),  ctx->input_names.size(),
-            &input_tensor,            1,
-            ctx->output_names.data(), ctx->output_names.size());
+            ctx->input_names.data(),  &input_tensor,           ctx->input_names.size(),
+            ctx->output_names.data(), out_tensors.data(),      ctx->output_names.size());
     } catch (const Ort::Exception& ex) {
         _set_result(output, AI_ERR_INFER_FAILED, nullptr, ex.what());
         return AI_ERR_INFER_FAILED;

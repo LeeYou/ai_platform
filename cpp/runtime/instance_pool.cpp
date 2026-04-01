@@ -19,10 +19,6 @@
 
 namespace agilestar {
 
-// Forward declaration from capability_loader
-struct CapabilityEntry;
-const CapabilityEntry* agilestar_loader_find(const char* name);
-
 // ---------------------------------------------------------------------------
 // PoolEntry — one idle handle + which capability it belongs to
 // ---------------------------------------------------------------------------

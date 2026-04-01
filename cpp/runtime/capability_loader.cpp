@@ -19,27 +19,6 @@
 namespace agilestar {
 
 // ---------------------------------------------------------------------------
-// CapabilityEntry — one loaded SO
-// ---------------------------------------------------------------------------
-
-struct CapabilityEntry {
-    std::string name;
-    std::string so_path;
-    std::string version;
-    void*       dl_handle = nullptr;
-
-    // Function pointers resolved via dlsym
-    int32_t  (*fn_GetAbiVersion)(void)                                          = nullptr;
-    AiHandle (*fn_Create)(const char*, const char*)                             = nullptr;
-    int32_t  (*fn_Init)(AiHandle)                                               = nullptr;
-    int32_t  (*fn_Infer)(AiHandle, const AiImage*, AiResult*)                  = nullptr;
-    int32_t  (*fn_Reload)(AiHandle, const char*)                               = nullptr;
-    int32_t  (*fn_GetInfo)(AiHandle, char*, int32_t)                           = nullptr;
-    void     (*fn_Destroy)(AiHandle)                                            = nullptr;
-    void     (*fn_FreeResult)(AiResult*)                                        = nullptr;
-};
-
-// ---------------------------------------------------------------------------
 // CapabilityRegistry — global table of loaded capabilities
 // ---------------------------------------------------------------------------
 
