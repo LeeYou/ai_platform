@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.26)
+cmake_minimum_required(VERSION 3.20)
 
 # JNI 接口层（libai_jni.so）
 # Phase 6 实现。此处为骨架占位。

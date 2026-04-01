@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.26)
+cmake_minimum_required(VERSION 3.20)
 
 # Runtime 库（libai_runtime.so）
 # 职责：动态加载能力 SO、管理实例池、License 校验缓存、模型包验证

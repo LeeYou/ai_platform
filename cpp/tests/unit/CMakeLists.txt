@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.26)
+cmake_minimum_required(VERSION 3.20)
 
 # 单元测试（Google Test）
 # Phase 3 起陆续添加测试用例
