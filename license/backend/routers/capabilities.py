@@ -16,7 +16,7 @@ async def list_capabilities():
     """Fetch capability list from train service."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{TRAIN_SERVICE_URL}/api/v1/capabilities")
+            response = await client.get(f"{TRAIN_SERVICE_URL}/api/v1/capabilities/")
             response.raise_for_status()
             capabilities = response.json()
 
