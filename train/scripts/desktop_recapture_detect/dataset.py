@@ -24,16 +24,34 @@ class RecaptureDataset(Dataset):
     LABEL_REAL = 0
     LABEL_FAKE = 1
 
-    def __init__(self, samples: List[Tuple[str, int]], transform=None):
+    def __init__(self, samples: List[Tuple[str, int]], transform=None, cache_images: bool = False):
         self.samples   = samples   # [(path_str, label_int), ...]
         self.transform = transform
+        self.cache_images = cache_images
+        self.image_cache = {}  # Cache for preloaded images
+
+        # Preload all images into memory if caching is enabled
+        if self.cache_images:
+            print(f"  Preloading {len(samples)} images into RAM...", flush=True)
+            for idx, (path, _) in enumerate(samples):
+                try:
+                    self.image_cache[idx] = Image.open(path).convert("RGB")
+                except Exception as e:
+                    print(f"  [WARN] Failed to cache {path}: {e}", flush=True)
+            print(f"  Cached {len(self.image_cache)}/{len(samples)} images successfully", flush=True)
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int):
         path, label = self.samples[idx]
-        img = Image.open(path).convert("RGB")
+
+        # Use cached image if available, otherwise load from disk
+        if self.cache_images and idx in self.image_cache:
+            img = self.image_cache[idx].copy()  # Copy to avoid modifying cached version
+        else:
+            img = Image.open(path).convert("RGB")
+
         if self.transform:
             img = self.transform(img)
         return img, torch.tensor(label, dtype=torch.float32)
@@ -97,8 +115,13 @@ def group_split_samples(samples: List[Tuple[str, int]], train_ratio: float,
 def build_dataloaders(dataset_root: str, image_size: int = 224,
                       train_ratio: float = 0.8, batch_size: int = 32,
                       real_dir: str = "real", fake_dir: str = "fake",
-                      num_workers: int = 0) -> Tuple[DataLoader, DataLoader]:
-    """Build train and val dataloaders from a dataset directory."""
+                      num_workers: int = 0, cache_images: bool = False) -> Tuple[DataLoader, DataLoader]:
+    """Build train and val dataloaders from a dataset directory.
+
+    Args:
+        cache_images: If True, preload all images into RAM for faster training.
+                     Requires sufficient memory (~dataset_size * avg_image_size).
+    """
 
     # Docker containers with small /dev/shm frequently crash with bus errors
     if num_workers > 0:
@@ -130,8 +153,11 @@ def build_dataloaders(dataset_root: str, image_size: int = 224,
         transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
     ])
 
-    train_ds = RecaptureDataset(train_samples, transform=train_tf)
-    val_ds   = RecaptureDataset(val_samples,   transform=val_tf)
+    if cache_images:
+        print("Dataset caching enabled - preloading images into RAM", flush=True)
+
+    train_ds = RecaptureDataset(train_samples, transform=train_tf, cache_images=cache_images)
+    val_ds   = RecaptureDataset(val_samples,   transform=val_tf, cache_images=cache_images)
 
     loader_kwargs = dict(
         batch_size=batch_size,

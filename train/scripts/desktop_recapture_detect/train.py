@@ -256,10 +256,15 @@ def train(args, config):
     workers = config.get("workers", default_workers)
     print(f"Workers: {workers} (CPU cores: {cpu_count})", flush=True)
 
+    # Enable dataset caching to preload images into RAM for faster training
+    cache_images = config.get("cache", True)
+    if cache_images:
+        print("Dataset caching enabled - images will be preloaded into RAM", flush=True)
+
     train_loader, val_loader = build_dataloaders(
         args.dataset, image_size=image_size,
         train_ratio=train_ratio, batch_size=batch_size,
-        num_workers=workers)
+        num_workers=workers, cache_images=cache_images)
 
     model = DesktopRecaptureDetector(pretrained=True).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6

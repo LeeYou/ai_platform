@@ -114,6 +114,13 @@ def _train_yolo(args, config):
     workers = config.get("workers", default_workers)
     print(f"[INFO] DataLoader workers: {workers} (CPU cores: {cpu_count})", flush=True)
 
+    # Enable dataset caching to preload images into RAM for faster training
+    # cache=True: cache images in RAM (requires sufficient memory)
+    # cache=False: load from disk each time (slower but lower memory usage)
+    cache_images = config.get("cache", True)
+    if cache_images:
+        print("[INFO] Dataset caching enabled - images will be preloaded into RAM", flush=True)
+
     train_kwargs = dict(
         data=data_yaml,
         epochs=config.get("epochs", 100),
@@ -131,6 +138,7 @@ def _train_yolo(args, config):
         device=device,
         amp=config.get("amp", True),
         augment=config.get("augment", True),
+        cache=cache_images,
         project=ckpt_dir,
         name="yolo_run",
         exist_ok=True,
