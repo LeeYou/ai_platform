@@ -1,5 +1,6 @@
 """CRUD helpers for the training management backend."""
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
