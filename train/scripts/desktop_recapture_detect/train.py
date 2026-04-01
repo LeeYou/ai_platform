@@ -262,6 +262,18 @@ def train(args, config):
     else:
         print(f"Device : {device}", flush=True)
 
+    # Validate dataset directory exists
+    if not os.path.exists(args.dataset):
+        print(f"[ERROR] Dataset directory not found: {args.dataset}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    real_dir = os.path.join(args.dataset, "real")
+    fake_dir = os.path.join(args.dataset, "fake")
+    if not os.path.exists(real_dir) or not os.path.exists(fake_dir):
+        print(f"[ERROR] Dataset must contain 'real/' and 'fake/' subdirectories", file=sys.stderr, flush=True)
+        print(f"[ERROR] Found: real={os.path.exists(real_dir)}, fake={os.path.exists(fake_dir)}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
     # Support both 'input_size' (native) and 'imgsz' (from frontend UI)
     image_size = config.get("input_size", config.get("imgsz", [224, 224]))
     if isinstance(image_size, list):
@@ -284,10 +296,16 @@ def train(args, config):
     if cache_images:
         print("Dataset caching enabled - images will be preloaded into RAM", flush=True)
 
-    train_loader, val_loader = build_dataloaders(
-        args.dataset, image_size=image_size,
-        train_ratio=train_ratio, batch_size=batch_size,
-        num_workers=workers, cache_images=cache_images)
+    try:
+        train_loader, val_loader = build_dataloaders(
+            args.dataset, image_size=image_size,
+            train_ratio=train_ratio, batch_size=batch_size,
+            num_workers=workers, cache_images=cache_images)
+    except Exception as e:
+        print(f"[ERROR] Failed to build dataloaders: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
     model = DesktopRecaptureDetector(pretrained=True).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
@@ -363,6 +381,7 @@ def train(args, config):
     print(f"  Best val AUC-ROC : {best_auc:.4f}", flush=True)
     print(f"  Best checkpoint  : {os.path.join(ckpt_dir, 'best.pth')}", flush=True)
     print(f"{'='*60}", flush=True)
+    print("[DONE] Training completed successfully", flush=True)
 
 
 def _simulate_training(args, config):
@@ -402,8 +421,14 @@ def main():
     try:
         import torch  # noqa: F401
         train(args, config)
-    except ImportError:
+    except ImportError as e:
+        print(f"[WARN] PyTorch not available: {e}", flush=True)
         _simulate_training(args, config)
+    except Exception as e:
+        print(f"[ERROR] Training failed: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
