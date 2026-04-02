@@ -31,6 +31,8 @@ DATASETS_ROOT = os.getenv("DATASETS_ROOT", "/workspace/datasets")
 LOG_DIR       = os.getenv("LOG_DIR", "/workspace/logs")
 TEST_LOG_DIR  = "./data/test_logs"
 TEST_STATE_FILE = "./data/test_jobs.json"
+TEST_BATCH_MAX_CONCURRENCY = max(1, int(os.getenv("TEST_BATCH_MAX_CONCURRENCY", "3")))
+TEST_BATCH_TIMEOUT_SECONDS = max(1, int(os.getenv("TEST_BATCH_TIMEOUT_SECONDS", "1800")))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme").strip()
 
@@ -94,6 +96,7 @@ except Exception:
 
 # In-memory batch job store
 _batch_jobs: dict[str, dict] = {}
+_batch_semaphore = asyncio.Semaphore(TEST_BATCH_MAX_CONCURRENCY)
 
 
 def _persist_batch_jobs() -> None:
@@ -321,13 +324,13 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
     import cv2  # type: ignore
 
     job = _batch_jobs[job_id]
-    job["status"] = "running"
+    job["status"] = "pending"
     job["error_msg"] = None
     log_path = os.path.join(TEST_LOG_DIR, f"batch_{job_id}.json")
     job["log_path"] = log_path
     _persist_batch_jobs()
 
-    try:
+    def _execute_batch() -> None:
         inferencer = get_inferencer(capability, model_dir)
         img_exts = {".jpg", ".jpeg", ".png", ".bmp"}
         samples = []
@@ -341,8 +344,11 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
         job["done"] = 0
         _persist_batch_jobs()
         results = []
+        deadline = time.monotonic() + TEST_BATCH_TIMEOUT_SECONDS
 
         for fp in samples:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Batch inference timed out after {TEST_BATCH_TIMEOUT_SECONDS} seconds")
             img = cv2.imread(fp)
             if img is None:
                 continue
@@ -354,7 +360,6 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
             job["done"] += 1
             _persist_batch_jobs()
 
-        # Simple accuracy calculation for binary classification
         correct = 0
         total_valid = 0
         for r in results:
@@ -369,7 +374,6 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
                     correct += 1
 
         accuracy = round(correct / total_valid, 4) if total_valid > 0 else None
-
         report = {
             "capability": capability,
             "model_dir": model_dir,
@@ -379,7 +383,6 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
             "results": results,
             "finished_at": datetime.now(timezone.utc).isoformat(),
         }
-
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
 
@@ -388,6 +391,12 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
         job["processed"] = total_valid
         job["finished_at"] = report["finished_at"]
         _persist_batch_jobs()
+
+    try:
+        async with _batch_semaphore:
+            job["status"] = "running"
+            _persist_batch_jobs()
+            await asyncio.to_thread(_execute_batch)
     except Exception as exc:
         job["status"] = "failed"
         job["error_msg"] = str(exc)

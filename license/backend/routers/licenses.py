@@ -33,6 +33,15 @@ def _verify_key_match(privkey_pem: str, pubkey_pem: str) -> None:
         )
 
 
+def _verify_signed_license(signed_json: str, pubkey_pem: str) -> None:
+    """Fail fast if the just-signed license cannot be verified by the selected public key."""
+    if not verify_sig(signed_json, pubkey_pem):
+        raise HTTPException(
+            status_code=500,
+            detail="Signed license failed verification with the selected public key",
+        )
+
+
 def _save_license_file(license_id: str, content: str) -> str:
     os.makedirs(LICENSES_DIR, exist_ok=True)
     filepath = os.path.join(LICENSES_DIR, f"{license_id}.bin")
@@ -115,6 +124,7 @@ def create_license(data: schemas.LicenseCreate, db: Session = Depends(get_db)):
     }
 
     signed_json = sign_license(license_data, privkey_pem)
+    _verify_signed_license(signed_json, key_pair.public_key_pem)
     _save_license_file(license_id, signed_json)
 
     record = crud.create_license_record(db, license_id, data, signed_json, issued_at)
@@ -171,6 +181,7 @@ def renew_license(license_id: str, data: schemas.LicenseRenew, db: Session = Dep
     old_data["issued_at"] = issued_at.isoformat()
 
     signed_json = sign_license(old_data, privkey_pem)
+    _verify_signed_license(signed_json, key_pair.public_key_pem)
     _save_license_file(license_id, signed_json)
 
     updated = crud.update_license_content(db, record, signed_json, data.valid_until, issued_at)

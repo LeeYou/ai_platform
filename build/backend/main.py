@@ -15,6 +15,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -209,6 +210,7 @@ class BuildRequest(BaseModel):
     key_pair_id: Optional[int] = None  # binds customer key pair, auto-computes fingerprint
     trusted_pubkey_sha256: Optional[str] = None  # or pass fingerprint directly
     extra_cmake_args: Optional[list[str]] = None
+    mark_as_current: bool = True
 
 
 class BuildJob(BaseModel):
@@ -316,6 +318,59 @@ def _artifact_dir_for_job(job: dict) -> str:
     capability = _safe_path_component(job["capability"], "capability")
     job_id = _safe_path_component(job["job_id"], "job")
     return os.path.join(BUILD_OUTPUT_DIR, capability, model_version, job_id)
+
+
+def _run_command_output(args: list[str], cwd: str | None = None) -> str:
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        output = (completed.stdout or completed.stderr or "").strip().splitlines()
+        return output[0].strip() if output else ""
+    except Exception:
+        return ""
+
+
+def _write_build_info(job: dict, req: BuildRequest, artifact_dir: str) -> None:
+    import json
+
+    build_info = {
+        "capability": job["capability"],
+        "version": job.get("model_version") or "unversioned",
+        "target_arch": req.platform,
+        "build_type": req.build_type,
+        "gpu_enabled": "-DBUILD_GPU=ON" in (req.extra_cmake_args or []),
+        "cmake_version": _run_command_output(["cmake", "--version"]),
+        "compiler": _run_command_output(["c++", "--version"]) or _run_command_output(["g++", "--version"]),
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "built_by": os.getenv("BUILDER_IMAGE", os.getenv("HOSTNAME", "unknown")),
+        "git_commit": _run_command_output(["git", "rev-parse", "--short", "HEAD"], cwd=os.path.dirname(CPP_SOURCE_DIR)),
+        "trusted_pubkey_sha256": job.get("trusted_pubkey_sha256"),
+        "job_id": job["job_id"],
+    }
+    with open(os.path.join(artifact_dir, "build_info.json"), "w", encoding="utf-8") as f:
+        json.dump(build_info, f, ensure_ascii=False, indent=2)
+
+
+def _update_current_symlink(job: dict) -> None:
+    capability_root = os.path.join(BUILD_OUTPUT_DIR, _safe_path_component(job["capability"], "capability"))
+    current_link = os.path.join(capability_root, "current")
+    target_dir = _artifact_dir_for_job(job)
+    relative_target = os.path.relpath(target_dir, capability_root)
+
+    os.makedirs(capability_root, exist_ok=True)
+    if os.path.lexists(current_link):
+        if os.path.isdir(current_link) and not os.path.islink(current_link):
+            logger.warning("Build %s: current path exists as directory, skip symlink update: %s", job["job_id"], current_link)
+            return
+        os.unlink(current_link)
+    os.symlink(relative_target, current_link)
+    logger.info("Build %s: updated current symlink to %s", job["job_id"], relative_target)
 
 
 def _create_lib_symlinks(artifact_dir: str, job_id: str) -> None:
@@ -435,11 +490,20 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
 
         # Create library symlinks after successful build
         _create_lib_symlinks(artifact_dir, job_id)
+        _write_build_info(job, req, artifact_dir)
+        if req.mark_as_current:
+            _update_current_symlink(job)
 
         job["status"] = "done"
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
         _persist_jobs()
         logger.info("Build %s completed successfully", job_id)
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error_msg"] = str(exc)
+        job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _persist_jobs()
+        logger.error("Build %s failed during post-processing: %s", job_id, exc, exc_info=True)
     finally:
         shutil.rmtree(build_dir, ignore_errors=True)
 

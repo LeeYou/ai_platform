@@ -53,9 +53,12 @@ class DesktopRecaptureDetectInferencer(BaseInferencer):
         is_fake = score_fake > 0.5
         return {
             "is_fake": is_fake,
+            "is_recaptured": is_fake,
             "label": "fake" if is_fake else "real",
             "score_real": round(score_real, 4),
             "score_fake": round(score_fake, 4),
+            "score_genuine": round(score_real, 4),
+            "score_recaptured": round(score_fake, 4),
         }
 
 
