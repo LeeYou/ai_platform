@@ -43,7 +43,7 @@ static std::string resolve_pubkey_path(const char* license_path) {
     std::string resolved = license_path;
     auto slash = resolved.find_last_of("/\\");
     if (slash == std::string::npos) {
-        return "pubkey.pem";
+        return "";
     }
     return resolved.substr(0, slash + 1) + "pubkey.pem";
 }

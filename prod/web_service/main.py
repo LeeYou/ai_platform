@@ -279,7 +279,7 @@ def _derive_pubkey_path_from_license(license_path: str) -> str:
         return ""
     license_dir = os.path.dirname(license_path)
     if not license_dir:
-        return "pubkey.pem"
+        return ""
     return os.path.join(license_dir, "pubkey.pem")
 
 
