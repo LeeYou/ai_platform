@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -82,6 +83,15 @@ class _FakeABManager:
         self.reload_called = True
 
 
+class _FakeJsonRequest:
+    def __init__(self, body=None, headers=None):
+        self._body = body or {}
+        self.headers = headers or {}
+
+    async def json(self):
+        return self._body
+
+
 class ProdMainTests(unittest.TestCase):
     def setUp(self):
         self.fake_runtime = _FakeRuntime()
@@ -103,7 +113,12 @@ class ProdMainTests(unittest.TestCase):
         self.original_ab_manager = prod_main.ab_manager
         self.original_admin_token = prod_main.ADMIN_TOKEN
         self.original_resolve_model_dir = prod_main.resolve_model_dir
+        self.original_resource_resolve_model_dir = resource_resolver.resolve_model_dir
         self.original_exists = prod_main.os.path.exists
+        self.original_license_path = prod_main.LICENSE_PATH
+        self.original_verify_license_signature = prod_main._verify_license_signature
+        self.original_check_license = prod_main._check_license
+        self.original_infer_for_pipeline = prod_main._infer_for_pipeline
 
         resource_resolver.resolve_model_dir = lambda capability: str(self.model_dir)
         prod_main.resolve_model_dir = lambda capability: str(self.model_dir)
@@ -114,6 +129,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main._decode_image = lambda data: _FakeImage()
         prod_main.ab_manager = _FakeABManager()
         prod_main.ADMIN_TOKEN = "test-token"
+        prod_main.LICENSE_PATH = str(Path(self.tempdir.name) / "license.json")
 
     def tearDown(self):
         pipeline_engine.PIPELINE_DIR = self.original_pipeline_dir
@@ -123,8 +139,25 @@ class ProdMainTests(unittest.TestCase):
         prod_main.ab_manager = self.original_ab_manager
         prod_main.ADMIN_TOKEN = self.original_admin_token
         prod_main.resolve_model_dir = self.original_resolve_model_dir
+        resource_resolver.resolve_model_dir = self.original_resource_resolve_model_dir
         prod_main.os.path.exists = self.original_exists
+        prod_main.LICENSE_PATH = self.original_license_path
+        prod_main._verify_license_signature = self.original_verify_license_signature
+        prod_main._check_license = self.original_check_license
+        prod_main._infer_for_pipeline = self.original_infer_for_pipeline
         self.tempdir.cleanup()
+
+    def _write_license(self, **overrides):
+        payload = {
+            "license_id": "lic-test",
+            "valid_from": (datetime.now(prod_main.CST) - timedelta(days=1)).isoformat(),
+            "valid_until": (datetime.now(prod_main.CST) + timedelta(days=7)).isoformat(),
+            "capabilities": ["face_detect"],
+            "signature": "fake-signature",
+        }
+        payload.update(overrides)
+        Path(prod_main.LICENSE_PATH).write_text(json.dumps(payload), encoding="utf-8")
+        return payload
 
     def test_health_endpoint_uses_runtime_status(self):
         body = prod_main.health()
@@ -148,6 +181,56 @@ class ProdMainTests(unittest.TestCase):
         prod_main.get_runtime = lambda: None
         body = prod_main.list_capabilities()
         self.assertEqual(body, {"capabilities": []})
+
+    def test_license_status_endpoint_reports_missing_when_no_file(self):
+        body = prod_main.license_status()
+        self.assertEqual(body["status"], "missing")
+        self.assertEqual(body["capabilities"], [])
+
+    def test_license_status_endpoint_reports_signature_invalid(self):
+        self._write_license()
+        prod_main._verify_license_signature = lambda raw: False
+        body = prod_main.license_status()
+        self.assertEqual(body["status"], "signature_invalid")
+        self.assertEqual(body["license_id"], "lic-test")
+
+    def test_license_status_endpoint_reports_expired(self):
+        self._write_license(valid_until=(datetime.now(prod_main.CST) - timedelta(days=1)).isoformat())
+        prod_main._verify_license_signature = lambda raw: True
+        body = prod_main.license_status()
+        self.assertEqual(body["status"], "expired")
+        self.assertEqual(body["days_remaining"], 0)
+
+    def test_license_status_endpoint_reports_invalid_for_malformed_json(self):
+        Path(prod_main.LICENSE_PATH).write_text("{bad json", encoding="utf-8")
+        body = prod_main.license_status()
+        self.assertEqual(body["status"], "invalid")
+
+    def test_check_license_allows_missing_license_in_dev_mode(self):
+        prod_main._check_license = self.original_check_license
+        prod_main._check_license("face_detect")
+
+    def test_check_license_rejects_unlicensed_capability(self):
+        self._write_license(capabilities=["other_cap"])
+        prod_main._verify_license_signature = lambda raw: True
+        prod_main._check_license = self.original_check_license
+        with self.assertRaises(HTTPException) as ctx:
+            prod_main._check_license("face_detect")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["code"], 4004)
+
+    def test_infer_endpoint_returns_expired_license_before_runtime(self):
+        self._write_license(valid_until=(datetime.now(prod_main.CST) - timedelta(days=1)).isoformat())
+        prod_main._verify_license_signature = lambda raw: True
+        prod_main._check_license = self.original_check_license
+        runtime_calls = []
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: runtime_calls.append(capability)
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["code"], 4002)
+        self.assertEqual(runtime_calls, [])
 
     def test_infer_endpoint_rejects_large_payload(self):
         prod_main.MAX_UPLOAD_BYTES = 1
@@ -220,6 +303,111 @@ class ProdMainTests(unittest.TestCase):
         body = prod_main.validate_pipeline_endpoint("pipe_ok")
         self.assertTrue(body["valid"])
         self.assertEqual(body["errors"], [])
+
+    def test_create_pipeline_endpoint_requires_admin_token(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(prod_main.create_pipeline_endpoint(_FakeJsonRequest({"pipeline_id": "p1"})))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_create_pipeline_endpoint_rejects_missing_pipeline_id(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                prod_main.create_pipeline_endpoint(
+                    _FakeJsonRequest({"name": "missing id"}, headers={"Authorization": "Bearer test-token"})
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_create_pipeline_endpoint_rejects_duplicate_pipeline_id(self):
+        pipeline = {"pipeline_id": "pipe_dup", "name": "Dup", "steps": [{"step_id": "s1", "capability": "face_detect"}]}
+        (self.pipeline_dir / "pipe_dup.json").write_text(json.dumps(pipeline), encoding="utf-8")
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                prod_main.create_pipeline_endpoint(
+                    _FakeJsonRequest(pipeline, headers={"Authorization": "Bearer test-token"})
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_get_pipeline_endpoint_returns_not_found(self):
+        with self.assertRaises(HTTPException) as ctx:
+            prod_main.get_pipeline_endpoint("missing")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_update_pipeline_endpoint_saves_pipeline_definition(self):
+        body = asyncio.run(
+            prod_main.update_pipeline_endpoint(
+                "pipe_updated",
+                _FakeJsonRequest(
+                    {"name": "Updated", "steps": [{"step_id": "s1", "capability": "face_detect"}]},
+                    headers={"Authorization": "Bearer test-token"},
+                ),
+            )
+        )
+        self.assertEqual(body["status"], "updated")
+        saved = json.loads((self.pipeline_dir / "pipe_updated.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["pipeline_id"], "pipe_updated")
+        self.assertEqual(saved["name"], "Updated")
+
+    def test_delete_pipeline_endpoint_returns_not_found(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                prod_main.delete_pipeline_endpoint(
+                    "missing",
+                    SimpleNamespace(headers={"Authorization": "Bearer test-token"}),
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_run_pipeline_endpoint_returns_not_found(self):
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(prod_main.run_pipeline_endpoint("missing", upload))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_run_pipeline_endpoint_rejects_disabled_pipeline(self):
+        pipeline = {
+            "pipeline_id": "pipe_disabled",
+            "name": "Disabled",
+            "enabled": False,
+            "steps": [{"step_id": "s1", "capability": "face_detect"}],
+        }
+        (self.pipeline_dir / "pipe_disabled.json").write_text(json.dumps(pipeline), encoding="utf-8")
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(prod_main.run_pipeline_endpoint("pipe_disabled", upload))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_run_pipeline_endpoint_stops_after_license_failure(self):
+        pipeline = {
+            "pipeline_id": "pipe_license",
+            "name": "License stop",
+            "steps": [
+                {"step_id": "s1", "capability": "face_detect", "output_mapping": {"ok": "$.ok"}},
+                {"step_id": "s2", "capability": "second_cap", "on_failure": "abort"},
+            ],
+        }
+        (self.pipeline_dir / "pipe_license.json").write_text(json.dumps(pipeline), encoding="utf-8")
+
+        calls = []
+
+        def fake_infer(capability, image_bytes, options):
+            calls.append(capability)
+            return {"ok": True}
+
+        def fake_check_license(capability):
+            if capability == "second_cap":
+                raise HTTPException(status_code=403, detail={"code": 4004})
+
+        prod_main._infer_for_pipeline = fake_infer
+        prod_main._check_license = fake_check_license
+
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        body = asyncio.run(prod_main.run_pipeline_endpoint("pipe_license", upload))
+        self.assertEqual(calls, ["face_detect"])
+        self.assertEqual(body["steps"][0]["status"], "success")
+        self.assertEqual(body["steps"][1]["status"], "error")
+        self.assertEqual(body["steps"][1]["error"], "License check failed")
 
 
 if __name__ == "__main__":
