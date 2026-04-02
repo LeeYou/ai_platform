@@ -276,7 +276,7 @@ def _mark_interrupted_builds_failed() -> None:
 
 
 def _resolve_model_version(capability: str) -> str | None:
-    manifest_path = os.path.join(MODELS_ROOT, capability, "current", "manifest.json")
+    manifest_path = os.path.join(MODELS_ROOT, _safe_path_component(capability), "current", "manifest.json")
     if not os.path.exists(manifest_path):
         return None
     try:
@@ -284,18 +284,25 @@ def _resolve_model_version(capability: str) -> str | None:
         with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
         version = str(manifest.get("model_version", "")).strip()
-        return version or None
+        return _safe_path_component(version, "unversioned") if version else None
     except Exception as exc:
         logger.warning("Failed to read model version for %s: %s", capability, exc)
         return None
+
+
+def _safe_path_component(value: str, fallback: str = "unknown") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)).strip("._-")
+    return cleaned or fallback
 
 
 def _artifact_dir_for_job(job: dict) -> str:
     artifact_dir = job.get("artifact_dir")
     if artifact_dir:
         return artifact_dir
-    model_version = job.get("model_version") or "unversioned"
-    return os.path.join(BUILD_OUTPUT_DIR, job["capability"], model_version, job["job_id"])
+    model_version = _safe_path_component(job.get("model_version") or "unversioned", "unversioned")
+    capability = _safe_path_component(job["capability"], "capability")
+    job_id = _safe_path_component(job["job_id"], "job")
+    return os.path.join(BUILD_OUTPUT_DIR, capability, model_version, job_id)
 
 
 def _create_lib_symlinks(artifact_dir: str, job_id: str) -> None:
@@ -503,6 +510,8 @@ async def trigger_build(req: BuildRequest):
 
     job_id = str(uuid.uuid4())
     model_version = _resolve_model_version(req.capability) or "unversioned"
+    safe_capability = _safe_path_component(req.capability, "capability")
+    safe_job_id = _safe_path_component(job_id, "job")
     job = {
         "job_id": job_id,
         "capability": req.capability,
@@ -514,7 +523,7 @@ async def trigger_build(req: BuildRequest):
         "key_pair_name": key_pair_name,
         "trusted_pubkey_sha256": fingerprint or None,
         "model_version": model_version,
-        "artifact_dir": os.path.join(BUILD_OUTPUT_DIR, req.capability, model_version, job_id),
+        "artifact_dir": os.path.join(BUILD_OUTPUT_DIR, safe_capability, model_version, safe_job_id),
         "error_msg": None,
     }
     _jobs[job_id] = job

@@ -303,6 +303,17 @@ def _draw_result(img: np.ndarray, result: dict, capability: str) -> np.ndarray:
     return vis
 
 
+def _resolve_dataset_path(dataset_path: str) -> str:
+    root = os.path.realpath(DATASETS_ROOT)
+    candidate = dataset_path
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(DATASETS_ROOT, candidate)
+    resolved = os.path.realpath(candidate)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise HTTPException(status_code=400, detail="Dataset path must stay within DATASETS_ROOT")
+    return resolved
+
+
 async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path: str) -> None:
     from inferencers import get_inferencer
     import cv2  # type: ignore
@@ -441,7 +452,8 @@ async def batch_infer(req: BatchRequest):
     model_dir = os.path.join(MODELS_ROOT, req.capability, req.version)
     if not os.path.isdir(model_dir):
         raise HTTPException(status_code=404, detail=f"Model not found: {req.capability}/{req.version}")
-    if not os.path.isdir(req.dataset_path):
+    dataset_path = _resolve_dataset_path(req.dataset_path)
+    if not os.path.isdir(dataset_path):
         raise HTTPException(status_code=404, detail=f"Dataset path not found: {req.dataset_path}")
 
     job_id = str(uuid.uuid4())
@@ -449,7 +461,7 @@ async def batch_infer(req: BatchRequest):
         "job_id":       job_id,
         "capability":   req.capability,
         "version":      req.version,
-        "dataset_path": req.dataset_path,
+        "dataset_path": dataset_path,
         "status":       "pending",
         "total":        0,
         "done":         0,
@@ -461,7 +473,7 @@ async def batch_infer(req: BatchRequest):
         "error_msg":    None,
     }
     _persist_batch_jobs()
-    asyncio.create_task(_run_batch(job_id, req.capability, model_dir, req.dataset_path))
+    asyncio.create_task(_run_batch(job_id, req.capability, model_dir, dataset_path))
     return _batch_jobs[job_id]
 
 
@@ -502,7 +514,8 @@ async def compare_versions(req: CompareRequest):
     for d in (dir_a, dir_b):
         if not os.path.isdir(d):
             raise HTTPException(status_code=404, detail=f"Model dir not found: {d}")
-    if not os.path.isdir(req.dataset_path):
+    dataset_path = _resolve_dataset_path(req.dataset_path)
+    if not os.path.isdir(dataset_path):
         raise HTTPException(status_code=404, detail="Dataset path not found")
 
     inf_a = get_inferencer(req.capability, dir_a)
@@ -510,7 +523,7 @@ async def compare_versions(req: CompareRequest):
 
     img_exts = {".jpg", ".jpeg", ".png", ".bmp"}
     samples = []
-    for root, _, files in os.walk(req.dataset_path):
+    for root, _, files in os.walk(dataset_path):
         for fn in sorted(files):
             if os.path.splitext(fn)[1].lower() in img_exts:
                 samples.append(os.path.join(root, fn))
