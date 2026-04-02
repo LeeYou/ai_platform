@@ -165,7 +165,13 @@ def _is_shared_library_filename(name: str) -> bool:
 
 
 def _is_runtime_plugin_filename(name: str, capability: str) -> bool:
-    return bool(re.fullmatch(rf"lib{re.escape(capability)}\.so(?:\.\d+)*", name))
+    prefix = f"lib{capability}.so"
+    if name == prefix:
+        return True
+    if not name.startswith(prefix + "."):
+        return False
+    suffix = name[len(prefix) + 1:]
+    return bool(suffix) and all(part.isdigit() for part in suffix.split("."))
 
 
 def _select_runtime_plugin_path(capability: str, candidates: list[str]) -> str:
