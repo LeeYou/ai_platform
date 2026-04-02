@@ -276,17 +276,30 @@ def _mark_interrupted_builds_failed() -> None:
 
 
 def _resolve_model_version(capability: str) -> str | None:
-    manifest_path = os.path.join(MODELS_ROOT, _safe_path_component(capability), "current", "manifest.json")
-    if not os.path.exists(manifest_path):
+    if not os.path.isdir(MODELS_ROOT):
         return None
+
     try:
         import json
-        with open(manifest_path, encoding="utf-8") as f:
-            manifest = json.load(f)
-        version = str(manifest.get("model_version", "")).strip()
-        return _safe_path_component(version, "unversioned") if version else None
+        versions: dict[str, str] = {}
+        for entry in os.listdir(MODELS_ROOT):
+            safe_entry = _safe_path_component(entry, "")
+            if not safe_entry or safe_entry != entry:
+                continue
+            manifest_path = os.path.join(MODELS_ROOT, entry, "current", "manifest.json")
+            if not os.path.exists(manifest_path):
+                continue
+            try:
+                with open(manifest_path, encoding="utf-8") as f:
+                    manifest = json.load(f)
+                version = str(manifest.get("model_version", "")).strip()
+                if version:
+                    versions[entry] = _safe_path_component(version, "unversioned")
+            except Exception as exc:
+                logger.warning("Failed to read model version for %s: %s", entry, exc)
+        return versions.get(capability)
     except Exception as exc:
-        logger.warning("Failed to read model version for %s: %s", capability, exc)
+        logger.warning("Failed to scan model versions from %s: %s", MODELS_ROOT, exc)
         return None
 
 
