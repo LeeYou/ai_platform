@@ -5,6 +5,27 @@ const http = axios.create({
   timeout: 60000,
 })
 
+export function getAdminToken() {
+  return (
+    window.localStorage.getItem('ai_admin_token') ||
+    window.sessionStorage.getItem('ai_admin_token') ||
+    import.meta.env.VITE_AI_ADMIN_TOKEN ||
+    ''
+  ).trim()
+}
+
+function withAdminHeaders(config = {}, token = getAdminToken()) {
+  const value = (token || '').trim()
+  if (!value) return config
+  return {
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${value}`,
+    },
+  }
+}
+
 /**
  * Extract a human-readable error message from any error shape.
  * Handles: AxiosError, FastAPI validation arrays, plain objects, strings.
@@ -70,22 +91,16 @@ export function infer(capability, formData) {
 }
 
 // Admin
-export function adminReload(token) {
-  return http.post('/admin/reload', null, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+export function adminReload(token = getAdminToken()) {
+  return http.post('/admin/reload', null, withAdminHeaders({}, token))
 }
 
-export function listABTests(token) {
-  return http.get('/admin/ab_tests', {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+export function listABTests(token = getAdminToken()) {
+  return http.get('/admin/ab_tests', withAdminHeaders({}, token))
 }
 
-export function reloadABTests(token) {
-  return http.post('/admin/ab_tests/reload', null, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+export function reloadABTests(token = getAdminToken()) {
+  return http.post('/admin/ab_tests/reload', null, withAdminHeaders({}, token))
 }
 
 // Pipelines

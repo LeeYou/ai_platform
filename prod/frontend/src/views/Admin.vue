@@ -5,21 +5,20 @@
         <span style="font-size:16px;font-weight:bold;">⚙️ 系统管理</span>
       </template>
 
-      <el-form label-width="140px" style="max-width:700px;">
-        <el-form-item label="管理员令牌">
-          <el-input
-            v-model="token"
-            type="password"
-            show-password
-            placeholder="输入管理员 Bearer Token"
-          />
-        </el-form-item>
+      <el-alert
+        :title="hasToken ? '已读取浏览器中的管理Token，可直接执行管理操作。' : '请先通过右上角“设置管理Token”录入令牌。若后端沿用默认配置，通常为 changeme。'"
+        :type="hasToken ? 'success' : 'warning'"
+        :closable="false"
+        show-icon
+        style="max-width:700px;margin-bottom:16px;"
+      />
 
+      <el-form label-width="140px" style="max-width:700px;">
         <el-form-item>
           <el-button
             type="warning"
             :loading="reloading"
-            :disabled="!token"
+            :disabled="!hasToken"
             @click="doReload"
           >
             🔄 全量重载
@@ -27,7 +26,7 @@
           <el-button
             type="info"
             :loading="loadingABTests"
-            :disabled="!token"
+            :disabled="!hasToken"
             @click="fetchABTests"
           >
             📊 加载 A/B 测试
@@ -35,7 +34,7 @@
           <el-button
             type="primary"
             :loading="reloadingABTests"
-            :disabled="!token"
+            :disabled="!hasToken"
             @click="doReloadABTests"
           >
             ♻️ 重载 A/B 配置
@@ -85,17 +84,22 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { adminReload, extractErrorMessage, listABTests, reloadABTests } from '../api/index.js'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { adminReload, extractErrorMessage, getAdminToken, listABTests, reloadABTests } from '../api/index.js'
 import { ElMessage } from 'element-plus'
 
 const token = ref('')
+const hasToken = computed(() => !!token.value)
 const reloading = ref(false)
 const loadingABTests = ref(false)
 const reloadingABTests = ref(false)
 const message = ref('')
 const messageType = ref('success')
 const abTests = ref({})
+
+function syncToken() {
+  token.value = getAdminToken()
+}
 
 async function doReload() {
   if (!token.value) {
@@ -159,4 +163,15 @@ async function doReloadABTests() {
     reloadingABTests.value = false
   }
 }
+
+onMounted(() => {
+  syncToken()
+  window.addEventListener('storage', syncToken)
+  window.addEventListener('ai-admin-token-changed', syncToken)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('storage', syncToken)
+  window.removeEventListener('ai-admin-token-changed', syncToken)
+})
 </script>
