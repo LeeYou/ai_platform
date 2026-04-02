@@ -360,7 +360,7 @@ import { GridComponent, TooltipComponent, LegendComponent, TitleComponent } from
 import { CanvasRenderer } from 'echarts/renderers'
 import {
   listCapabilities, listJobs, createJob,
-  stopJob, pauseJob, resumeJob, getJobLogs, extractErrorMessage
+  stopJob, pauseJob, resumeJob, getJobLogs, extractErrorMessage, getAdminToken
 } from '../api/index.js'
 
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
@@ -971,7 +971,9 @@ const _stopMonitorRefresh = () => {
 const _connectWs = (jobId) => {
   if (wsConn) { wsConn.close(); wsConn = null }
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-  wsConn = new WebSocket(`${protocol}://${location.host}/ws/logs/${jobId}`)
+  const token = getAdminToken()
+  const suffix = token ? `?token=${encodeURIComponent(token)}` : ''
+  wsConn = new WebSocket(`${protocol}://${location.host}/ws/logs/${jobId}${suffix}`)
 
   wsConn.onopen = () => {
     console.log('WebSocket connected for job', jobId)

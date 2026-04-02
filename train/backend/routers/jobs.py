@@ -2,6 +2,7 @@
 
 import os
 import signal
+import tempfile
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -37,7 +38,7 @@ def create_job(data: TrainingJobCreate, db: Session = Depends(get_db)):
     output_path = os.path.join(MODELS_ROOT, cap.name, data.version)
 
     # Merge capability-level hyperparams with job-specific overrides
-    import json, tempfile
+    import json
     try:
         cap_hp = json.loads(cap.hyperparams)
     except Exception:
@@ -53,18 +54,26 @@ def create_job(data: TrainingJobCreate, db: Session = Depends(get_db)):
 
     # Write merged hyperparams to temp config file
     tmp_cfg = os.path.join(tempfile.gettempdir(), f"train_cfg_{job.id}.json")
-    with open(tmp_cfg, "w") as f:
+    with open(tmp_cfg, "w", encoding="utf-8") as f:
         json.dump(cap_hp, f)
 
-    task = run_training.delay(
-        job_id=job.id,
-        capability_name=cap.name,
-        script_path=cap.script_path or f"/app/train/scripts/{cap.name}/train.py",
-        config_path=tmp_cfg,
-        dataset_path=cap.dataset_path or f"/workspace/datasets/{cap.name}",
-        output_path=output_path,
-        version=data.version,
-    )
+    try:
+        task = run_training.delay(
+            job_id=job.id,
+            capability_name=cap.name,
+            script_path=cap.script_path or f"/app/train/scripts/{cap.name}/train.py",
+            config_path=tmp_cfg,
+            dataset_path=cap.dataset_path or f"/workspace/datasets/{cap.name}",
+            output_path=output_path,
+            version=data.version,
+        )
+    except Exception as exc:
+        try:
+            os.remove(tmp_cfg)
+        except FileNotFoundError:
+            pass
+        crud.update_job_status(db, job, "failed", error_msg=f"Training queue unavailable: {exc}")
+        raise HTTPException(status_code=503, detail="Training queue unavailable") from exc
     crud.update_job_status(db, job, "pending", celery_task_id=task.id)
     db.refresh(job)
     return job

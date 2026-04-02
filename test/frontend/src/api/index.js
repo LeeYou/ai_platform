@@ -2,6 +2,27 @@ import axios from 'axios'
 
 const http = axios.create({ baseURL: '/api/v1' })
 
+export function getAdminToken() {
+  return (
+    window.localStorage.getItem('ai_admin_token') ||
+    window.sessionStorage.getItem('ai_admin_token') ||
+    import.meta.env.VITE_AI_ADMIN_TOKEN ||
+    ''
+  ).trim()
+}
+
+function attachAdminHeaders(config = {}) {
+  const token = getAdminToken()
+  if (!token) return config
+  return {
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  }
+}
+
 /**
  * Extract a human-readable error message from any error shape.
  */
@@ -39,6 +60,8 @@ http.interceptors.response.use(
     return Promise.reject(err)
   }
 )
+
+http.interceptors.request.use((config) => attachAdminHeaders(config))
 
 export const listModels = () => http.get('/models')
 export const singleInfer = (formData) => http.post('/infer/single', formData, {

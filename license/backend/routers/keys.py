@@ -1,7 +1,5 @@
 """Router: /api/v1/keys"""
 
-import os
-
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
@@ -9,6 +7,7 @@ from sqlalchemy.orm import Session
 import crud
 import schemas
 from database import get_db
+from key_store import write_private_key
 from license_signer import generate_key_pair
 
 router = APIRouter(prefix="/api/v1/keys", tags=["keys"])
@@ -22,17 +21,14 @@ def list_keys(db: Session = Depends(get_db)):
 @router.post("", response_model=schemas.KeyPairResponse, status_code=201)
 def create_key(data: schemas.KeyPairCreate, db: Session = Depends(get_db)):
     private_pem, public_pem = generate_key_pair()
-
-    # Write private key to specified path (never stored in DB)
-    priv_dir = os.path.dirname(data.privkey_output_path)
-    if priv_dir:
-        os.makedirs(priv_dir, exist_ok=True)
-    with open(data.privkey_output_path, "w") as f:
-        f.write(private_pem)
-    # Restrict permissions on private key file
-    os.chmod(data.privkey_output_path, 0o600)
-
-    return crud.create_key_pair(db, name=data.name, public_key_pem=public_pem)
+    key_pair = crud.create_key_pair(db, name=data.name, public_key_pem=public_pem)
+    try:
+        write_private_key(key_pair, private_pem)
+    except Exception as exc:
+        db.delete(key_pair)
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to persist private key: {exc}") from exc
+    return key_pair
 
 
 @router.get("/{key_id}/public", response_class=PlainTextResponse)

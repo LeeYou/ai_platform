@@ -3,7 +3,10 @@
 import hashlib
 import json
 import os
+import signal
 import subprocess
+import tempfile
+import threading
 from datetime import datetime, timezone
 
 import redis as redis_lib
@@ -11,11 +14,24 @@ from celery import Celery
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 MODELS_ROOT = os.getenv("MODELS_ROOT", "/workspace/models")
+TRAINING_TIMEOUT_SECONDS = int(os.getenv("TRAINING_TIMEOUT_SECONDS", "86400"))
 
 celery_app = Celery("train_tasks", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
+celery_app.conf.broker_connection_retry_on_startup = True
+
+
+def _cleanup_temp_config(path: str) -> None:
+    temp_dir = tempfile.gettempdir()
+    if not path.startswith(temp_dir):
+        return
+    if os.path.basename(path).startswith("train_cfg_") and path.endswith(".json"):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 def _redis() -> redis_lib.Redis:
@@ -130,69 +146,89 @@ def run_training(
     _publish(job_id, f"[INFO] Starting training: {capability_name} v{version}\n")
 
     try:
-        with open(log_file, "w", encoding="utf-8") as lf:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
+        try:
+            with open(log_file, "w", encoding="utf-8") as lf:
+                timed_out = False
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    start_new_session=True,
+                )
 
-            # Store PID so the API can send signals
-            db = SessionLocal()
-            try:
-                job = crud.get_job(db, job_id)
-                if job:
-                    crud.update_job_pid(db, job, proc.pid)
-            finally:
-                db.close()
+                def _kill_on_timeout() -> None:
+                    nonlocal timed_out
+                    timed_out = True
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
-            for line in proc.stdout:
-                lf.write(line)
-                lf.flush()
-                _publish(job_id, line)
+                timeout_timer = threading.Timer(TRAINING_TIMEOUT_SECONDS, _kill_on_timeout)
+                timeout_timer.start()
 
-            proc.wait()
+                # Store PID so the API can send signals
+                db = SessionLocal()
+                try:
+                    job = crud.get_job(db, job_id)
+                    if job:
+                        crud.update_job_pid(db, job, proc.pid)
+                finally:
+                    db.close()
 
-        if proc.returncode != 0:
-            raise RuntimeError(f"Training process exited with code {proc.returncode}")
+                try:
+                    for line in proc.stdout or []:
+                        lf.write(line)
+                        lf.flush()
+                        _publish(job_id, line)
+                    proc.wait()
+                finally:
+                    timeout_timer.cancel()
 
-    except Exception as exc:
-        _update_job(job_id, "failed", str(exc))
-        _publish(job_id, f"[ERROR] {exc}\n")
+            if timed_out:
+                raise TimeoutError(f"Training timed out after {TRAINING_TIMEOUT_SECONDS} seconds")
+            if proc.returncode != 0:
+                raise RuntimeError(f"Training process exited with code {proc.returncode}")
+
+        except Exception as exc:
+            _update_job(job_id, "failed", str(exc))
+            _publish(job_id, f"[ERROR] {exc}\n")
+            _publish(job_id, "__DONE__\n")
+            return {"status": "failed", "error": str(exc)}
+
+        # Auto export
+        try:
+            _auto_export(job_id, capability_name, os.path.dirname(script_path), output_path, version)
+        except Exception as exc:
+            _publish(job_id, f"[WARN] Export failed: {exc}\n")
+
+        _update_job(job_id, "done")
+        _publish(job_id, "[DONE] Training complete.\n")
         _publish(job_id, "__DONE__\n")
-        return {"status": "failed", "error": str(exc)}
 
-    # Auto export
-    try:
-        _auto_export(job_id, capability_name, os.path.dirname(script_path), output_path, version)
-    except Exception as exc:
-        _publish(job_id, f"[WARN] Export failed: {exc}\n")
+        # Register model version in DB
+        db = SessionLocal()
+        try:
+            import crud as _crud
+            job = _crud.get_job(db, job_id)
+            if job:
+                manifest_path = os.path.join(output_path, "manifest.json")
+                _crud.create_model_version(
+                    db,
+                    capability_id=job.capability_id,
+                    job_id=job_id,
+                    version=version,
+                    model_path=output_path,
+                    manifest_path=manifest_path if os.path.exists(manifest_path) else None,
+                )
+        finally:
+            db.close()
 
-    _update_job(job_id, "done")
-    _publish(job_id, "[DONE] Training complete.\n")
-    _publish(job_id, "__DONE__\n")
-
-    # Register model version in DB
-    db = SessionLocal()
-    try:
-        import crud as _crud
-        job = _crud.get_job(db, job_id)
-        if job:
-            manifest_path = os.path.join(output_path, "manifest.json")
-            _crud.create_model_version(
-                db,
-                capability_id=job.capability_id,
-                job_id=job_id,
-                version=version,
-                model_path=output_path,
-                manifest_path=manifest_path if os.path.exists(manifest_path) else None,
-            )
+        return {"status": "done"}
     finally:
-        db.close()
-
-    return {"status": "done"}
+        _cleanup_temp_config(config_path)
 
 
 def _auto_export(

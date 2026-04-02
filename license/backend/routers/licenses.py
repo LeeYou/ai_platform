@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 import crud
 import schemas
 from database import get_db
+from key_store import read_private_key
 from license_signer import sign_license, verify_license as verify_sig
 
 # CST timezone (UTC+8) - Standard timezone for all license operations
@@ -19,13 +20,6 @@ CST = timezone(timedelta(hours=8))
 LICENSES_DIR = os.environ.get("LICENSES_DIR", "./data/licenses")
 
 router = APIRouter(prefix="/api/v1/licenses", tags=["licenses"])
-
-
-def _read_privkey(path: str) -> str:
-    if not os.path.isfile(path):
-        raise HTTPException(status_code=400, detail=f"Private key file not found: {path}")
-    with open(path, "r") as f:
-        return f.read()
 
 
 def _verify_key_match(privkey_pem: str, pubkey_pem: str) -> None:
@@ -95,7 +89,10 @@ def create_license(data: schemas.LicenseCreate, db: Session = Depends(get_db)):
     if not key_pair.is_active:
         raise HTTPException(status_code=400, detail=f"Key pair '{key_pair.name}' is inactive")
 
-    privkey_pem = _read_privkey(data.privkey_path)
+    try:
+        privkey_pem = read_private_key(key_pair)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=f"Private key file not found for key pair {key_pair.id}") from exc
     # Verify private key matches the selected key pair's public key
     _verify_key_match(privkey_pem, key_pair.public_key_pem)
 
@@ -158,7 +155,14 @@ def renew_license(license_id: str, data: schemas.LicenseRenew, db: Session = Dep
     if record.status == "revoked":
         raise HTTPException(status_code=400, detail="Cannot renew a revoked license")
 
-    privkey_pem = _read_privkey(data.privkey_path)
+    key_pair = record.key_pair or (crud.get_key_pair(db, record.key_pair_id) if record.key_pair_id else None)
+    if not key_pair:
+        raise HTTPException(status_code=400, detail="License has no associated key pair")
+    try:
+        privkey_pem = read_private_key(key_pair)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=f"Private key file not found for key pair {key_pair.id}") from exc
+    _verify_key_match(privkey_pem, key_pair.public_key_pem)
     issued_at = datetime.now(CST)
 
     old_data = json.loads(record.license_content)

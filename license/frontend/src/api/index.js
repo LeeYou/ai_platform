@@ -5,6 +5,27 @@ const http = axios.create({
   timeout: 30000,
 })
 
+export function getAdminToken() {
+  return (
+    window.localStorage.getItem('ai_admin_token') ||
+    window.sessionStorage.getItem('ai_admin_token') ||
+    import.meta.env.VITE_AI_ADMIN_TOKEN ||
+    ''
+  ).trim()
+}
+
+function attachAdminHeaders(config = {}) {
+  const token = getAdminToken()
+  if (!token) return config
+  return {
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  }
+}
+
 /**
  * Extract a human-readable error message from any error shape.
  * Handles: AxiosError, FastAPI validation arrays, plain objects, strings.
@@ -43,6 +64,8 @@ http.interceptors.response.use(
     return Promise.reject(err)
   }
 )
+
+http.interceptors.request.use((config) => attachAdminHeaders(config))
 
 // Customers
 export function getCustomers(page = 1, size = 20) {

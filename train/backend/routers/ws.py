@@ -1,12 +1,14 @@
 """WebSocket router — real-time training log streaming via Redis Pub/Sub."""
 
 import asyncio
+import hmac
 import json as _json
 import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme").strip()
 
 router = APIRouter(tags=["websocket"])
 
@@ -14,6 +16,10 @@ router = APIRouter(tags=["websocket"])
 @router.websocket("/ws/logs/{job_id}")
 async def stream_logs(websocket: WebSocket, job_id: int):
     """Stream training log lines from Redis Pub/Sub to the WebSocket client."""
+    token = websocket.query_params.get("token", "").strip()
+    if not token or not hmac.compare_digest(token, ADMIN_TOKEN):
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
 
     import redis as redis_lib

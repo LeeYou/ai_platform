@@ -460,6 +460,34 @@ def _error_response(code: int, message: str, capability: str = "") -> JSONRespon
     )
 
 
+def _available_pipeline_capabilities() -> list[str]:
+    runtime = get_runtime()
+    if runtime:
+        return [cap.get("name", "") for cap in runtime.get_capabilities() if cap.get("name")]
+    return [cap.get("capability", "") for cap in list_available_capabilities() if cap.get("capability")]
+
+
+def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dict:
+    _check_license(capability)
+    runtime = get_runtime()
+    if not runtime:
+        raise ValueError("Runtime not initialized")
+
+    handle = runtime.acquire(capability, timeout_ms=30000)
+    if not handle:
+        raise ValueError(f"Capability '{capability}' not available")
+
+    try:
+        img = _decode_image(image_bytes)
+        height, width, channels = img.shape
+        result = runtime.infer(handle, img.tobytes(), width, height, channels)
+        if result.get("error_code", 0) != AI_OK:
+            raise ValueError(result.get("error_msg", "Inference failed"))
+        return result.get("result", {})
+    finally:
+        runtime.release(handle)
+
+
 # ---------------------------------------------------------------------------
 # Health & capabilities
 # ---------------------------------------------------------------------------
@@ -763,7 +791,7 @@ def validate_pipeline_endpoint(pipeline_id: str):
     p = get_pipeline(pipeline_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
-    available = list(_engines.keys())
+    available = _available_pipeline_capabilities()
     errors = validate_pipeline(p, available)
     return {"pipeline_id": pipeline_id, "valid": len(errors) == 0, "errors": errors}
 
@@ -789,12 +817,6 @@ async def run_pipeline_endpoint(
             global_opts = json.loads(options)
         except Exception:
             pass
-
-    def _infer_for_pipeline(capability: str, image_bytes: bytes, opts: dict) -> dict:
-        if capability not in _engines:
-            raise ValueError(f"Capability '{capability}' not available")
-        img = _decode_image(image_bytes)
-        return _engines[capability].infer(img, opts)
 
     result = execute_pipeline(p, raw, _infer_for_pipeline, _check_license, global_opts)
     return result

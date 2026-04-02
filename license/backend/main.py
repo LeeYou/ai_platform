@@ -1,5 +1,6 @@
 """FastAPI application entrypoint for the License Management backend."""
 
+import hmac
 import logging
 import os
 import sys
@@ -15,6 +16,20 @@ from logging.handlers import RotatingFileHandler
 
 LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme").strip()
+
+
+def _parse_allowed_origins() -> list[str]:
+    raw = os.getenv(
+        "AI_ALLOWED_ORIGINS",
+        "http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173",
+    ).strip()
+    if raw == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+ALLOWED_ORIGINS = _parse_allowed_origins()
 
 
 def _setup_logging() -> logging.Logger:
@@ -59,6 +74,7 @@ try:
     from fastapi.staticfiles import StaticFiles
 
     from database import Base, engine
+    from key_store import ensure_private_keys_dir
     from routers import capabilities, customers, keys, licenses, prod_tokens
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
@@ -102,6 +118,7 @@ async def lifespan(app: FastAPI):
     os.makedirs("./data/licenses", exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _run_migrations(engine)
+    ensure_private_keys_dir()
     logger.info("License Management service started")
     yield
     logger.info("License Management service stopped")
@@ -117,7 +134,7 @@ app = FastAPI(
 # CORS — open for all origins in dev mode
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -128,10 +145,32 @@ app.add_middleware(
 # Request logging middleware
 # ---------------------------------------------------------------------------
 
+def _extract_admin_token(request: Request) -> str:
+    auth = request.headers.get("Authorization", "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.headers.get("X-Admin-Token", "").strip()
+
+
+def _requires_admin_auth(request: Request) -> bool:
+    return request.url.path.startswith("/api/v1/") and request.method not in {"GET", "HEAD", "OPTIONS"}
+
+
+def _enforce_admin_auth(request: Request):
+    token = _extract_admin_token(request)
+    if not token or not hmac.compare_digest(token, ADMIN_TOKEN):
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return None
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     try:
+        if _requires_admin_auth(request):
+            auth_error = _enforce_admin_auth(request)
+            if auth_error is not None:
+                return auth_error
         response = await call_next(request)
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(

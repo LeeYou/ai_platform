@@ -9,6 +9,7 @@ Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agile
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import os
 import re
@@ -35,6 +36,20 @@ LOG_DIR = os.getenv("LOG_DIR", "./data/build_logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LICENSE_SERVICE_URL = os.getenv("LICENSE_SERVICE_URL", "http://license:8003")
 TRAIN_SERVICE_URL = os.getenv("TRAIN_SERVICE_URL", "http://train:8001")
+ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme").strip()
+
+
+def _parse_allowed_origins() -> list[str]:
+    raw = os.getenv(
+        "AI_ALLOWED_ORIGINS",
+        "http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173",
+    ).strip()
+    if raw == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+ALLOWED_ORIGINS = _parse_allowed_origins()
 
 ALLOWED_BUILD_TYPES = {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
 # CMake -D args must match: -DVARNAME=VALUE (alphanumeric + underscore/dot/dash)
@@ -109,7 +124,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -120,10 +135,25 @@ app.add_middleware(
 # Request logging middleware
 # ---------------------------------------------------------------------------
 
+def _extract_admin_token(request: Request) -> str:
+    auth = request.headers.get("Authorization", "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.headers.get("X-Admin-Token", "").strip()
+
+
+def _requires_admin_auth(request: Request) -> bool:
+    return request.url.path.startswith("/api/v1/") and request.method not in {"GET", "HEAD", "OPTIONS"}
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     try:
+        if _requires_admin_auth(request):
+            token = _extract_admin_token(request)
+            if not token or not hmac.compare_digest(token, ADMIN_TOKEN):
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         response = await call_next(request)
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
@@ -423,6 +453,10 @@ def get_build_logs(job_id: str):
 @app.websocket("/ws/build/{job_id}")
 async def ws_build_logs(websocket: WebSocket, job_id: str):
     """Stream build logs line-by-line via WebSocket."""
+    token = websocket.query_params.get("token", "").strip()
+    if not token or not hmac.compare_digest(token, ADMIN_TOKEN):
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
     if job_id not in _jobs:
         await websocket.send_text('{"type":"error","msg":"job not found"}')

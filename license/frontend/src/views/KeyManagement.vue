@@ -39,7 +39,7 @@
     <!-- Generate Key Dialog -->
     <el-dialog v-model="generateDialog" title="生成新密钥对" width="480px">
       <el-alert
-        title="私钥将保存到您指定的服务器路径，数据库中仅存储公钥。请确保路径安全可写。"
+        title="私钥会自动保存到服务端受控目录，数据库中仅存储公钥。请在生成后妥善备份私钥文件。"
         type="info"
         show-icon
         :closable="false"
@@ -48,9 +48,6 @@
       <el-form :model="genForm" :rules="genRules" ref="genFormRef" label-width="120px">
         <el-form-item label="密钥名称" prop="name">
           <el-input v-model="genForm.name" placeholder="如 production-key-2024" />
-        </el-form-item>
-        <el-form-item label="私钥保存路径" prop="privkey_output_path">
-          <el-input v-model="genForm.privkey_output_path" placeholder="/data/licenses/keys/客户名称/private_key.pem" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -71,11 +68,10 @@ const submitting = ref(false)
 const list = ref([])
 const generateDialog = ref(false)
 const genFormRef = ref()
-const genForm = ref({ name: '', privkey_output_path: '' })
+const genForm = ref({ name: '' })
 
 const genRules = {
   name: [{ required: true, message: '请输入密钥名称', trigger: 'blur' }],
-  privkey_output_path: [{ required: true, message: '请输入私钥保存路径', trigger: 'blur' }],
 }
 
 function formatDate(val) {
@@ -96,7 +92,7 @@ async function loadList() {
 }
 
 function openGenerate() {
-  genForm.value = { name: '', privkey_output_path: '' }
+  genForm.value = { name: '' }
   generateDialog.value = true
 }
 

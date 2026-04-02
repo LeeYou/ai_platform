@@ -76,9 +76,6 @@
         <el-form-item label="新到期日期" prop="new_valid_until" :rules="[{ required: true, message: '请选择日期' }]">
           <el-date-picker v-model="renewForm.new_valid_until" type="date" format="YYYY-MM-DD" value-format="YYYY-MM-DD" style="width:100%;" />
         </el-form-item>
-        <el-form-item label="私钥文件路径" prop="privkey_path" :rules="[{ required: true, message: '请输入私钥路径' }]">
-          <el-input v-model="renewForm.privkey_path" placeholder="/path/to/private.pem" />
-        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="renewDialog = false">取消</el-button>
@@ -103,7 +100,7 @@ const pageSize = 20
 const customerOptions = ref([])
 const filters = ref({ customer_id: '', status: '', expiring_in_days: null })
 const renewDialog = ref(false)
-const renewForm = ref({ new_valid_until: '', privkey_path: '' })
+const renewForm = ref({ new_valid_until: '' })
 const renewFormRef = ref()
 const renewingId = ref(null)
 
@@ -169,7 +166,7 @@ async function handleDownload(row) {
 
 function openRenew(row) {
   renewingId.value = row.license_id
-  renewForm.value = { new_valid_until: '', privkey_path: '' }
+  renewForm.value = { new_valid_until: '' }
   renewDialog.value = true
 }
 
