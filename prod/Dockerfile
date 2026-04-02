@@ -16,11 +16,11 @@ RUN cd prod/frontend \
     && npm install \
     && npm run build
 
-# ─── Stage 2: Runtime (GPU-first with CPU fallback) ────────────────────────
-# Use NVIDIA CUDA Runtime base image to enable GPU acceleration
-# This provides CUDA Runtime libraries + cuDNN for ONNXRuntime GPU inference
-# CPU-only fallback works automatically if no GPU is detected
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+# ─── Stage 2: Runtime ──────────────────────────────────────────────────────
+# Production service uses CPU-only ONNX Runtime (no CUDA needed in container)
+# GPU acceleration is handled by compiled SO libraries (built with CUDA 11.8 support)
+# The SO files detect GPU availability at runtime and fall back to CPU if needed
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 

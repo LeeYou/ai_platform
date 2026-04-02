@@ -56,14 +56,18 @@ Runtime在启动时按以下顺序查找资源:
 
 ### 2.2 GPU优先CPU兜底
 
-生产镜像基于 `nvidia/cuda:12.1.0-runtime-ubuntu22.04`,提供以下特性:
+**重要说明**: 生产镜像基于 `ubuntu:22.04` (CPU-only),GPU加速能力在编译的SO库中实现。
 
-- **CUDA Runtime库** - libcudart.so, libcudnn.so
-- **自动GPU检测** - C++ SO在AiInit时尝试加载CUDA Provider
-- **优雅降级** - GPU不可用时自动回退CPU,功能正常
+SO库编译时链接CUDA 11.8 Runtime和ONNXRuntime GPU Provider,并内置GPU检测逻辑:
+
+- **编译阶段** - 使用 `agilestar/ai-builder` (CUDA 11.8) 编译SO库,链接CUDA支持
+- **运行阶段** - SO库在AiInit时检测GPU可用性:
+  - GPU可用 → 加载CUDA Provider,使用GPU加速
+  - GPU不可用 → 自动回退CPU Provider,功能正常
+- **容器无需CUDA** - 生产容器仅加载SO文件,GPU检测由SO内部完成
 
 ```cpp
-// C++ SO内部GPU优先策略
+// C++ SO内部GPU优先策略 (编译时链接CUDA 11.8)
 OrtStatus* status = api->SessionOptionsAppendExecutionProvider_CUDA(session_opts, &cuda_options);
 if (status == nullptr) {
     fprintf(stdout, "[capability] GPU mode enabled\n");  // GPU可用
@@ -72,6 +76,12 @@ if (status == nullptr) {
     api->ReleaseStatus(status);
 }
 ```
+
+这种设计的优势:
+- ✅ 生产容器保持轻量(无需CUDA镜像)
+- ✅ SO库在有GPU的环境自动加速
+- ✅ SO库在无GPU的环境正常运行
+- ✅ 同一个SO文件适配GPU和CPU环境
 
 ### 2.3 实例池架构
 
@@ -287,8 +297,8 @@ ls -l /dev/nvidia*
 # 检查驱动版本
 cat /proc/driver/nvidia/version
 
-# Docker运行时测试
-docker run --rm --runtime=nvidia nvidia/cuda:12.1.0-runtime-ubuntu22.04 nvidia-smi
+# Docker运行时测试 (使用CUDA 11.8匹配编译环境)
+docker run --rm --runtime=nvidia nvidia/cuda:11.8.0-runtime-ubuntu22.04 nvidia-smi
 ```
 
 ### 5.2 GPU检测日志
@@ -558,12 +568,12 @@ docker exec ai-prod nvidia-smi
 
 ### Q8: 生产镜像是否支持ARM架构?
 
-**A:** 支持。需要编译ARM版本SO库并使用对应的CUDA Runtime镜像:
+**A:** 支持。需要编译ARM版本SO库,生产镜像本身仍使用ubuntu:22.04基础镜像:
 
-```dockerfile
-# ARM64生产镜像
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04-arm64v8
-...
+```bash
+# ARM64生产镜像 (与x86_64使用相同基础镜像)
+# GPU支持由SO库内部实现,不依赖CUDA基础镜像
+# 如需GPU加速,需在ARM主机上安装NVIDIA驱动和nvidia-docker
 ```
 
 挂载目录结构:
