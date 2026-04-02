@@ -116,6 +116,7 @@ class ProdMainTests(unittest.TestCase):
         self.original_resolve_models_dir = prod_main.resolve_models_dir
         self.original_resolve_libs_dir = prod_main.resolve_libs_dir
         self.original_resolve_runtime_so_path = prod_main.resolve_runtime_so_path
+        self.original_list_available_capabilities = prod_main.list_available_capabilities
         self.original_resource_resolve_model_dir = resource_resolver.resolve_model_dir
         self.original_exists = prod_main.os.path.exists
         self.original_license_path = prod_main.LICENSE_PATH
@@ -132,6 +133,14 @@ class ProdMainTests(unittest.TestCase):
         prod_main.resolve_models_dir = lambda: str(Path(self.tempdir.name) / "models")
         prod_main.resolve_libs_dir = lambda: str(Path(self.tempdir.name) / "libs")
         prod_main.resolve_runtime_so_path = lambda: str(self.libs_dir / "libai_runtime.so")
+        prod_main.list_available_capabilities = lambda: [
+            {
+                "capability": "face_detect",
+                "version": "v1.2.3",
+                "model_dir": str(self.model_dir),
+                "source": "mount",
+            }
+        ]
         prod_main._init_runtime = lambda: True
         prod_main.destroy_runtime = lambda: None
         prod_main.get_runtime = lambda: self.fake_runtime
@@ -152,6 +161,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main.resolve_models_dir = self.original_resolve_models_dir
         prod_main.resolve_libs_dir = self.original_resolve_libs_dir
         prod_main.resolve_runtime_so_path = self.original_resolve_runtime_so_path
+        prod_main.list_available_capabilities = self.original_list_available_capabilities
         resource_resolver.resolve_model_dir = self.original_resource_resolve_model_dir
         prod_main.os.path.exists = self.original_exists
         prod_main.LICENSE_PATH = self.original_license_path
