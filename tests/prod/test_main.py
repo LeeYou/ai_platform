@@ -498,6 +498,65 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(calls, ["face_detect", "second_cap", "third_cap"])
         self.assertEqual([step["status"] for step in body["steps"]], ["success", "error", "success"])
 
+    def test_run_pipeline_endpoint_returns_final_output_from_step_context(self):
+        pipeline = {
+            "pipeline_id": "pipe_final_output",
+            "name": "Final output mapping",
+            "steps": [
+                {
+                    "step_id": "s1",
+                    "capability": "face_detect",
+                    "output_mapping": {
+                        "passed": "$.passed",
+                        "score": "$.score",
+                    },
+                }
+            ],
+            "final_output": {
+                "passed": "${s1.passed}",
+                "score_ok": "${s1.score} >= 0.5",
+            },
+        }
+        (self.pipeline_dir / "pipe_final_output.json").write_text(json.dumps(pipeline), encoding="utf-8")
+
+        prod_main._infer_for_pipeline = lambda capability, image_bytes, options: {
+            "passed": True,
+            "score": 0.75,
+        }
+
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        body = asyncio.run(prod_main.run_pipeline_endpoint("pipe_final_output", upload))
+        self.assertEqual(body["steps"][0]["status"], "success")
+        self.assertEqual(body["final_result"], {"passed": True, "score_ok": True})
+
+    def test_run_pipeline_endpoint_stops_after_condition_evaluation_error(self):
+        pipeline = {
+            "pipeline_id": "pipe_condition_error",
+            "name": "Condition error",
+            "steps": [
+                {"step_id": "s1", "capability": "face_detect", "output_mapping": {"label": "$.label"}},
+                {"step_id": "s2", "capability": "second_cap", "condition": "${s1.label} > 1"},
+                {"step_id": "s3", "capability": "third_cap"},
+            ],
+        }
+        (self.pipeline_dir / "pipe_condition_error.json").write_text(json.dumps(pipeline), encoding="utf-8")
+
+        calls = []
+
+        def fake_infer(capability, image_bytes, options):
+            calls.append(capability)
+            return {"label": "abc"}
+
+        prod_main._infer_for_pipeline = fake_infer
+
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        body = asyncio.run(prod_main.run_pipeline_endpoint("pipe_condition_error", upload))
+        self.assertEqual(calls, ["face_detect"])
+        self.assertEqual(body["steps"][0]["status"], "success")
+        self.assertEqual(body["steps"][1]["status"], "error")
+        self.assertEqual(body["steps"][1]["error"], "Condition evaluation error")
+        self.assertEqual(len(body["steps"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
