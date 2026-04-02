@@ -2,6 +2,7 @@
 #define AGILESTAR_AI_RUNTIME_H
 
 #include "ai_types.h"
+#include "ai_capability.h"  // for AI_EXPORT
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,9 +36,9 @@ extern "C" {
  * @param license_path    License 文件路径（如 /mnt/ai_platform/licenses/<id>/license.bin）
  * @return AI_OK 表示成功；其他值见 AiErrorCode
  */
-int32_t AiRuntimeInit(const char* so_dir,
-                      const char* model_base_dir,
-                      const char* license_path);
+AI_EXPORT int32_t AiRuntimeInit(const char* so_dir,
+                                 const char* model_base_dir,
+                                 const char* license_path);
 
 /**
  * 获取已成功加载的能力列表（JSON 字符串）。
@@ -54,7 +55,7 @@ int32_t AiRuntimeInit(const char* so_dir,
  * @param buf_len 缓冲区长度（字节）
  * @return 写入字节数（不含 '\0'）；buf_len 不足时返回所需大小（正整数）
  */
-int32_t AiRuntimeGetCapabilities(char* buf, int32_t buf_len);
+AI_EXPORT int32_t AiRuntimeGetCapabilities(char* buf, int32_t buf_len);
 
 /**
  * 从指定能力的实例池中获取一个可用推理实例。
@@ -66,7 +67,7 @@ int32_t AiRuntimeGetCapabilities(char* buf, int32_t buf_len);
  * @param timeout_ms      等待超时毫秒数；0 表示立即返回（不等待）
  * @return 可用实例 Handle；超时或能力不存在返回 NULL
  */
-AiHandle AiRuntimeAcquire(const char* capability_name, int32_t timeout_ms);
+AI_EXPORT AiHandle AiRuntimeAcquire(const char* capability_name, int32_t timeout_ms);
 
 /**
  * 将推理实例归还到其所属能力的实例池。
@@ -74,7 +75,7 @@ AiHandle AiRuntimeAcquire(const char* capability_name, int32_t timeout_ms);
  *
  * @param handle 由 AiRuntimeAcquire 返回的实例 Handle
  */
-void AiRuntimeRelease(AiHandle handle);
+AI_EXPORT void AiRuntimeRelease(AiHandle handle);
 
 /**
  * 热重载指定能力的模型包和/或 SO（后台异步执行）。
@@ -88,7 +89,7 @@ void AiRuntimeRelease(AiHandle handle);
  * @param capability_name 需要重载的能力标识
  * @return AI_OK 表示重载流程已启动（非完成）；其他值表示启动失败
  */
-int32_t AiRuntimeReload(const char* capability_name);
+AI_EXPORT int32_t AiRuntimeReload(const char* capability_name);
 
 /**
  * 获取当前 License 状态（JSON 字符串）。
@@ -106,13 +107,13 @@ int32_t AiRuntimeReload(const char* capability_name);
  * @param buf_len 缓冲区长度（字节）
  * @return 写入字节数（不含 '\0'）；buf_len 不足时返回所需大小（正整数）
  */
-int32_t AiRuntimeGetLicenseStatus(char* buf, int32_t buf_len);
+AI_EXPORT int32_t AiRuntimeGetLicenseStatus(char* buf, int32_t buf_len);
 
 /**
  * Runtime 全局销毁（进程退出前调用一次）。
  * 等待所有正在执行的推理完成，销毁全部实例，卸载所有 SO。
  */
-void AiRuntimeDestroy(void);
+AI_EXPORT void AiRuntimeDestroy(void);
 
 #ifdef __cplusplus
 }
