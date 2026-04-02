@@ -1,11 +1,11 @@
 import json
-import pathlib
+from pathlib import Path
 import sys
 import tempfile
 import unittest
 
 
-PROD_DIR = pathlib.Path("/home/runner/work/ai_platform/ai_platform/prod/web_service")
+PROD_DIR = Path(__file__).resolve().parents[2] / "prod" / "web_service"
 if str(PROD_DIR) not in sys.path:
     sys.path.insert(0, str(PROD_DIR))
 

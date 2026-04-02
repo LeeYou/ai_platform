@@ -2,16 +2,16 @@ import asyncio
 import io
 import json
 import os
-import pathlib
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
 
-PROD_DIR = pathlib.Path("/home/runner/work/ai_platform/ai_platform/prod/web_service")
+PROD_DIR = Path(__file__).resolve().parents[2] / "prod" / "web_service"
 if str(PROD_DIR) not in sys.path:
     sys.path.insert(0, str(PROD_DIR))
 os.environ.setdefault("LOG_DIR", "/tmp/ai_platform_test_logs")
@@ -52,13 +52,13 @@ class ProdMainTests(unittest.TestCase):
     def setUp(self):
         self.fake_runtime = _FakeRuntime()
         self.tempdir = tempfile.TemporaryDirectory()
-        self.model_dir = pathlib.Path(self.tempdir.name) / "models" / "face_detect" / "current"
+        self.model_dir = Path(self.tempdir.name) / "models" / "face_detect" / "current"
         self.model_dir.mkdir(parents=True, exist_ok=True)
         (self.model_dir / "manifest.json").write_text(
             json.dumps({"capability": "face_detect", "model_version": "v1.2.3"}),
             encoding="utf-8",
         )
-        self.pipeline_dir = pathlib.Path(self.tempdir.name) / "pipelines"
+        self.pipeline_dir = Path(self.tempdir.name) / "pipelines"
         self.pipeline_dir.mkdir(parents=True, exist_ok=True)
 
         self.original_pipeline_dir = pipeline_engine.PIPELINE_DIR

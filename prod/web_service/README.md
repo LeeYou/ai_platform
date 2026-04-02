@@ -68,7 +68,7 @@ Train (Python)
 
 ### Incorrect Implementation (REMOVED)
 
-- **Python ONNXRuntime production path** ❌ - 已彻底删除，生产环境只允许 `main.py` → `ai_runtime_ctypes.py` → `libai_runtime.so`
+- **Python ONNXRuntime production path** ❌ - Fully removed; production only allows `main.py` → `ai_runtime_ctypes.py` → `libai_runtime.so`
 
 ## Running the Service
 

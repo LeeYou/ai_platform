@@ -315,7 +315,7 @@ def execute_pipeline(
                     "capability": capability,
                     "status": "error",
                     "time_ms": 0,
-                    "error": f"Condition evaluation error: {exc}",
+                    "error": "Condition evaluation error",
                 })
                 if step.get("on_failure", "abort") == "abort":
                     break
@@ -342,7 +342,7 @@ def execute_pipeline(
                 "capability": capability,
                 "status": "error",
                 "time_ms": 0,
-                "error": str(exc),
+                "error": "License check failed",
             })
             if step.get("on_failure", "abort") == "abort":
                 break
@@ -385,7 +385,7 @@ def execute_pipeline(
                 "capability": capability,
                 "status": "error",
                 "time_ms": elapsed,
-                "error": str(exc),
+                "error": "Step execution failed",
             })
             context[step_id] = {}
             on_failure = step.get("on_failure", "abort")

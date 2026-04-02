@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 import traceback
@@ -472,6 +473,11 @@ def _error_response(code: int, message: str, capability: str = "") -> JSONRespon
     )
 
 
+def _validate_capability_name(capability: str) -> None:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", capability):
+        raise HTTPException(status_code=400, detail={"code": 2001, "message": "Invalid capability name"})
+
+
 def _payload_too_large_response() -> JSONResponse:
     return JSONResponse(
         status_code=413,
@@ -515,6 +521,7 @@ def _available_pipeline_capabilities() -> list[str]:
 
 
 def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dict:
+    _validate_capability_name(capability)
     _check_license(capability)
     runtime = get_runtime()
     if not runtime:
@@ -649,6 +656,7 @@ async def infer(
 ):
     """Run inference for a specific AI capability using C++ Runtime instance pool."""
     async with _acquire_infer_slot():
+        _validate_capability_name(capability)
         _check_license(capability)
 
         runtime = get_runtime()
@@ -687,23 +695,17 @@ async def infer(
                 )
 
             elapsed = (time.perf_counter() - t0) * 1000.0
-            from resource_resolver import resolve_model_dir
-            model_dir = resolve_model_dir(capability)
             version = "unknown"
-            if model_dir:
-                manifest_path = os.path.join(model_dir, "manifest.json")
-                try:
-                    with open(manifest_path, encoding="utf-8") as f:
-                        manifest = json.load(f)
-                        version = manifest.get("model_version", "unknown")
-                except Exception:
-                    pass
+            for cap_info in runtime.get_capabilities():
+                if cap_info.get("name") == capability:
+                    version = cap_info.get("version", "unknown")
+                    break
 
             return _success(capability, version, result.get("result", {}), round(elapsed, 2))
 
         except Exception as exc:
             logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
-            return _error_response(2004, f"Inference failed: {exc}", capability)
+            return _error_response(2004, "Inference failed", capability)
         finally:
             runtime.release(handle)
 
@@ -748,6 +750,7 @@ async def reload_all(request: Request):
 async def reload_capability(capability: str, request: Request):
     """Trigger hot reload for a specific capability via C++ Runtime."""
     _verify_admin(request)
+    _validate_capability_name(capability)
     runtime = get_runtime()
     if not runtime:
         raise HTTPException(status_code=500, detail="Runtime not initialized")
