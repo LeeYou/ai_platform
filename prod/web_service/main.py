@@ -12,8 +12,10 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -142,10 +144,62 @@ AB_TEST_CONFIG_DIR = os.getenv(
 )
 _infer_request_semaphore = asyncio.Semaphore(INFER_MAX_CONCURRENCY)
 ab_manager = ABTestManager(AB_TEST_CONFIG_DIR)
+_runtime_libs_stage_dir: str | None = None
 
 # ---------------------------------------------------------------------------
 # Runtime initialization
 # ---------------------------------------------------------------------------
+
+def _cleanup_runtime_libs_stage_dir() -> None:
+    global _runtime_libs_stage_dir
+    if _runtime_libs_stage_dir and os.path.isdir(_runtime_libs_stage_dir):
+        shutil.rmtree(_runtime_libs_stage_dir, ignore_errors=True)
+    _runtime_libs_stage_dir = None
+
+
+def _prepare_runtime_libs_dir(libs_dir: str) -> str:
+    """Stage nested shared libraries into a flat directory for the native loader."""
+    global _runtime_libs_stage_dir
+    if not os.path.isdir(libs_dir):
+        return libs_dir
+
+    direct_shared_objects = [
+        name for name in os.listdir(libs_dir)
+        if os.path.isfile(os.path.join(libs_dir, name)) and ".so" in name
+    ]
+    if direct_shared_objects:
+        return libs_dir
+
+    nested_shared_objects: list[str] = []
+    for root, _, files in os.walk(libs_dir):
+        if root == libs_dir:
+            continue
+        for name in files:
+            if ".so" not in name:
+                continue
+            nested_shared_objects.append(os.path.join(root, name))
+
+    if not nested_shared_objects:
+        return libs_dir
+
+    _cleanup_runtime_libs_stage_dir()
+    stage_dir = tempfile.mkdtemp(prefix="ai_runtime_libs_")
+    for source_path in sorted(set(nested_shared_objects)):
+        target_path = os.path.join(stage_dir, os.path.basename(source_path))
+        if os.path.lexists(target_path):
+            continue
+        try:
+            os.symlink(source_path, target_path)
+        except OSError:
+            shutil.copy2(source_path, target_path)
+
+    _runtime_libs_stage_dir = stage_dir
+    logger.info(
+        "Prepared staged runtime library directory %s from %s with %d shared object(s)",
+        stage_dir, libs_dir, len(nested_shared_objects),
+    )
+    return stage_dir
+
 
 def _init_runtime() -> bool:
     """Initialize C++ Runtime layer with SO directory, models, and license."""
@@ -156,15 +210,21 @@ def _init_runtime() -> bool:
         return False
 
     libs_dir = resolve_libs_dir()
+    loader_libs_dir = _prepare_runtime_libs_dir(libs_dir)
     models_dir = resolve_models_dir()
 
     logger.info("Initializing C++ Runtime:")
     logger.info("  Runtime SO:    %s", runtime_so)
     logger.info("  Libs dir:      %s", libs_dir)
+    if loader_libs_dir != libs_dir:
+        logger.info("  Loader dir:    %s", loader_libs_dir)
     logger.info("  Models dir:    %s", models_dir)
     logger.info("  License path:  %s", LICENSE_PATH)
 
-    success = init_runtime(runtime_so, libs_dir, models_dir, LICENSE_PATH)
+    if PUBKEY_PATH:
+        os.environ["AI_PUBKEY_PATH"] = PUBKEY_PATH
+
+    success = init_runtime(runtime_so, loader_libs_dir, models_dir, LICENSE_PATH)
     if not success:
         logger.error("Failed to initialize C++ Runtime — check logs above")
         return False
@@ -396,6 +456,7 @@ async def lifespan(app: FastAPI):
     logger.info("Production AI service started — %d capabilities loaded", len(caps))
     yield
     destroy_runtime()
+    _cleanup_runtime_libs_stage_dir()
     logger.info("Production AI service stopped")
 
 

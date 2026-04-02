@@ -121,10 +121,15 @@ class ProdMainTests(unittest.TestCase):
         self.original_resource_resolve_model_dir = resource_resolver.resolve_model_dir
         self.original_exists = prod_main.os.path.exists
         self.original_license_path = prod_main.LICENSE_PATH
+        self.original_pubkey_path = prod_main.PUBKEY_PATH
+        self.original_runtime_bootstrap = prod_main._init_runtime
+        self.original_runtime_init = prod_main.init_runtime
+        self.original_get_runtime = prod_main.get_runtime
         self.original_verify_license_signature = prod_main._verify_license_signature
         self.original_check_license = prod_main._check_license
         self.original_infer_for_pipeline = prod_main._infer_for_pipeline
         self.original_subprocess_run = prod_main.subprocess.run
+        self.original_ai_pubkey_env = os.environ.get("AI_PUBKEY_PATH")
         self.libs_dir = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect" / "lib"
         self.libs_dir.mkdir(parents=True, exist_ok=True)
         (self.libs_dir / "libface_detect.so").write_bytes(b"fake")
@@ -167,10 +172,19 @@ class ProdMainTests(unittest.TestCase):
         resource_resolver.resolve_model_dir = self.original_resource_resolve_model_dir
         prod_main.os.path.exists = self.original_exists
         prod_main.LICENSE_PATH = self.original_license_path
+        prod_main.PUBKEY_PATH = self.original_pubkey_path
+        prod_main._init_runtime = self.original_runtime_bootstrap
+        prod_main.init_runtime = self.original_runtime_init
+        prod_main.get_runtime = self.original_get_runtime
         prod_main._verify_license_signature = self.original_verify_license_signature
         prod_main._check_license = self.original_check_license
         prod_main._infer_for_pipeline = self.original_infer_for_pipeline
         prod_main.subprocess.run = self.original_subprocess_run
+        prod_main._cleanup_runtime_libs_stage_dir()
+        if self.original_ai_pubkey_env is None:
+            os.environ.pop("AI_PUBKEY_PATH", None)
+        else:
+            os.environ["AI_PUBKEY_PATH"] = self.original_ai_pubkey_env
         self.tempdir.cleanup()
 
     def _write_license(self, **overrides):
@@ -213,6 +227,36 @@ class ProdMainTests(unittest.TestCase):
         prod_main.subprocess.run = _raise_file_not_found
         body = prod_main.health()
         self.assertFalse(body["gpu_available"])
+
+    def test_prepare_runtime_libs_dir_stages_nested_shared_objects(self):
+        source_root = str(Path(self.tempdir.name) / "libs")
+        staged_dir = prod_main._prepare_runtime_libs_dir(source_root)
+
+        self.assertNotEqual(staged_dir, source_root)
+        self.assertTrue(Path(staged_dir, "libface_detect.so").exists())
+        self.assertTrue(Path(staged_dir, "libai_runtime.so").exists())
+
+    def test_init_runtime_uses_staged_loader_dir_and_sets_pubkey_env(self):
+        records = {}
+        pubkey_path = Path(self.tempdir.name) / "licenses" / "pubkey.pem"
+        pubkey_path.parent.mkdir(parents=True, exist_ok=True)
+        pubkey_path.write_text("fake-pubkey", encoding="utf-8")
+        prod_main.PUBKEY_PATH = str(pubkey_path)
+        prod_main.resolve_libs_dir = lambda: str(Path(self.tempdir.name) / "libs")
+        prod_main.init_runtime = (
+            lambda runtime_so, libs_dir, models_dir, license_path: records.update({
+                "runtime_so": runtime_so,
+                "libs_dir": libs_dir,
+                "models_dir": models_dir,
+                "license_path": license_path,
+            }) or True
+        )
+        prod_main.get_runtime = lambda: self.fake_runtime
+
+        self.assertTrue(self.original_runtime_bootstrap())
+        self.assertNotEqual(records["libs_dir"], str(Path(self.tempdir.name) / "libs"))
+        self.assertTrue(Path(records["libs_dir"], "libface_detect.so").exists())
+        self.assertEqual(prod_main.PUBKEY_PATH, str(pubkey_path))
 
     def test_capabilities_endpoint_includes_manifest_metadata(self):
         body = prod_main.list_capabilities()
