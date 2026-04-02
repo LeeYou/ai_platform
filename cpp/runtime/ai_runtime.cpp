@@ -169,7 +169,7 @@ int32_t AiRuntimeInfer(AiHandle handle, const AiImage* input, AiResult* output) 
     }
 
     // Get capability entry and call its AiInfer function
-    const CapabilityEntry* entry = agilestar_loader_find(cap_name.c_str());
+    const agilestar::CapabilityEntry* entry = agilestar_loader_find(cap_name.c_str());
     if (!entry || !entry->fn_Infer) {
         std::fprintf(stderr, "[Runtime] Capability %s not found or has no Infer function\n",
                      cap_name.c_str());
