@@ -157,6 +157,10 @@ def _cleanup_runtime_libs_stage_dir() -> None:
     _runtime_libs_stage_dir = None
 
 
+def _is_shared_library_filename(name: str) -> bool:
+    return bool(re.search(r"\.so(?:\.\d+)*$", name))
+
+
 def _prepare_runtime_libs_dir(libs_dir: str) -> str:
     """Stage nested shared libraries into a flat directory for the native loader."""
     global _runtime_libs_stage_dir
@@ -165,7 +169,7 @@ def _prepare_runtime_libs_dir(libs_dir: str) -> str:
 
     direct_shared_objects = [
         name for name in os.listdir(libs_dir)
-        if os.path.isfile(os.path.join(libs_dir, name)) and ".so" in name
+        if os.path.isfile(os.path.join(libs_dir, name)) and _is_shared_library_filename(name)
     ]
     if direct_shared_objects:
         return libs_dir
@@ -175,7 +179,7 @@ def _prepare_runtime_libs_dir(libs_dir: str) -> str:
         if root == libs_dir:
             continue
         for name in files:
-            if ".so" not in name:
+            if not _is_shared_library_filename(name):
                 continue
             nested_shared_objects.append(os.path.join(root, name))
 

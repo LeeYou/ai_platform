@@ -235,6 +235,8 @@ class ProdMainTests(unittest.TestCase):
         self.assertNotEqual(staged_dir, source_root)
         self.assertTrue(Path(staged_dir, "libface_detect.so").exists())
         self.assertTrue(Path(staged_dir, "libai_runtime.so").exists())
+        self.assertTrue(prod_main._is_shared_library_filename("libface_detect.so.1"))
+        self.assertFalse(prod_main._is_shared_library_filename("libface_detect.so.bak"))
 
     def test_init_runtime_uses_staged_loader_dir_and_sets_pubkey_env(self):
         records = {}
