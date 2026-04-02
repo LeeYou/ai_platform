@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import json
 import os
@@ -126,6 +127,12 @@ class ProdMainTests(unittest.TestCase):
         self.original_runtime_init = prod_main.init_runtime
         self.original_get_runtime = prod_main.get_runtime
         self.original_verify_license_signature = prod_main._verify_license_signature
+        self.original_verify_license_signature_with_cryptography = (
+            prod_main._verify_license_signature_with_cryptography
+        )
+        self.original_verify_license_signature_with_openssl = (
+            prod_main._verify_license_signature_with_openssl
+        )
         self.original_check_license = prod_main._check_license
         self.original_infer_for_pipeline = prod_main._infer_for_pipeline
         self.original_subprocess_run = prod_main.subprocess.run
@@ -179,6 +186,12 @@ class ProdMainTests(unittest.TestCase):
         prod_main.init_runtime = self.original_runtime_init
         prod_main.get_runtime = self.original_get_runtime
         prod_main._verify_license_signature = self.original_verify_license_signature
+        prod_main._verify_license_signature_with_cryptography = (
+            self.original_verify_license_signature_with_cryptography
+        )
+        prod_main._verify_license_signature_with_openssl = (
+            self.original_verify_license_signature_with_openssl
+        )
         prod_main._check_license = self.original_check_license
         prod_main._infer_for_pipeline = self.original_infer_for_pipeline
         prod_main.subprocess.run = self.original_subprocess_run
@@ -284,6 +297,46 @@ class ProdMainTests(unittest.TestCase):
         os.environ.pop("AI_PUBKEY_PATH", None)
 
         self.assertEqual(prod_main._resolve_effective_pubkey_path(), str(pubkey_path))
+
+    def test_verify_license_signature_falls_back_to_openssl_when_cryptography_missing(self):
+        pubkey_path = Path(self.tempdir.name) / "licenses" / "pubkey.pem"
+        pubkey_path.parent.mkdir(parents=True, exist_ok=True)
+        pubkey_path.write_text("fake-pubkey", encoding="utf-8")
+        prod_main.PUBKEY_PATH = str(pubkey_path)
+        prod_main._verify_license_signature_with_cryptography = (
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ImportError("no cryptography"))
+        )
+        records = {}
+        prod_main._verify_license_signature_with_openssl = (
+            lambda path, canonical, sig_bytes: records.update({
+                "path": path,
+                "canonical": canonical,
+                "sig_bytes": sig_bytes,
+            }) or True
+        )
+        raw_license = json.dumps({
+            "license_id": "lic-test",
+            "valid_until": "2099-01-01T00:00:00+08:00",
+            "capabilities": ["face_detect"],
+            "signature": base64.b64encode(b"sig").decode("ascii"),
+        })
+
+        self.assertTrue(prod_main._verify_license_signature(raw_license))
+        self.assertEqual(records["path"], str(pubkey_path))
+        self.assertEqual(records["sig_bytes"], b"sig")
+        self.assertEqual(
+            records["canonical"],
+            json.dumps(
+                {
+                    "license_id": "lic-test",
+                    "valid_until": "2099-01-01T00:00:00+08:00",
+                    "capabilities": ["face_detect"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8"),
+        )
 
     def test_capabilities_endpoint_includes_manifest_metadata(self):
         body = prod_main.list_capabilities()

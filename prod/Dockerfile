@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    openssl \
     curl \
     ca-certificates \
     tzdata \

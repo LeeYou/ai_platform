@@ -299,6 +299,75 @@ def _resolve_effective_pubkey_path() -> str:
     return configured_pubkey_path
 
 
+def _verify_license_signature_with_cryptography(
+    pubkey_pem: str,
+    canonical: bytes,
+    sig_bytes: bytes,
+) -> bool:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    public_key = serialization.load_pem_public_key(pubkey_pem.encode("utf-8"))
+    public_key.verify(
+        sig_bytes,
+        canonical,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
+    return True
+
+
+def _verify_license_signature_with_openssl(
+    pubkey_path: str,
+    canonical: bytes,
+    sig_bytes: bytes,
+) -> bool:
+    openssl_bin = shutil.which("openssl")
+    if not openssl_bin:
+        logger.warning("OpenSSL CLI not available for license signature fallback verification")
+        return False
+
+    with tempfile.TemporaryDirectory(prefix="ai_license_verify_") as temp_dir:
+        payload_path = os.path.join(temp_dir, "payload.json")
+        signature_path = os.path.join(temp_dir, "signature.bin")
+        with open(payload_path, "wb") as payload_file:
+            payload_file.write(canonical)
+        with open(signature_path, "wb") as signature_file:
+            signature_file.write(sig_bytes)
+
+        completed = subprocess.run(
+            [
+                openssl_bin,
+                "dgst",
+                "-sha256",
+                "-verify",
+                pubkey_path,
+                "-signature",
+                signature_path,
+                "-sigopt",
+                "rsa_padding_mode:pss",
+                "-sigopt",
+                "rsa_pss_saltlen:-2",
+                "-sigopt",
+                "rsa_mgf1_md:sha256",
+                payload_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode == 0:
+            logger.info("License signature verified via OpenSSL CLI fallback")
+            return True
+
+        details = (completed.stderr or completed.stdout or "").strip()
+        logger.warning("OpenSSL CLI license verification failed: %s", details or f"exit={completed.returncode}")
+        return False
+
+
 def _init_runtime() -> bool:
     """Initialize C++ Runtime layer with SO directory, models, and license."""
     runtime_so = resolve_runtime_so_path()
@@ -383,31 +452,22 @@ def _verify_license_signature(license_json: str) -> bool:
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
                                ensure_ascii=False).encode("utf-8")
         sig_bytes = base64.b64decode(sig_b64)
-        # Use cryptography library if available, otherwise skip
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import padding
-        from cryptography.exceptions import InvalidSignature
-        public_key = serialization.load_pem_public_key(pubkey_pem.encode("utf-8"))
-        public_key.verify(
-            sig_bytes,
-            canonical,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH,
-            ),
-            hashes.SHA256(),
-        )
-        return True
+        return _verify_license_signature_with_cryptography(pubkey_pem, canonical, sig_bytes)
     except ImportError:
+        if _verify_license_signature_with_openssl(effective_pubkey_path, canonical, sig_bytes):
+            return True
         if TRUSTED_PUBKEY_SHA256:
-            logger.error("cryptography library not available but TRUSTED_PUBKEY_SHA256 is set — DENIED")
+            logger.error(
+                "cryptography library not available and OpenSSL fallback failed "
+                "while TRUSTED_PUBKEY_SHA256 is set — DENIED"
+            )
             return False
-        logger.warning("cryptography library not available — skipping signature verification")
+        logger.warning("cryptography library not available and OpenSSL fallback failed — skipping signature verification")
         return True
-    except InvalidSignature:
-        logger.error("License signature verification FAILED — signature invalid")
-        return False
     except Exception as exc:
+        if exc.__class__.__name__ == "InvalidSignature":
+            logger.error("License signature verification FAILED — signature invalid")
+            return False
         logger.error("License signature verification error: %s", exc)
         return False
 
