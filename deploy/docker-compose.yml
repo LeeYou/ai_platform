@@ -163,12 +163,14 @@ services:
     ports:
       - "8004:8004"
     volumes:
+      - /data/ai_platform/models:/workspace/models:ro
       - /data/ai_platform/libs/linux_x86_64:/workspace/libs/linux_x86_64:rw
       - /data/ai_platform/logs/build:/app/build/backend/data/build_logs:rw
     environment:
       - TZ=Asia/Shanghai
       - LICENSE_SERVICE_URL=http://license:8003
       - BUILD_OUTPUT_DIR=/workspace/libs/linux_x86_64
+      - MODELS_ROOT=/workspace/models
     depends_on:
       - license
     healthcheck:
@@ -191,12 +193,14 @@ services:
     ports:
       - "8005:8004"
     volumes:
+      - /data/ai_platform/models:/workspace/models:ro
       - /data/ai_platform/libs/linux_aarch64:/workspace/libs/linux_aarch64:rw
       - /data/ai_platform/logs/build-arm:/app/build/backend/data/build_logs:rw
     environment:
       - TZ=Asia/Shanghai
       - LICENSE_SERVICE_URL=http://license:8003
       - BUILD_OUTPUT_DIR=/workspace/libs/linux_aarch64
+      - MODELS_ROOT=/workspace/models
     depends_on:
       - license
     healthcheck:
@@ -219,12 +223,14 @@ services:
     ports:
       - "8006:8004"
     volumes:
+      - /data/ai_platform/models:/workspace/models:ro
       - /data/ai_platform/libs/windows_x86_64:/workspace/libs/windows_x86_64:rw
       - /data/ai_platform/logs/build-windows:/app/build/backend/data/build_logs:rw
     environment:
       - TZ=Asia/Shanghai
       - LICENSE_SERVICE_URL=http://license:8003
       - BUILD_OUTPUT_DIR=/workspace/libs/windows_x86_64
+      - MODELS_ROOT=/workspace/models
     depends_on:
       - license
     healthcheck:

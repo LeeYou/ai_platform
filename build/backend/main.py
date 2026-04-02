@@ -466,22 +466,45 @@ async def ws_build_logs(websocket: WebSocket, job_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Capabilities — scan cpp/capabilities/ directory
+# Capabilities — scan cpp/capabilities/ directory AND models directory
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v1/capabilities", tags=["capabilities"])
 def list_capabilities():
-    """Return a sorted list of available AI capability names."""
+    """Return capabilities that have both source code AND trained models.
+
+    This ensures the build system only shows capabilities that can actually be
+    compiled (source exists) and deployed (model exists).
+    """
+    # Scan source code directory for compilable capabilities
     cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
-    if not os.path.isdir(cap_dir):
+    source_caps = set()
+    if os.path.isdir(cap_dir):
+        source_caps = set(
+            d for d in os.listdir(cap_dir)
+            if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
+        )
+        logger.info("Found %d capabilities in source: %s", len(source_caps), sorted(source_caps))
+    else:
         logger.warning("Capabilities directory not found: %s", cap_dir)
-        return []
-    caps = sorted(
-        d for d in os.listdir(cap_dir)
-        if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
-    )
-    logger.info("Found %d capabilities in %s", len(caps), cap_dir)
-    return caps
+
+    # Scan models directory for trained models
+    models_dir = os.getenv("MODELS_ROOT", "/workspace/models")
+    model_caps = set()
+    if os.path.isdir(models_dir):
+        for cap in os.listdir(models_dir):
+            model_path = os.path.join(models_dir, cap, "current")
+            manifest = os.path.join(model_path, "manifest.json")
+            if os.path.isdir(model_path) and os.path.exists(manifest):
+                model_caps.add(cap)
+        logger.info("Found %d capabilities with models: %s", len(model_caps), sorted(model_caps))
+    else:
+        logger.warning("Models directory not found: %s", models_dir)
+
+    # Return intersection: must have BOTH source and model
+    available = sorted(source_caps & model_caps)
+    logger.info("Returning %d buildable capabilities: %s", len(available), available)
+    return available
 
 
 # ---------------------------------------------------------------------------
