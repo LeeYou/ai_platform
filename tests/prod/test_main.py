@@ -101,14 +101,19 @@ class ProdMainTests(unittest.TestCase):
         self.original_timeout = prod_main.INFER_CONCURRENCY_TIMEOUT_SECONDS
         self.original_semaphore = prod_main._infer_request_semaphore
         self.original_ab_manager = prod_main.ab_manager
+        self.original_admin_token = prod_main.ADMIN_TOKEN
+        self.original_resolve_model_dir = prod_main.resolve_model_dir
+        self.original_exists = prod_main.os.path.exists
 
         resource_resolver.resolve_model_dir = lambda capability: str(self.model_dir)
+        prod_main.resolve_model_dir = lambda capability: str(self.model_dir)
         prod_main._init_runtime = lambda: True
         prod_main.destroy_runtime = lambda: None
         prod_main.get_runtime = lambda: self.fake_runtime
         prod_main._check_license = lambda capability: None
         prod_main._decode_image = lambda data: _FakeImage()
         prod_main.ab_manager = _FakeABManager()
+        prod_main.ADMIN_TOKEN = "test-token"
 
     def tearDown(self):
         pipeline_engine.PIPELINE_DIR = self.original_pipeline_dir
@@ -116,12 +121,33 @@ class ProdMainTests(unittest.TestCase):
         prod_main.INFER_CONCURRENCY_TIMEOUT_SECONDS = self.original_timeout
         prod_main._infer_request_semaphore = self.original_semaphore
         prod_main.ab_manager = self.original_ab_manager
+        prod_main.ADMIN_TOKEN = self.original_admin_token
+        prod_main.resolve_model_dir = self.original_resolve_model_dir
+        prod_main.os.path.exists = self.original_exists
         self.tempdir.cleanup()
 
     def test_health_endpoint_uses_runtime_status(self):
         body = prod_main.health()
         self.assertEqual(body["license"]["status"], "active")
         self.assertEqual(body["capabilities"][0]["capability"], "face_detect")
+        self.assertEqual(body["status"], "healthy")
+
+    def test_health_endpoint_reports_gpu_when_nvidia_device_exists(self):
+        prod_main.os.path.exists = lambda path: (
+            path == "/dev/nvidia0" or self.original_exists(path)
+        )
+        body = prod_main.health()
+        self.assertTrue(body["gpu_available"])
+
+    def test_capabilities_endpoint_includes_manifest_metadata(self):
+        body = prod_main.list_capabilities()
+        self.assertEqual(body["capabilities"][0]["version"], "v1.2.3")
+        self.assertEqual(body["capabilities"][0]["manifest"]["model_version"], "v1.2.3")
+
+    def test_capabilities_endpoint_returns_empty_without_runtime(self):
+        prod_main.get_runtime = lambda: None
+        body = prod_main.list_capabilities()
+        self.assertEqual(body, {"capabilities": []})
 
     def test_infer_endpoint_rejects_large_payload(self):
         prod_main.MAX_UPLOAD_BYTES = 1
@@ -154,15 +180,35 @@ class ProdMainTests(unittest.TestCase):
         self.assertFalse(body["ab_test"]["selection_matches_runtime"])
 
     def test_admin_ab_tests_endpoint_requires_token_and_returns_data(self):
-        body = prod_main.list_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer changeme"}))
+        body = prod_main.list_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer test-token"}))
         self.assertIn("face_detect", body["ab_tests"])
 
     def test_admin_ab_tests_reload_endpoint_reloads_manager(self):
         body = asyncio.run(
-            prod_main.reload_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer changeme"}))
+            prod_main.reload_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer test-token"}))
         )
         self.assertEqual(body["status"], "reloaded")
         self.assertTrue(prod_main.ab_manager.reload_called)
+
+    def test_admin_reload_endpoint_rejects_invalid_token(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(prod_main.reload_all(SimpleNamespace(headers={"Authorization": "Bearer wrong"})))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_admin_reload_endpoint_rejects_missing_token(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(prod_main.reload_all(SimpleNamespace(headers={})))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_admin_reload_capability_returns_current_version(self):
+        body = asyncio.run(
+            prod_main.reload_capability(
+                "face_detect",
+                SimpleNamespace(headers={"Authorization": "Bearer test-token"}),
+            )
+        )
+        self.assertEqual(body["reloaded"], "face_detect")
+        self.assertEqual(body["version"], "v1.2.3")
 
     def test_pipeline_validate_endpoint_returns_valid(self):
         pipeline = {
