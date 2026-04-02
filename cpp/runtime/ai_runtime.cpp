@@ -30,7 +30,7 @@ static bool        g_initialized = false;
 static std::unordered_map<std::string, std::string> g_model_dirs;
 static std::mutex g_model_dirs_mutex;
 
-static std::string _resolve_pubkey_path(const char* license_path) {
+static std::string resolve_pubkey_path(const char* license_path) {
     const char* env_pubkey = std::getenv("AI_PUBKEY_PATH");
     if (env_pubkey && env_pubkey[0] != '\0') {
         return env_pubkey;
@@ -68,7 +68,7 @@ int32_t AiRuntimeInit(const char* so_dir,
     // 1. Set license path and do initial validation
     if (license_path) {
         agilestar_license_set_path(license_path);
-        std::string pubkey_path = _resolve_pubkey_path(license_path);
+        std::string pubkey_path = resolve_pubkey_path(license_path);
         if (!pubkey_path.empty()) {
             agilestar_license_set_pubkey_path(pubkey_path.c_str());
         }

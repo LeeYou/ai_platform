@@ -627,8 +627,8 @@ def _detect_gpu_available() -> bool:
     try:
         if os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version"):
             return True
-    except Exception:
-        pass
+    except OSError as exc:
+        logger.debug("GPU device probe failed: %s", exc)
 
     try:
         result = subprocess.run(
@@ -639,7 +639,8 @@ def _detect_gpu_available() -> bool:
             check=False,
         )
         return result.returncode == 0
-    except Exception:
+    except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("nvidia-smi probe failed: %s", exc)
         return False
 
 
