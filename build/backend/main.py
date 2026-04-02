@@ -381,8 +381,14 @@ async def _get_capability_diagnostics() -> dict:
                 train_service_reachable = True
             else:
                 train_service_error = f"Unexpected response shape: {type(payload).__name__}"
-    except httpx.HTTPError as exc:
-        train_service_error = str(exc)
+    except httpx.TimeoutException:
+        train_service_error = "Training service request timed out"
+    except httpx.HTTPStatusError as exc:
+        train_service_error = f"Training service returned HTTP {exc.response.status_code}"
+    except httpx.RequestError:
+        train_service_error = "Training service unreachable"
+    except httpx.HTTPError:
+        train_service_error = "Training service request failed"
 
     available = sorted(cap for cap in train_caps if cap in set(source_caps))
     return {
