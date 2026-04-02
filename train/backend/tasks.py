@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -15,6 +16,7 @@ from celery import Celery
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 MODELS_ROOT = os.getenv("MODELS_ROOT", "/workspace/models")
 TRAINING_TIMEOUT_SECONDS = int(os.getenv("TRAINING_TIMEOUT_SECONDS", "86400"))
+logger = logging.getLogger("train")
 
 celery_app = Celery("train_tasks", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.task_serializer = "json"
@@ -164,7 +166,7 @@ def run_training(
                     try:
                         os.killpg(proc.pid, signal.SIGKILL)
                     except ProcessLookupError:
-                        pass
+                        logger.warning("Training job %s timeout handler could not find process group %s", job_id, proc.pid)
 
                 timeout_timer = threading.Timer(TRAINING_TIMEOUT_SECONDS, _kill_on_timeout)
                 timeout_timer.start()
@@ -179,10 +181,11 @@ def run_training(
                     db.close()
 
                 try:
-                    for line in proc.stdout or []:
-                        lf.write(line)
-                        lf.flush()
-                        _publish(job_id, line)
+                    if proc.stdout is not None:
+                        for line in proc.stdout:
+                            lf.write(line)
+                            lf.flush()
+                            _publish(job_id, line)
                     proc.wait()
                 finally:
                     timeout_timer.cancel()
