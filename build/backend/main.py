@@ -34,6 +34,7 @@ BUILD_LOG_DIR = "./data/build_logs"
 LOG_DIR = os.getenv("LOG_DIR", "./data/build_logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LICENSE_SERVICE_URL = os.getenv("LICENSE_SERVICE_URL", "http://license:8003")
+TRAIN_SERVICE_URL = os.getenv("TRAIN_SERVICE_URL", "http://train:8001")
 
 ALLOWED_BUILD_TYPES = {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
 # CMake -D args must match: -DVARNAME=VALUE (alphanumeric + underscore/dot/dash)
@@ -466,17 +467,32 @@ async def ws_build_logs(websocket: WebSocket, job_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Capabilities — scan cpp/capabilities/ directory AND models directory
+# Capabilities — fetch from Training Service API
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v1/capabilities", tags=["capabilities"])
-def list_capabilities():
-    """Return capabilities that have both source code AND trained models.
+async def list_capabilities():
+    """Return capabilities from Training Service that have completed models.
 
-    This ensures the build system only shows capabilities that can actually be
-    compiled (source exists) and deployed (model exists).
+    This fetches capability data from the Training Service API (which manages
+    capability metadata in a database). Only capabilities that are registered
+    in the training system and have source code can be compiled.
+
+    For production deployment, the Production Service scans directories directly
+    since it runs standalone without access to internal APIs.
     """
-    # Scan source code directory for compilable capabilities
+    try:
+        # Fetch capabilities from Training Service API
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{TRAIN_SERVICE_URL}/api/v1/capabilities")
+            resp.raise_for_status()
+            train_caps = resp.json()
+    except httpx.HTTPError as exc:
+        logger.error("Failed to fetch capabilities from training service: %s", exc)
+        # Fallback to empty list if training service unavailable
+        return []
+
+    # Get capabilities that exist in source code
     cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
     source_caps = set()
     if os.path.isdir(cap_dir):
@@ -488,23 +504,18 @@ def list_capabilities():
     else:
         logger.warning("Capabilities directory not found: %s", cap_dir)
 
-    # Scan models directory for trained models
-    models_dir = os.getenv("MODELS_ROOT", "/workspace/models")
-    model_caps = set()
-    if os.path.isdir(models_dir):
-        for cap in os.listdir(models_dir):
-            model_path = os.path.join(models_dir, cap, "current")
-            manifest = os.path.join(model_path, "manifest.json")
-            if os.path.isdir(model_path) and os.path.exists(manifest):
-                model_caps.add(cap)
-        logger.info("Found %d capabilities with models: %s", len(model_caps), sorted(model_caps))
-    else:
-        logger.warning("Models directory not found: %s", models_dir)
+    # Filter to only capabilities that have BOTH:
+    # 1. Registered in training service (trained model exists)
+    # 2. Source code exists (can compile)
+    available = []
+    for cap in train_caps:
+        cap_name = cap.get("name", "")
+        if cap_name in source_caps:
+            available.append(cap_name)
 
-    # Return intersection: must have BOTH source and model
-    available = sorted(source_caps & model_caps)
-    logger.info("Returning %d buildable capabilities: %s", len(available), available)
-    return available
+    logger.info("Returning %d buildable capabilities (from training API + source): %s",
+                len(available), available)
+    return sorted(available)
 
 
 # ---------------------------------------------------------------------------

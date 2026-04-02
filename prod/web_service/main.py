@@ -513,7 +513,17 @@ def health():
 
 @app.get("/api/v1/capabilities", tags=["system"])
 def list_capabilities():
-    """List all loaded capabilities with their versions and manifests."""
+    """List all loaded capabilities with their versions and manifests.
+
+    ARCHITECTURE NOTE:
+    Production service scans directories directly (not API calls) because:
+    1. Production runs standalone after deployment (no access to internal services)
+    2. Capabilities are discovered from: built-in directories + mounted host paths
+    3. This enables hot-reload: new capabilities added to host paths are auto-discovered
+    4. Runtime dynamically loads .so files and models from discovered directories
+
+    Internal services (train/test/license/build) use API-based communication.
+    """
     runtime = get_runtime()
     if not runtime:
         return {"capabilities": []}
