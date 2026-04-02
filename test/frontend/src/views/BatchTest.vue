@@ -84,7 +84,13 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { batchInfer, getBatchJob, getBatchReport, extractErrorMessage } from '../api/index.js'
+import {
+  batchInfer,
+  getBatchJob,
+  getBatchReport,
+  extractErrorMessage,
+  buildUnauthorizedTroubleshootingMessage,
+} from '../api/index.js'
 
 const route = useRoute()
 const form = ref({
@@ -128,7 +134,10 @@ const doSubmit = async () => {
     report.value = null
     pollTimer = setInterval(poll, 1000)
   } catch (e) {
-    ElMessage.error('提交失败：' + extractErrorMessage(e))
+    const msg = e?.response?.status === 401
+      ? buildUnauthorizedTroubleshootingMessage('批量测试提交')
+      : '提交失败：' + extractErrorMessage(e)
+    ElMessage.error(msg)
   } finally {
     submitting.value = false
   }

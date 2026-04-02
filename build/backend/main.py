@@ -357,6 +357,50 @@ def _write_build_info(job: dict, req: BuildRequest, artifact_dir: str) -> None:
         json.dump(build_info, f, ensure_ascii=False, indent=2)
 
 
+async def _get_capability_diagnostics() -> dict:
+    cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
+    source_caps = []
+    if os.path.isdir(cap_dir):
+        source_caps = sorted(
+            d for d in os.listdir(cap_dir)
+            if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
+        )
+
+    train_caps = []
+    train_service_reachable = False
+    train_service_status_code = None
+    train_service_error = None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{TRAIN_SERVICE_URL}/api/v1/capabilities")
+            train_service_status_code = resp.status_code
+            resp.raise_for_status()
+            payload = resp.json()
+            if isinstance(payload, list):
+                train_caps = [cap.get("name", "") for cap in payload if isinstance(cap, dict) and cap.get("name")]
+                train_service_reachable = True
+            else:
+                train_service_error = f"Unexpected response shape: {type(payload).__name__}"
+    except httpx.HTTPError as exc:
+        train_service_error = str(exc)
+
+    available = sorted(cap for cap in train_caps if cap in set(source_caps))
+    return {
+        "train_service_url": TRAIN_SERVICE_URL,
+        "train_service_reachable": train_service_reachable,
+        "train_service_status_code": train_service_status_code,
+        "train_service_error": train_service_error,
+        "cpp_source_dir": CPP_SOURCE_DIR,
+        "capability_source_dir": cap_dir,
+        "capability_source_dir_exists": os.path.isdir(cap_dir),
+        "source_capabilities": source_caps,
+        "train_capabilities": sorted(train_caps),
+        "available_capabilities": available,
+        "models_root": MODELS_ROOT,
+        "models_root_exists": os.path.isdir(MODELS_ROOT),
+    }
+
+
 def _update_current_symlink(job: dict) -> None:
     capability_root = os.path.join(BUILD_OUTPUT_DIR, _safe_path_component(job["capability"], "capability"))
     current_link = os.path.join(capability_root, "current")
@@ -694,41 +738,23 @@ async def list_capabilities():
     For production deployment, the Production Service scans directories directly
     since it runs standalone without access to internal APIs.
     """
-    try:
-        # Fetch capabilities from Training Service API
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{TRAIN_SERVICE_URL}/api/v1/capabilities")
-            resp.raise_for_status()
-            train_caps = resp.json()
-    except httpx.HTTPError as exc:
-        logger.error("Failed to fetch capabilities from training service: %s", exc)
-        # Fallback to empty list if training service unavailable
-        return []
-
-    # Get capabilities that exist in source code
-    cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
-    source_caps = set()
-    if os.path.isdir(cap_dir):
-        source_caps = set(
-            d for d in os.listdir(cap_dir)
-            if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
+    diagnostics = await _get_capability_diagnostics()
+    if not diagnostics["train_service_reachable"]:
+        logger.error(
+            "Failed to fetch capabilities from training service: %s",
+            diagnostics["train_service_error"] or "unknown error",
         )
-        logger.info("Found %d capabilities in source: %s", len(source_caps), sorted(source_caps))
-    else:
-        logger.warning("Capabilities directory not found: %s", cap_dir)
+    logger.info(
+        "Returning %d buildable capabilities (from training API + source): %s",
+        len(diagnostics["available_capabilities"]),
+        diagnostics["available_capabilities"],
+    )
+    return diagnostics["available_capabilities"]
 
-    # Filter to only capabilities that have BOTH:
-    # 1. Registered in training service (trained model exists)
-    # 2. Source code exists (can compile)
-    available = []
-    for cap in train_caps:
-        cap_name = cap.get("name", "")
-        if cap_name in source_caps:
-            available.append(cap_name)
 
-    logger.info("Returning %d buildable capabilities (from training API + source): %s",
-                len(available), available)
-    return sorted(available)
+@app.get("/api/v1/capabilities/diagnostics", tags=["capabilities"])
+async def capability_diagnostics():
+    return await _get_capability_diagnostics()
 
 
 # ---------------------------------------------------------------------------

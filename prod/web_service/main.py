@@ -587,6 +587,41 @@ def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dic
         runtime.release(handle)
 
 
+def _capability_diagnostics() -> dict:
+    runtime = get_runtime()
+    runtime_so_path = resolve_runtime_so_path()
+    libs_dir = resolve_libs_dir()
+    models_dir = resolve_models_dir()
+    discovered_caps = list_available_capabilities()
+    loaded_caps = runtime.get_capabilities() if runtime else []
+    return {
+        "runtime_initialized": bool(runtime),
+        "runtime_so_path": runtime_so_path,
+        "runtime_so_found": bool(runtime_so_path and os.path.exists(runtime_so_path)),
+        "libs_dir": libs_dir,
+        "libs_dir_exists": os.path.isdir(libs_dir),
+        "models_dir": models_dir,
+        "models_dir_exists": os.path.isdir(models_dir),
+        "license_path": LICENSE_PATH,
+        "license_exists": os.path.exists(LICENSE_PATH),
+        "pubkey_path": PUBKEY_PATH,
+        "pubkey_exists": os.path.exists(PUBKEY_PATH),
+        "loaded_capabilities": [cap.get("name", "") for cap in loaded_caps if cap.get("name")],
+        "discovered_model_capabilities": [
+            cap.get("capability", "") for cap in discovered_caps if cap.get("capability")
+        ],
+        "discovered_models": [
+            {
+                "capability": cap.get("capability", ""),
+                "version": cap.get("version", "unknown"),
+                "model_dir": cap.get("model_dir", ""),
+                "source": cap.get("source", ""),
+            }
+            for cap in discovered_caps
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Health & capabilities
 # ---------------------------------------------------------------------------
@@ -595,6 +630,7 @@ def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dic
 def health():
     """Health check endpoint with capabilities and license status."""
     runtime = get_runtime()
+    diagnostics = _capability_diagnostics()
 
     # Get license status from C++ Runtime if available
     if runtime:
@@ -635,6 +671,9 @@ def health():
         "license":       lic,
         "server_time":   datetime.now(CST).isoformat(),
         "gpu_available": gpu_available,
+        "runtime_initialized": diagnostics["runtime_initialized"],
+        "loaded_capability_count": len(diagnostics["loaded_capabilities"]),
+        "discovered_model_capability_count": len(diagnostics["discovered_model_capabilities"]),
     }
 
 
@@ -678,6 +717,11 @@ def list_capabilities():
         })
 
     return {"capabilities": result}
+
+
+@app.get("/api/v1/capabilities/diagnostics", tags=["system"])
+def capability_diagnostics():
+    return _capability_diagnostics()
 
 
 # ---------------------------------------------------------------------------

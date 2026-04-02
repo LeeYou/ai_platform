@@ -260,6 +260,17 @@ def _list_models() -> list[dict]:
     return results
 
 
+def _sample_models(models: list[dict], limit: int = 10) -> list[dict]:
+    samples = []
+    for item in models[:limit]:
+        samples.append({
+            "capability": item.get("capability", ""),
+            "version": item.get("version", ""),
+            "manifest_path": os.path.join(item.get("model_dir", ""), "manifest.json"),
+        })
+    return samples
+
+
 def _decode_image(data: bytes) -> np.ndarray:
     import cv2  # type: ignore
     arr = np.frombuffer(data, dtype=np.uint8)
@@ -417,6 +428,32 @@ def health():
 @app.get("/api/v1/models", tags=["models"])
 def list_models():
     return _list_models()
+
+
+@app.get("/api/v1/diagnostics", tags=["system"])
+def diagnostics():
+    models = _list_models()
+    return {
+        "auth": {
+            "admin_token_configured": bool(ADMIN_TOKEN),
+            "using_default_admin_token": ADMIN_TOKEN == "changeme",
+            "accepted_headers": [
+                "Authorization: Bearer <token>",
+                "X-Admin-Token: <token>",
+            ],
+            "expected_frontend_token_sources": [
+                "localStorage.ai_admin_token",
+                "sessionStorage.ai_admin_token",
+                "VITE_AI_ADMIN_TOKEN",
+            ],
+        },
+        "models": {
+            "models_root": MODELS_ROOT,
+            "models_root_exists": os.path.isdir(MODELS_ROOT),
+            "model_count": len(models),
+            "sample_models": _sample_models(models),
+        },
+    }
 
 
 @app.post("/api/v1/infer/single", tags=["inference"])

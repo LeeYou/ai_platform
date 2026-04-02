@@ -53,6 +53,10 @@ export function getCapabilities() {
   return http.get('/capabilities')
 }
 
+export function getCapabilityDiagnostics() {
+  return http.get('/capabilities/diagnostics')
+}
+
 export function getLicense() {
   return http.get('/license/status')
 }

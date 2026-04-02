@@ -34,6 +34,21 @@
       </el-col>
     </el-row>
 
+    <el-row v-if="showDiagnostics" :gutter="20" style="margin-bottom:20px;">
+      <el-col :span="24">
+        <el-alert type="warning" :closable="false" show-icon>
+          <template #title>能力加载诊断</template>
+          <div>Runtime 初始化：{{ diagnostics.runtime_initialized ? '成功' : '失败' }}</div>
+          <div>运行时库：{{ diagnostics.runtime_so_path || '未找到' }}</div>
+          <div>模型目录：{{ diagnostics.models_dir }}（{{ diagnostics.models_dir_exists ? '存在' : '不存在' }}）</div>
+          <div>动态库目录：{{ diagnostics.libs_dir }}（{{ diagnostics.libs_dir_exists ? '存在' : '不存在' }}）</div>
+          <div>许可证：{{ diagnostics.license_path }}（{{ diagnostics.license_exists ? '存在' : '不存在' }}）</div>
+          <div>已发现模型能力数：{{ diagnostics.discovered_model_capabilities.length }}</div>
+          <div>已加载运行时能力数：{{ diagnostics.loaded_capabilities.length }}</div>
+        </el-alert>
+      </el-col>
+    </el-row>
+
     <el-row :gutter="20" style="margin-bottom:20px;">
       <el-col :span="12">
         <el-card shadow="hover">
@@ -77,17 +92,36 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { getCapabilities, getLicense, getHealth, extractErrorMessage } from '../api/index.js'
+import { computed, ref, onMounted } from 'vue'
+import {
+  getCapabilities,
+  getCapabilityDiagnostics,
+  getLicense,
+  getHealth,
+  extractErrorMessage,
+} from '../api/index.js'
 import { ElMessage } from 'element-plus'
 
 const capabilities = ref([])
+const diagnostics = ref({
+  runtime_initialized: false,
+  runtime_so_path: '',
+  models_dir: '',
+  models_dir_exists: false,
+  libs_dir: '',
+  libs_dir_exists: false,
+  license_path: '',
+  license_exists: false,
+  discovered_model_capabilities: [],
+  loaded_capabilities: [],
+})
 const loading = ref(false)
 const licLoading = ref(false)
 const healthLoading = ref(false)
 
 const licData = ref({ valid: false, expiry: '', days: null, type: '' })
 const healthData = ref({ ok: false, gpu: false, version: '', uptime: '' })
+const showDiagnostics = computed(() => !loading.value && (capabilities.value.length === 0 || !healthData.value.ok))
 
 onMounted(async () => {
   loading.value = true
@@ -95,8 +129,9 @@ onMounted(async () => {
   healthLoading.value = true
 
   try {
-    const [capRes, licRes, healthRes] = await Promise.allSettled([
+    const [capRes, diagRes, licRes, healthRes] = await Promise.allSettled([
       getCapabilities(),
+      getCapabilityDiagnostics(),
       getLicense(),
       getHealth(),
     ])
@@ -108,6 +143,10 @@ onMounted(async () => {
       } else if (data.capabilities) {
         capabilities.value = data.capabilities
       }
+    }
+
+    if (diagRes.status === 'fulfilled') {
+      diagnostics.value = diagRes.value.data
     }
 
     if (licRes.status === 'fulfilled') {
@@ -129,6 +168,7 @@ onMounted(async () => {
         uptime: h.uptime || '',
       }
     }
+
   } catch (e) {
     ElMessage.error(extractErrorMessage(e))
   } finally {

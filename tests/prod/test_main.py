@@ -113,15 +113,25 @@ class ProdMainTests(unittest.TestCase):
         self.original_ab_manager = prod_main.ab_manager
         self.original_admin_token = prod_main.ADMIN_TOKEN
         self.original_resolve_model_dir = prod_main.resolve_model_dir
+        self.original_resolve_models_dir = prod_main.resolve_models_dir
+        self.original_resolve_libs_dir = prod_main.resolve_libs_dir
+        self.original_resolve_runtime_so_path = prod_main.resolve_runtime_so_path
         self.original_resource_resolve_model_dir = resource_resolver.resolve_model_dir
         self.original_exists = prod_main.os.path.exists
         self.original_license_path = prod_main.LICENSE_PATH
         self.original_verify_license_signature = prod_main._verify_license_signature
         self.original_check_license = prod_main._check_license
         self.original_infer_for_pipeline = prod_main._infer_for_pipeline
+        self.libs_dir = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect" / "lib"
+        self.libs_dir.mkdir(parents=True, exist_ok=True)
+        (self.libs_dir / "libface_detect.so").write_bytes(b"fake")
+        (self.libs_dir / "libai_runtime.so").write_bytes(b"fake")
 
         resource_resolver.resolve_model_dir = lambda capability: str(self.model_dir)
         prod_main.resolve_model_dir = lambda capability: str(self.model_dir)
+        prod_main.resolve_models_dir = lambda: str(Path(self.tempdir.name) / "models")
+        prod_main.resolve_libs_dir = lambda: str(Path(self.tempdir.name) / "libs")
+        prod_main.resolve_runtime_so_path = lambda: str(self.libs_dir / "libai_runtime.so")
         prod_main._init_runtime = lambda: True
         prod_main.destroy_runtime = lambda: None
         prod_main.get_runtime = lambda: self.fake_runtime
@@ -139,6 +149,9 @@ class ProdMainTests(unittest.TestCase):
         prod_main.ab_manager = self.original_ab_manager
         prod_main.ADMIN_TOKEN = self.original_admin_token
         prod_main.resolve_model_dir = self.original_resolve_model_dir
+        prod_main.resolve_models_dir = self.original_resolve_models_dir
+        prod_main.resolve_libs_dir = self.original_resolve_libs_dir
+        prod_main.resolve_runtime_so_path = self.original_resolve_runtime_so_path
         resource_resolver.resolve_model_dir = self.original_resource_resolve_model_dir
         prod_main.os.path.exists = self.original_exists
         prod_main.LICENSE_PATH = self.original_license_path
@@ -181,6 +194,15 @@ class ProdMainTests(unittest.TestCase):
         prod_main.get_runtime = lambda: None
         body = prod_main.list_capabilities()
         self.assertEqual(body, {"capabilities": []})
+
+    def test_capability_diagnostics_reports_paths_and_discovered_models(self):
+        body = prod_main.capability_diagnostics()
+        self.assertTrue(body["runtime_initialized"])
+        self.assertTrue(body["runtime_so_found"])
+        self.assertTrue(body["models_dir_exists"])
+        self.assertTrue(body["libs_dir_exists"])
+        self.assertIn("face_detect", body["loaded_capabilities"])
+        self.assertIn("face_detect", body["discovered_model_capabilities"])
 
     def test_license_status_endpoint_reports_missing_when_no_file(self):
         body = prod_main.license_status()

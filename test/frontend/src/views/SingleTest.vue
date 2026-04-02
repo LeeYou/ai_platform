@@ -55,7 +55,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { singleInfer, extractErrorMessage } from '../api/index.js'
+import { singleInfer, extractErrorMessage, buildUnauthorizedTroubleshootingMessage } from '../api/index.js'
 
 const route = useRoute()
 const form = ref({
@@ -83,7 +83,10 @@ const doInfer = async () => {
     result.value   = res.data.result
     visImage.value = res.data.vis_image
   } catch (e) {
-    ElMessage.error('推理失败：' + extractErrorMessage(e))
+    const msg = e?.response?.status === 401
+      ? buildUnauthorizedTroubleshootingMessage('推理')
+      : '推理失败：' + extractErrorMessage(e)
+    ElMessage.error(msg)
   } finally {
     loading.value = false
   }
