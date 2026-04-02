@@ -129,11 +129,13 @@ class ProdMainTests(unittest.TestCase):
         self.original_check_license = prod_main._check_license
         self.original_infer_for_pipeline = prod_main._infer_for_pipeline
         self.original_subprocess_run = prod_main.subprocess.run
+        self.original_ctypes_cdll = prod_main.ctypes.CDLL
         self.original_ai_pubkey_env = os.environ.get("AI_PUBKEY_PATH")
         self.libs_dir = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect" / "lib"
         self.libs_dir.mkdir(parents=True, exist_ok=True)
         (self.libs_dir / "libface_detect.so").write_bytes(b"fake")
         (self.libs_dir / "libai_runtime.so").write_bytes(b"fake")
+        (self.libs_dir / "libonnxruntime.so.1.18.1").write_bytes(b"fake")
 
         resource_resolver.resolve_model_dir = lambda capability: str(self.model_dir)
         prod_main.resolve_model_dir = lambda capability: str(self.model_dir)
@@ -180,6 +182,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main._check_license = self.original_check_license
         prod_main._infer_for_pipeline = self.original_infer_for_pipeline
         prod_main.subprocess.run = self.original_subprocess_run
+        prod_main.ctypes.CDLL = self.original_ctypes_cdll
         prod_main._cleanup_runtime_libs_stage_dir()
         if self.original_ai_pubkey_env is None:
             os.environ.pop("AI_PUBKEY_PATH", None)
@@ -234,9 +237,20 @@ class ProdMainTests(unittest.TestCase):
 
         self.assertNotEqual(staged_dir, source_root)
         self.assertTrue(Path(staged_dir, "libface_detect.so").exists())
-        self.assertTrue(Path(staged_dir, "libai_runtime.so").exists())
+        self.assertFalse(Path(staged_dir, "libai_runtime.so").exists())
+        self.assertFalse(Path(staged_dir, "libonnxruntime.so.1.18.1").exists())
         self.assertTrue(prod_main._is_shared_library_filename("libface_detect.so.1"))
         self.assertFalse(prod_main._is_shared_library_filename("libface_detect.so.bak"))
+
+    def test_preload_runtime_dependencies_skips_plugins_and_runtime(self):
+        loaded_paths = []
+        prod_main.ctypes.CDLL = lambda path, mode=0: loaded_paths.append(path) or object()
+
+        prod_main._prepare_runtime_libs_dir(str(Path(self.tempdir.name) / "libs"))
+
+        self.assertIn(str(self.libs_dir / "libonnxruntime.so.1.18.1"), loaded_paths)
+        self.assertNotIn(str(self.libs_dir / "libface_detect.so"), loaded_paths)
+        self.assertNotIn(str(self.libs_dir / "libai_runtime.so"), loaded_paths)
 
     def test_init_runtime_uses_staged_loader_dir_and_sets_pubkey_env(self):
         records = {}

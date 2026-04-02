@@ -8,6 +8,7 @@ Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agile
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
@@ -145,20 +146,89 @@ AB_TEST_CONFIG_DIR = os.getenv(
 _infer_request_semaphore = asyncio.Semaphore(INFER_MAX_CONCURRENCY)
 ab_manager = ABTestManager(AB_TEST_CONFIG_DIR)
 _runtime_libs_stage_dir: str | None = None
+_runtime_dependency_handles: list[ctypes.CDLL] = []
 
 # ---------------------------------------------------------------------------
 # Runtime initialization
 # ---------------------------------------------------------------------------
 
 def _cleanup_runtime_libs_stage_dir() -> None:
-    global _runtime_libs_stage_dir
+    global _runtime_libs_stage_dir, _runtime_dependency_handles
     if _runtime_libs_stage_dir and os.path.isdir(_runtime_libs_stage_dir):
         shutil.rmtree(_runtime_libs_stage_dir, ignore_errors=True)
     _runtime_libs_stage_dir = None
+    _runtime_dependency_handles = []
 
 
 def _is_shared_library_filename(name: str) -> bool:
     return bool(re.search(r"\.so(?:\.\d+)*$", name))
+
+
+def _is_runtime_plugin_filename(name: str, capability: str) -> bool:
+    return bool(re.fullmatch(rf"lib{re.escape(capability)}\.so(?:\.\d+)*", name))
+
+
+def _select_runtime_plugin_path(capability: str, candidates: list[str]) -> str:
+    preferred_name = f"lib{capability}.so"
+    return sorted(
+        candidates,
+        key=lambda path: (
+            os.path.basename(path) != preferred_name,
+            len(os.path.basename(path)),
+            os.path.basename(path),
+        ),
+    )[0]
+
+
+def _discover_nested_runtime_libs(libs_dir: str) -> tuple[list[str], list[str]]:
+    plugin_paths: list[str] = []
+    dependency_paths: set[str] = set()
+
+    for root, _, files in os.walk(libs_dir):
+        if os.path.basename(root) != "lib":
+            continue
+        capability = os.path.basename(os.path.dirname(root))
+        shared_objects = [
+            os.path.join(root, name)
+            for name in files
+            if _is_shared_library_filename(name)
+        ]
+        if not shared_objects:
+            continue
+
+        plugin_candidates = [
+            path for path in shared_objects
+            if _is_runtime_plugin_filename(os.path.basename(path), capability)
+        ]
+        if not plugin_candidates:
+            continue
+
+        selected_plugin = _select_runtime_plugin_path(capability, plugin_candidates)
+        plugin_paths.append(selected_plugin)
+
+        for path in shared_objects:
+            basename = os.path.basename(path)
+            if path == selected_plugin or basename.startswith("libai_runtime.so"):
+                continue
+            if path not in plugin_candidates:
+                dependency_paths.add(path)
+
+    return sorted(set(plugin_paths)), sorted(dependency_paths)
+
+
+def _preload_runtime_dependencies(dependency_paths: list[str]) -> None:
+    global _runtime_dependency_handles
+    if not dependency_paths:
+        return
+
+    mode = getattr(ctypes, "RTLD_GLOBAL", 0)
+    handles: list[ctypes.CDLL] = []
+    for dependency_path in dependency_paths:
+        try:
+            handles.append(ctypes.CDLL(dependency_path, mode=mode))
+        except OSError as exc:
+            logger.warning("Failed to preload runtime dependency %s: %s", dependency_path, exc)
+    _runtime_dependency_handles = handles
 
 
 def _prepare_runtime_libs_dir(libs_dir: str) -> str:
@@ -174,21 +244,13 @@ def _prepare_runtime_libs_dir(libs_dir: str) -> str:
     if direct_shared_objects:
         return libs_dir
 
-    nested_shared_objects: list[str] = []
-    for root, _, files in os.walk(libs_dir):
-        if root == libs_dir:
-            continue
-        for name in files:
-            if not _is_shared_library_filename(name):
-                continue
-            nested_shared_objects.append(os.path.join(root, name))
-
-    if not nested_shared_objects:
+    plugin_paths, dependency_paths = _discover_nested_runtime_libs(libs_dir)
+    if not plugin_paths:
         return libs_dir
 
     _cleanup_runtime_libs_stage_dir()
     stage_dir = tempfile.mkdtemp(prefix="ai_runtime_libs_")
-    for source_path in sorted(set(nested_shared_objects)):
+    for source_path in plugin_paths:
         target_path = os.path.join(stage_dir, os.path.basename(source_path))
         if os.path.lexists(target_path):
             continue
@@ -197,10 +259,11 @@ def _prepare_runtime_libs_dir(libs_dir: str) -> str:
         except OSError:
             shutil.copy2(source_path, target_path)
 
+    _preload_runtime_dependencies(dependency_paths)
     _runtime_libs_stage_dir = stage_dir
     logger.info(
-        "Prepared staged runtime library directory %s from %s with %d shared object(s)",
-        stage_dir, libs_dir, len(nested_shared_objects),
+        "Prepared staged runtime plugin directory %s from %s with %d plugin(s) and %d preloaded dependency library(ies)",
+        stage_dir, libs_dir, len(plugin_paths), len(dependency_paths),
     )
     return stage_dir
 
