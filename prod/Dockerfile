@@ -23,7 +23,7 @@ RUN cd prod/frontend \
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ARG ONNXRUNTIME_GPU_VERSION=1.18.1
+ARG ONNXRUNTIME_VERSION=1.18.1
 
 # ---------------------------------------------------------------------------
 # System dependencies
@@ -53,40 +53,16 @@ WORKDIR /app
 COPY prod/web_service/requirements.txt prod/web_service/requirements.txt
 RUN pip install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    -r prod/web_service/requirements.txt \
-    && pip install --no-cache-dir \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    onnxruntime-gpu==${ONNXRUNTIME_GPU_VERSION}
+    -r prod/web_service/requirements.txt
 RUN python3 - <<'PY'
-import pathlib
-import shutil
-import site
-
-copied = set()
-dest_dir = pathlib.Path("/usr/local/lib")
-dest_dir.mkdir(parents=True, exist_ok=True)
-search_roots = []
-
-for candidate in site.getsitepackages() + [site.getusersitepackages()]:
-    if candidate and candidate not in search_roots:
-        search_roots.append(candidate)
-
-for root in search_roots:
-    capi_dir = pathlib.Path(root) / "onnxruntime" / "capi"
-    if not capi_dir.is_dir():
-        continue
-    for source_path in capi_dir.glob("libonnxruntime*.so*"):
-        target_path = dest_dir / source_path.name
-        if target_path.name in copied:
-            continue
-        shutil.copy2(source_path, target_path)
-        copied.add(target_path.name)
-
-if not copied:
-    raise SystemExit("Failed to locate ONNX Runtime shared libraries after installing onnxruntime-gpu")
-
-print("Copied ONNX Runtime shared libraries:", ", ".join(sorted(copied)))
+import cryptography
+print("cryptography:", cryptography.__version__)
 PY
+RUN curl -fsSL \
+    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
+    -o /tmp/ort.tgz \
+    && tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1 \
+    && rm /tmp/ort.tgz
 RUN ldconfig
 
 # ---------------------------------------------------------------------------

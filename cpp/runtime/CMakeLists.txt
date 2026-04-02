@@ -40,8 +40,13 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(ai_runtime PRIVATE dl)
 endif()
 
-# OpenSSL for SHA-256 in model_loader (optional but preferred)
+# OpenSSL for SHA-256 in model_loader and trusted pubkey fingerprint verification
 find_package(OpenSSL QUIET)
+if(NOT "${TRUSTED_PUBKEY_SHA256}" STREQUAL "" AND NOT OpenSSL_FOUND)
+    message(FATAL_ERROR
+        "Runtime SO: TRUSTED_PUBKEY_SHA256 is set but OpenSSL was not found. "
+        "Install OpenSSL development libraries or clear TRUSTED_PUBKEY_SHA256.")
+endif()
 if(OpenSSL_FOUND)
     target_link_libraries(ai_runtime PRIVATE OpenSSL::Crypto)
     target_compile_definitions(ai_runtime PRIVATE AI_HAVE_OPENSSL=1)

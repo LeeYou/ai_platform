@@ -42,6 +42,13 @@ namespace agilestar {
 // Public key fingerprint verification
 // ---------------------------------------------------------------------------
 
+static std::string _derive_pubkey_path(const std::string& license_path) {
+    if (license_path.empty()) return "";
+    auto slash = license_path.find_last_of("/\\");
+    if (slash == std::string::npos) return "";
+    return license_path.substr(0, slash + 1) + "pubkey.pem";
+}
+
 #if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
 static std::string _sha256_hex(const std::string& data) {
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
@@ -193,10 +200,13 @@ private:
             return;
         }
 
+        const std::string effective_pubkey_path =
+            !pubkey_path_.empty() ? pubkey_path_ : _derive_pubkey_path(license_path_);
+
         // Verify public key fingerprint (once per pubkey_path change)
         if (!pubkey_verified_) {
-            if (!pubkey_path_.empty()) {
-                if (!_verify_pubkey_fingerprint(pubkey_path_)) {
+            if (!effective_pubkey_path.empty()) {
+                if (!_verify_pubkey_fingerprint(effective_pubkey_path)) {
                     std::fprintf(stderr, "[LicenseChecker] Public key fingerprint verification FAILED — license REJECTED.\n");
                     cached_.valid   = false;
                     cached_.expired = false;
