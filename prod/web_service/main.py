@@ -7,6 +7,7 @@ Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agile
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -106,6 +107,13 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme")
+MAX_UPLOAD_BYTES = max(1, int(os.getenv("AI_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024))))
+INFER_MAX_CONCURRENCY = max(1, int(os.getenv("AI_INFER_MAX_CONCURRENCY", "16")))
+INFER_CONCURRENCY_TIMEOUT_SECONDS = max(
+    1,
+    int(os.getenv("AI_INFER_CONCURRENCY_TIMEOUT_SECONDS", "30")),
+)
+_infer_request_semaphore = asyncio.Semaphore(INFER_MAX_CONCURRENCY)
 
 # ---------------------------------------------------------------------------
 # Runtime initialization
@@ -390,6 +398,10 @@ app.add_middleware(
 async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     try:
+        if request.method in {"POST", "PUT", "PATCH"}:
+            content_length = request.headers.get("content-length", "").strip()
+            if content_length.isdigit() and int(content_length) > MAX_UPLOAD_BYTES:
+                return _payload_too_large_response()
         response = await call_next(request)
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
@@ -458,6 +470,41 @@ def _error_response(code: int, message: str, capability: str = "") -> JSONRespon
         status_code=400,
         content={"code": code, "message": message, "capability": capability},
     )
+
+
+def _payload_too_large_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={"code": 1003, "message": f"Request body too large (max {MAX_UPLOAD_BYTES} bytes)"},
+    )
+
+
+def _check_upload_size(raw: bytes) -> None:
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": 1003, "message": f"Image payload too large (max {MAX_UPLOAD_BYTES} bytes)"},
+        )
+
+
+@asynccontextmanager
+async def _acquire_infer_slot():
+    acquired = False
+    try:
+        await asyncio.wait_for(
+            _infer_request_semaphore.acquire(),
+            timeout=INFER_CONCURRENCY_TIMEOUT_SECONDS,
+        )
+        acquired = True
+        yield
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": 3002, "message": "Inference concurrency limit reached"},
+        ) from exc
+    finally:
+        if acquired:
+            _infer_request_semaphore.release()
 
 
 def _available_pipeline_capabilities() -> list[str]:
@@ -601,75 +648,64 @@ async def infer(
     options: Optional[str] = Form(default=None),
 ):
     """Run inference for a specific AI capability using C++ Runtime instance pool."""
-    # License check
-    _check_license(capability)
+    async with _acquire_infer_slot():
+        _check_license(capability)
 
-    runtime = get_runtime()
-    if not runtime:
-        raise HTTPException(
-            status_code=500,
-            detail={"code": 5001, "message": "Runtime not initialized"},
-        )
-
-    # Decode image
-    raw = await image.read()
-    img = _decode_image(raw)
-
-    # Parse options (currently unused by C++ API but can be passed in future)
-    opts = {}
-    if options:
-        try:
-            opts = json.loads(options)
-        except Exception:
-            pass
-
-    # Acquire inference instance from pool (30 second timeout)
-    t0 = time.perf_counter()
-    handle = runtime.acquire(capability, timeout_ms=30000)
-    if not handle:
-        logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
-        return _error_response(3001, "Instance pool timeout or capability not available", capability)
-
-    try:
-        # Prepare image data for C API
-        import cv2
-        height, width, channels = img.shape
-        img_bytes = img.tobytes()
-
-        # Call inference via Runtime (uses instance pool - PRODUCTION GRADE)
-        result = runtime.infer(handle, img_bytes, width, height, channels)
-
-        if result.get("error_code", 0) != AI_OK:
-            return _error_response(
-                result.get("error_code", 5001),
-                result.get("error_msg", "Inference failed"),
-                capability
+        runtime = get_runtime()
+        if not runtime:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": 5001, "message": "Runtime not initialized"},
             )
 
-        # Success
-        elapsed = (time.perf_counter() - t0) * 1000.0
+        raw = await image.read()
+        _check_upload_size(raw)
+        img = _decode_image(raw)
 
-        # Extract version from manifest
-        from resource_resolver import resolve_model_dir
-        model_dir = resolve_model_dir(capability)
-        version = "unknown"
-        if model_dir:
-            manifest_path = os.path.join(model_dir, "manifest.json")
+        if options:
             try:
-                with open(manifest_path, encoding="utf-8") as f:
-                    manifest = json.load(f)
-                    version = manifest.get("model_version", "unknown")
+                json.loads(options)
             except Exception:
                 pass
 
-        return _success(capability, version, result.get("result", {}), round(elapsed, 2))
+        t0 = time.perf_counter()
+        handle = runtime.acquire(capability, timeout_ms=30000)
+        if not handle:
+            logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
+            return _error_response(3001, "Instance pool timeout or capability not available", capability)
 
-    except Exception as exc:
-        logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
-        return _error_response(2004, f"Inference failed: {exc}", capability)
-    finally:
-        # Always release the instance back to pool
-        runtime.release(handle)
+        try:
+            height, width, channels = img.shape
+            img_bytes = img.tobytes()
+            result = runtime.infer(handle, img_bytes, width, height, channels)
+
+            if result.get("error_code", 0) != AI_OK:
+                return _error_response(
+                    result.get("error_code", 5001),
+                    result.get("error_msg", "Inference failed"),
+                    capability
+                )
+
+            elapsed = (time.perf_counter() - t0) * 1000.0
+            from resource_resolver import resolve_model_dir
+            model_dir = resolve_model_dir(capability)
+            version = "unknown"
+            if model_dir:
+                manifest_path = os.path.join(model_dir, "manifest.json")
+                try:
+                    with open(manifest_path, encoding="utf-8") as f:
+                        manifest = json.load(f)
+                        version = manifest.get("model_version", "unknown")
+                except Exception:
+                    pass
+
+            return _success(capability, version, result.get("result", {}), round(elapsed, 2))
+
+        except Exception as exc:
+            logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
+            return _error_response(2004, f"Inference failed: {exc}", capability)
+        finally:
+            runtime.release(handle)
 
 
 # ---------------------------------------------------------------------------
@@ -803,23 +839,25 @@ async def run_pipeline_endpoint(
     options: Optional[str] = Form(default=None),
 ):
     """Execute a pipeline."""
-    p = get_pipeline(pipeline_id)
-    if not p:
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
-    if not p.get("enabled", True):
-        raise HTTPException(status_code=400,
-                            detail=f"Pipeline '{pipeline_id}' is disabled")
+    async with _acquire_infer_slot():
+        p = get_pipeline(pipeline_id)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
+        if not p.get("enabled", True):
+            raise HTTPException(status_code=400,
+                                detail=f"Pipeline '{pipeline_id}' is disabled")
 
-    raw = await image.read()
-    global_opts: dict = {}
-    if options:
-        try:
-            global_opts = json.loads(options)
-        except Exception:
-            pass
+        raw = await image.read()
+        _check_upload_size(raw)
+        global_opts: dict = {}
+        if options:
+            try:
+                global_opts = json.loads(options)
+            except Exception:
+                pass
 
-    result = execute_pipeline(p, raw, _infer_for_pipeline, _check_license, global_opts)
-    return result
+        result = execute_pipeline(p, raw, _infer_for_pipeline, _check_license, global_opts)
+        return result
 
 
 # ---------------------------------------------------------------------------

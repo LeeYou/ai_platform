@@ -68,7 +68,7 @@ Train (Python)
 
 ### Incorrect Implementation (REMOVED)
 
-- **`inference_engine.py`** ❌ - Python ONNXRuntime inference (DEPRECATED - DO NOT USE)
+- **Python ONNXRuntime production path** ❌ - 已彻底删除，生产环境只允许 `main.py` → `ai_runtime_ctypes.py` → `libai_runtime.so`
 
 ## Running the Service
 
