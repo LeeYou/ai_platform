@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -123,6 +124,7 @@ class ProdMainTests(unittest.TestCase):
         self.original_verify_license_signature = prod_main._verify_license_signature
         self.original_check_license = prod_main._check_license
         self.original_infer_for_pipeline = prod_main._infer_for_pipeline
+        self.original_subprocess_run = prod_main.subprocess.run
         self.libs_dir = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect" / "lib"
         self.libs_dir.mkdir(parents=True, exist_ok=True)
         (self.libs_dir / "libface_detect.so").write_bytes(b"fake")
@@ -168,6 +170,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main._verify_license_signature = self.original_verify_license_signature
         prod_main._check_license = self.original_check_license
         prod_main._infer_for_pipeline = self.original_infer_for_pipeline
+        prod_main.subprocess.run = self.original_subprocess_run
         self.tempdir.cleanup()
 
     def _write_license(self, **overrides):
@@ -194,6 +197,22 @@ class ProdMainTests(unittest.TestCase):
         )
         body = prod_main.health()
         self.assertTrue(body["gpu_available"])
+
+    def test_health_endpoint_reports_gpu_when_nvidia_smi_succeeds(self):
+        prod_main.os.path.exists = lambda path: False
+        prod_main.subprocess.run = lambda *args, **kwargs: SimpleNamespace(returncode=0)
+        body = prod_main.health()
+        self.assertTrue(body["gpu_available"])
+
+    def test_health_endpoint_reports_no_gpu_when_detection_fails(self):
+        prod_main.os.path.exists = lambda path: False
+
+        def _raise_file_not_found(*args, **kwargs):
+            raise FileNotFoundError("nvidia-smi not found")
+
+        prod_main.subprocess.run = _raise_file_not_found
+        body = prod_main.health()
+        self.assertFalse(body["gpu_available"])
 
     def test_capabilities_endpoint_includes_manifest_metadata(self):
         body = prod_main.list_capabilities()

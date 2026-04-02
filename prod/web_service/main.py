@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 import traceback
@@ -622,6 +623,26 @@ def _capability_diagnostics() -> dict:
     }
 
 
+def _detect_gpu_available() -> bool:
+    try:
+        if os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version"):
+            return True
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Health & capabilities
 # ---------------------------------------------------------------------------
@@ -657,20 +678,12 @@ def health():
         ]
 
     # GPU availability detection - check CUDA device files
-    gpu_available = False
-    try:
-        # Check if NVIDIA GPU device files exist (more reliable than ORT check)
-        import os
-        gpu_available = os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version")
-    except Exception:
-        pass
-
     return {
         "status":        "healthy" if caps else "degraded",
         "capabilities":  caps,
         "license":       lic,
         "server_time":   datetime.now(CST).isoformat(),
-        "gpu_available": gpu_available,
+        "gpu_available": _detect_gpu_available(),
         "runtime_initialized": diagnostics["runtime_initialized"],
         "loaded_capability_count": len(diagnostics["loaded_capabilities"]),
         "discovered_model_capability_count": len(diagnostics["discovered_model_capabilities"]),
