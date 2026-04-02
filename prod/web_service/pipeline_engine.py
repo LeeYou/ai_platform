@@ -310,6 +310,7 @@ def execute_pipeline(
             try:
                 cond_result = _eval_expression(condition, context)
             except Exception as exc:
+                logger.warning("Pipeline step %s condition evaluation failed: %s", step_id, exc, exc_info=True)
                 step_results.append({
                     "step_id": step_id,
                     "capability": capability,
@@ -337,6 +338,7 @@ def execute_pipeline(
         try:
             check_license_fn(capability)
         except Exception as exc:
+            logger.warning("Pipeline step %s license check failed: %s", step_id, exc, exc_info=True)
             step_results.append({
                 "step_id": step_id,
                 "capability": capability,
@@ -380,6 +382,7 @@ def execute_pipeline(
 
         except Exception as exc:
             elapsed = round((time.perf_counter() - t0) * 1000, 2)
+            logger.error("Pipeline step %s execution failed: %s", step_id, exc, exc_info=True)
             step_results.append({
                 "step_id": step_id,
                 "capability": capability,

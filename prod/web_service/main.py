@@ -99,10 +99,30 @@ try:
         save_pipeline,
         validate_pipeline,
     )
-    from ab_testing import ABTestManager
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
+
+try:
+    from ab_testing import ABTestManager
+except Exception:
+    logger.error("Failed to import A/B testing module, falling back to disabled manager:\n%s", traceback.format_exc())
+
+    class ABTestManager:  # type: ignore[no-redef]
+        def __init__(self, _config_dir: str) -> None:
+            self._tests: dict[str, dict] = {}
+
+        def reload(self) -> None:
+            self._tests.clear()
+
+        def get_version_for_request(self, _capability: str, _session_id: str | None = None) -> str:
+            return "current"
+
+        def get_test_info(self, _capability: str) -> dict[str, Any]:
+            return {}
+
+        def list_active_tests(self) -> dict[str, dict]:
+            return {}
 
 # ---------------------------------------------------------------------------
 # Admin token (simple bearer auth for reload endpoint)
@@ -152,6 +172,7 @@ def _init_runtime() -> bool:
     if runtime:
         caps = runtime.get_capabilities()
         logger.info("Runtime loaded %d capabilities: %s", len(caps), [c["name"] for c in caps])
+
     ab_manager.reload()
     logger.info("A/B test manager loaded %d active tests", len(ab_manager.list_active_tests()))
 
