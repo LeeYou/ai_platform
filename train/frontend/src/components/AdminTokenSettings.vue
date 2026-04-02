@@ -31,7 +31,7 @@
       </el-form>
 
       <div style="color:#909399;font-size:12px;line-height:1.6;">
-        未单独配置后端 AI_ADMIN_TOKEN 时，默认值通常为 changeme。
+        推荐优先使用 sessionStorage；localStorage 会持久保存 Token，仅在确认当前浏览器环境可信时再使用。未单独配置后端 AI_ADMIN_TOKEN 时，默认值通常为 changeme。
       </div>
 
       <template #footer>
@@ -53,7 +53,7 @@ const dialogVisible = ref(false)
 const draftToken = ref('')
 const activeToken = ref('')
 const activeStorage = ref('')
-const selectedStorage = ref('local')
+const selectedStorage = ref('session')
 
 const hasToken = computed(() => !!activeToken.value)
 const statusTitle = computed(() => {
@@ -84,7 +84,7 @@ function syncFromStorage() {
 
   activeToken.value = ENV_TOKEN
   activeStorage.value = ENV_TOKEN ? 'env' : ''
-  selectedStorage.value = 'local'
+  selectedStorage.value = 'session'
   draftToken.value = ENV_TOKEN
 }
 
