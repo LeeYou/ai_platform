@@ -38,7 +38,7 @@ def _verify_signed_license(signed_json: str, pubkey_pem: str) -> None:
     if not verify_sig(signed_json, pubkey_pem):
         raise HTTPException(
             status_code=500,
-            detail="Signed license failed verification with the selected public key",
+            detail="Internal signing verification failed after license generation",
         )
 
 
