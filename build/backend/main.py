@@ -372,11 +372,23 @@ async def _get_capability_diagnostics() -> dict:
     train_service_error = None
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{TRAIN_SERVICE_URL}/api/v1/capabilities")
-            train_service_status_code = resp.status_code
-            resp.raise_for_status()
-            payload = resp.json()
-            if isinstance(payload, list):
+            payload = None
+            last_response = None
+            for path in ("/api/v1/capabilities/", "/api/v1/capabilities"):
+                resp = await client.get(f"{TRAIN_SERVICE_URL}{path}", follow_redirects=True)
+                last_response = resp
+                train_service_status_code = resp.status_code
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                payload = resp.json()
+                break
+
+            if payload is None:
+                if last_response is not None:
+                    last_response.raise_for_status()
+                train_service_error = "Training service capability endpoint not found"
+            elif isinstance(payload, list):
                 train_caps = [cap.get("name", "") for cap in payload if isinstance(cap, dict) and cap.get("name")]
                 train_service_reachable = True
             else:
