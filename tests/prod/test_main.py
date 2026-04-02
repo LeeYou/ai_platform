@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
@@ -48,6 +49,39 @@ class _FakeImage:
         return b"\x00" * 12
 
 
+class _FakeABManager:
+    def __init__(self):
+        self.reload_called = False
+
+    def get_version_for_request(self, capability, session_id=None):
+        return "v2.0.0"
+
+    def get_test_info(self, capability):
+        return {
+            "enabled": True,
+            "strategy": "sticky_session",
+            "variants": [
+                {"version": "v1.2.3", "weight": 80, "weight_pct": 80.0},
+                {"version": "v2.0.0", "weight": 20, "weight_pct": 20.0},
+            ],
+        }
+
+    def list_active_tests(self):
+        return {
+            "face_detect": {
+                "enabled": True,
+                "strategy": "sticky_session",
+                "variants": [
+                    {"version": "v1.2.3", "weight": 80, "weight_pct": 80.0},
+                    {"version": "v2.0.0", "weight": 20, "weight_pct": 20.0},
+                ],
+            }
+        }
+
+    def reload(self):
+        self.reload_called = True
+
+
 class ProdMainTests(unittest.TestCase):
     def setUp(self):
         self.fake_runtime = _FakeRuntime()
@@ -66,6 +100,7 @@ class ProdMainTests(unittest.TestCase):
         self.original_max_upload = prod_main.MAX_UPLOAD_BYTES
         self.original_timeout = prod_main.INFER_CONCURRENCY_TIMEOUT_SECONDS
         self.original_semaphore = prod_main._infer_request_semaphore
+        self.original_ab_manager = prod_main.ab_manager
 
         resource_resolver.resolve_model_dir = lambda capability: str(self.model_dir)
         prod_main._init_runtime = lambda: True
@@ -73,12 +108,14 @@ class ProdMainTests(unittest.TestCase):
         prod_main.get_runtime = lambda: self.fake_runtime
         prod_main._check_license = lambda capability: None
         prod_main._decode_image = lambda data: _FakeImage()
+        prod_main.ab_manager = _FakeABManager()
 
     def tearDown(self):
         pipeline_engine.PIPELINE_DIR = self.original_pipeline_dir
         prod_main.MAX_UPLOAD_BYTES = self.original_max_upload
         prod_main.INFER_CONCURRENCY_TIMEOUT_SECONDS = self.original_timeout
         prod_main._infer_request_semaphore = self.original_semaphore
+        prod_main.ab_manager = self.original_ab_manager
         self.tempdir.cleanup()
 
     def test_health_endpoint_uses_runtime_status(self):
@@ -90,7 +127,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main.MAX_UPLOAD_BYTES = 1
         upload = UploadFile(file=io.BytesIO(b"12"), filename="x.bin")
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(prod_main.infer("face_detect", upload))
+            asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         self.assertEqual(ctx.exception.status_code, 413)
 
     def test_infer_endpoint_returns_busy_when_concurrency_limit_hit(self):
@@ -98,9 +135,34 @@ class ProdMainTests(unittest.TestCase):
         prod_main._infer_request_semaphore = asyncio.Semaphore(0)
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(prod_main.infer("face_detect", upload))
+            asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertEqual(ctx.exception.detail["code"], 3002)
+
+    def test_infer_endpoint_returns_ab_test_metadata(self):
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        body = asyncio.run(
+            prod_main.infer(
+                "face_detect",
+                SimpleNamespace(headers={"X-Session-ID": "session-1"}),
+                upload,
+            )
+        )
+        self.assertEqual(body["model_version"], "v1.2.3")
+        self.assertEqual(body["ab_test"]["selected_version"], "v2.0.0")
+        self.assertEqual(body["ab_test"]["applied_version"], "v1.2.3")
+        self.assertFalse(body["ab_test"]["selection_matches_runtime"])
+
+    def test_admin_ab_tests_endpoint_requires_token_and_returns_data(self):
+        body = prod_main.list_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer changeme"}))
+        self.assertIn("face_detect", body["ab_tests"])
+
+    def test_admin_ab_tests_reload_endpoint_reloads_manager(self):
+        body = asyncio.run(
+            prod_main.reload_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer changeme"}))
+        )
+        self.assertEqual(body["status"], "reloaded")
+        self.assertTrue(prod_main.ab_manager.reload_called)
 
     def test_pipeline_validate_endpoint_returns_valid(self):
         pipeline = {

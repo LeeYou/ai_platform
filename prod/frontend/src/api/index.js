@@ -72,6 +72,18 @@ export function adminReload(token) {
   })
 }
 
+export function listABTests(token) {
+  return http.get('/admin/ab_tests', {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+}
+
+export function reloadABTests(token) {
+  return http.post('/admin/ab_tests/reload', null, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+}
+
 // Pipelines
 export function getPipelines() {
   return http.get('/pipelines')

@@ -99,6 +99,7 @@ try:
         save_pipeline,
         validate_pipeline,
     )
+    from ab_testing import ABTestManager
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -114,7 +115,12 @@ INFER_CONCURRENCY_TIMEOUT_SECONDS = max(
     1,
     int(os.getenv("AI_INFER_CONCURRENCY_TIMEOUT_SECONDS", "30")),
 )
+AB_TEST_CONFIG_DIR = os.getenv(
+    "AI_AB_TEST_CONFIG_DIR",
+    os.path.join(os.getenv("MOUNT_ROOT", "/mnt/ai_platform"), "ab_tests"),
+)
 _infer_request_semaphore = asyncio.Semaphore(INFER_MAX_CONCURRENCY)
+ab_manager = ABTestManager(AB_TEST_CONFIG_DIR)
 
 # ---------------------------------------------------------------------------
 # Runtime initialization
@@ -146,6 +152,8 @@ def _init_runtime() -> bool:
     if runtime:
         caps = runtime.get_capabilities()
         logger.info("Runtime loaded %d capabilities: %s", len(caps), [c["name"] for c in caps])
+    ab_manager.reload()
+    logger.info("A/B test manager loaded %d active tests", len(ab_manager.list_active_tests()))
 
     return True
 
@@ -454,8 +462,14 @@ def _decode_image(data: bytes) -> np.ndarray:
     return img
 
 
-def _success(capability: str, version: str, result: dict, elapsed_ms: float) -> dict:
-    return {
+def _success(
+    capability: str,
+    version: str,
+    result: dict,
+    elapsed_ms: float,
+    ab_test: Optional[dict[str, Any]] = None,
+) -> dict:
+    payload = {
         "code":             0,
         "message":          "success",
         "capability":       capability,
@@ -464,6 +478,9 @@ def _success(capability: str, version: str, result: dict, elapsed_ms: float) -> 
         "result":           result,
         "timestamp":        datetime.now(CST).isoformat(),
     }
+    if ab_test:
+        payload["ab_test"] = ab_test
+    return payload
 
 
 def _error_response(code: int, message: str, capability: str = "") -> JSONResponse:
@@ -518,6 +535,13 @@ def _available_pipeline_capabilities() -> list[str]:
     if runtime:
         return [cap.get("name", "") for cap in runtime.get_capabilities() if cap.get("name")]
     return [cap.get("capability", "") for cap in list_available_capabilities() if cap.get("capability")]
+
+
+def _get_runtime_capability_version(runtime: Any, capability: str) -> str:
+    for cap_info in runtime.get_capabilities():
+        if cap_info.get("name") == capability:
+            return cap_info.get("version", "unknown")
+    return "unknown"
 
 
 def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dict:
@@ -651,6 +675,7 @@ def license_status():
 @app.post("/api/v1/infer/{capability}", tags=["inference"])
 async def infer(
     capability: str,
+    request: Request,
     image: UploadFile = File(...),
     options: Optional[str] = Form(default=None),
 ):
@@ -676,6 +701,9 @@ async def infer(
             except Exception:
                 pass
 
+        session_id = request.headers.get("X-Session-ID", "").strip() or None
+        selected_version = ab_manager.get_version_for_request(capability, session_id)
+
         t0 = time.perf_counter()
         handle = runtime.acquire(capability, timeout_ms=30000)
         if not handle:
@@ -695,13 +723,23 @@ async def infer(
                 )
 
             elapsed = (time.perf_counter() - t0) * 1000.0
-            version = "unknown"
-            for cap_info in runtime.get_capabilities():
-                if cap_info.get("name") == capability:
-                    version = cap_info.get("version", "unknown")
-                    break
+            version = _get_runtime_capability_version(runtime, capability)
+            ab_info = ab_manager.get_test_info(capability)
+            if ab_info:
+                ab_info = {
+                    "strategy": ab_info.get("strategy", "random"),
+                    "selected_version": selected_version,
+                    "applied_version": version,
+                    "selection_matches_runtime": selected_version in ("current", version),
+                }
 
-            return _success(capability, version, result.get("result", {}), round(elapsed, 2))
+            return _success(
+                capability,
+                version,
+                result.get("result", {}),
+                round(elapsed, 2),
+                ab_test=ab_info or None,
+            )
 
         except Exception as exc:
             logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
@@ -770,6 +808,25 @@ async def reload_capability(capability: str, request: Request):
             break
 
     return {"reloaded": capability, "version": version}
+
+
+@app.get("/api/v1/admin/ab_tests", tags=["admin"])
+def list_ab_tests(request: Request):
+    """List active A/B tests."""
+    _verify_admin(request)
+    return {"ab_tests": ab_manager.list_active_tests()}
+
+
+@app.post("/api/v1/admin/ab_tests/reload", tags=["admin"])
+async def reload_ab_tests(request: Request):
+    """Reload A/B test configurations from disk."""
+    _verify_admin(request)
+    ab_manager.reload()
+    return {
+        "status": "reloaded",
+        "active_tests": len(ab_manager.list_active_tests()),
+        "ab_tests": ab_manager.list_active_tests(),
+    }
 
 
 # ---------------------------------------------------------------------------
