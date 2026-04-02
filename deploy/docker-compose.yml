@@ -64,6 +64,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - AI_LICENSE_DB=/app/data/license.db
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 30s
@@ -94,6 +95,7 @@ services:
       - DATASETS_ROOT=/workspace/datasets
       - MODELS_ROOT=/workspace/models
       - TRAIN_DB_PATH=/app/data/train.db
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     depends_on:
       - redis
     deploy:
@@ -127,6 +129,7 @@ services:
       - /data/ai_platform/logs/test:/workspace/logs:rw
     environment:
       - TZ=Asia/Shanghai
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
@@ -170,6 +173,7 @@ services:
       - LICENSE_SERVICE_URL=http://license:8003
       - TRAIN_SERVICE_URL=http://train:8001
       - BUILD_OUTPUT_DIR=/workspace/libs/linux_x86_64
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     depends_on:
       - license
       - train
@@ -200,6 +204,7 @@ services:
       - LICENSE_SERVICE_URL=http://license:8003
       - TRAIN_SERVICE_URL=http://train:8001
       - BUILD_OUTPUT_DIR=/workspace/libs/linux_aarch64
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     depends_on:
       - license
       - train
@@ -230,6 +235,7 @@ services:
       - LICENSE_SERVICE_URL=http://license:8003
       - TRAIN_SERVICE_URL=http://train:8001
       - BUILD_OUTPUT_DIR=/workspace/libs/windows_x86_64
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     depends_on:
       - license
       - train
