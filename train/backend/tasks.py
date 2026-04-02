@@ -26,12 +26,13 @@ celery_app.conf.broker_connection_retry_on_startup = True
 
 
 def _cleanup_temp_config(path: str) -> None:
-    temp_dir = tempfile.gettempdir()
-    if not path.startswith(temp_dir):
+    temp_dir = os.path.realpath(tempfile.gettempdir())
+    real_path = os.path.realpath(path)
+    if real_path != temp_dir and not real_path.startswith(temp_dir + os.sep):
         return
-    if os.path.basename(path).startswith("train_cfg_") and path.endswith(".json"):
+    if os.path.basename(real_path).startswith("train_cfg_") and real_path.endswith(".json"):
         try:
-            os.remove(path)
+            os.remove(real_path)
         except FileNotFoundError:
             pass
 

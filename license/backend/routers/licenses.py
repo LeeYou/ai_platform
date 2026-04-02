@@ -92,7 +92,7 @@ def create_license(data: schemas.LicenseCreate, db: Session = Depends(get_db)):
     try:
         privkey_pem = read_private_key(key_pair)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=f"Private key file not found for key pair {key_pair.id}") from exc
+        raise HTTPException(status_code=500, detail=f"Private key file not found for key pair {key_pair.id}") from exc
     # Verify private key matches the selected key pair's public key
     _verify_key_match(privkey_pem, key_pair.public_key_pem)
 
@@ -161,7 +161,7 @@ def renew_license(license_id: str, data: schemas.LicenseRenew, db: Session = Dep
     try:
         privkey_pem = read_private_key(key_pair)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=f"Private key file not found for key pair {key_pair.id}") from exc
+        raise HTTPException(status_code=500, detail=f"Private key file not found for key pair {key_pair.id}") from exc
     _verify_key_match(privkey_pem, key_pair.public_key_pem)
     issued_at = datetime.now(CST)
 

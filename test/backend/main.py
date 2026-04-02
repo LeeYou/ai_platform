@@ -309,7 +309,9 @@ def _resolve_dataset_path(dataset_path: str) -> str:
     if not os.path.isabs(candidate):
         candidate = os.path.join(DATASETS_ROOT, candidate)
     resolved = os.path.realpath(candidate)
-    if resolved != root and not resolved.startswith(root + os.sep):
+    if resolved == root:
+        raise HTTPException(status_code=400, detail="Dataset path must point to a subdirectory under DATASETS_ROOT")
+    if not resolved.startswith(root + os.sep):
         raise HTTPException(status_code=400, detail="Dataset path must stay within DATASETS_ROOT")
     return resolved
 
