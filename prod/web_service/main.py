@@ -274,6 +274,31 @@ def _prepare_runtime_libs_dir(libs_dir: str) -> str:
     return stage_dir
 
 
+def _derive_pubkey_path_from_license(license_path: str) -> str:
+    if not license_path:
+        return ""
+    license_dir = os.path.dirname(license_path)
+    if not license_dir:
+        return "pubkey.pem"
+    return os.path.join(license_dir, "pubkey.pem")
+
+
+def _resolve_effective_pubkey_path() -> str:
+    env_pubkey_path = os.getenv("AI_PUBKEY_PATH", "").strip()
+    if env_pubkey_path:
+        return env_pubkey_path
+
+    configured_pubkey_path = (PUBKEY_PATH or "").strip()
+    if configured_pubkey_path and os.path.exists(configured_pubkey_path):
+        return configured_pubkey_path
+
+    derived_pubkey_path = _derive_pubkey_path_from_license(LICENSE_PATH)
+    if derived_pubkey_path:
+        return derived_pubkey_path
+
+    return configured_pubkey_path
+
+
 def _init_runtime() -> bool:
     """Initialize C++ Runtime layer with SO directory, models, and license."""
     runtime_so = resolve_runtime_so_path()
@@ -285,6 +310,7 @@ def _init_runtime() -> bool:
     libs_dir = resolve_libs_dir()
     loader_libs_dir = _prepare_runtime_libs_dir(libs_dir)
     models_dir = resolve_models_dir()
+    effective_pubkey_path = _resolve_effective_pubkey_path()
 
     logger.info("Initializing C++ Runtime:")
     logger.info("  Runtime SO:    %s", runtime_so)
@@ -293,9 +319,11 @@ def _init_runtime() -> bool:
         logger.info("  Loader dir:    %s", loader_libs_dir)
     logger.info("  Models dir:    %s", models_dir)
     logger.info("  License path:  %s", LICENSE_PATH)
+    if effective_pubkey_path:
+        logger.info("  Pubkey path:   %s", effective_pubkey_path)
 
-    if PUBKEY_PATH:
-        os.environ["AI_PUBKEY_PATH"] = PUBKEY_PATH
+    if effective_pubkey_path:
+        os.environ["AI_PUBKEY_PATH"] = effective_pubkey_path
 
     success = init_runtime(runtime_so, loader_libs_dir, models_dir, LICENSE_PATH)
     if not success:
@@ -319,14 +347,15 @@ def _init_runtime() -> bool:
 
 def _verify_license_signature(license_json: str) -> bool:
     """Verify license RSA signature using mounted public key. Returns True if valid."""
-    if not os.path.exists(PUBKEY_PATH):
+    effective_pubkey_path = _resolve_effective_pubkey_path()
+    if not os.path.exists(effective_pubkey_path):
         if TRUSTED_PUBKEY_SHA256:
-            logger.error("No public key at %s but TRUSTED_PUBKEY_SHA256 is set — DENIED", PUBKEY_PATH)
+            logger.error("No public key at %s but TRUSTED_PUBKEY_SHA256 is set — DENIED", effective_pubkey_path)
             return False
-        logger.warning("No public key at %s — skipping signature verification", PUBKEY_PATH)
+        logger.warning("No public key at %s — skipping signature verification", effective_pubkey_path)
         return True  # no pubkey = skip verification (dev/test mode)
     try:
-        with open(PUBKEY_PATH, encoding="utf-8") as f:
+        with open(effective_pubkey_path, encoding="utf-8") as f:
             pubkey_pem = f.read()
 
         # Verify public key fingerprint against trusted hash (anti-forgery)
@@ -727,6 +756,7 @@ def _capability_diagnostics() -> dict:
     runtime_so_path = resolve_runtime_so_path()
     libs_dir = resolve_libs_dir()
     models_dir = resolve_models_dir()
+    effective_pubkey_path = _resolve_effective_pubkey_path()
     discovered_caps = list_available_capabilities()
     loaded_caps = runtime.get_capabilities() if runtime else []
     return {
@@ -739,8 +769,8 @@ def _capability_diagnostics() -> dict:
         "models_dir_exists": os.path.isdir(models_dir),
         "license_path": LICENSE_PATH,
         "license_exists": os.path.exists(LICENSE_PATH),
-        "pubkey_path": PUBKEY_PATH,
-        "pubkey_exists": os.path.exists(PUBKEY_PATH),
+        "pubkey_path": effective_pubkey_path,
+        "pubkey_exists": os.path.exists(effective_pubkey_path),
         "loaded_capabilities": [cap.get("name", "") for cap in loaded_caps if cap.get("name")],
         "discovered_model_capabilities": [
             cap.get("capability", "") for cap in discovered_caps if cap.get("capability")

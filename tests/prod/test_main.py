@@ -257,7 +257,8 @@ class ProdMainTests(unittest.TestCase):
         pubkey_path = Path(self.tempdir.name) / "licenses" / "pubkey.pem"
         pubkey_path.parent.mkdir(parents=True, exist_ok=True)
         pubkey_path.write_text("fake-pubkey", encoding="utf-8")
-        prod_main.PUBKEY_PATH = str(pubkey_path)
+        prod_main.PUBKEY_PATH = "/tmp/missing-pubkey.pem"
+        prod_main.LICENSE_PATH = str(pubkey_path.parent / "license.bin")
         prod_main.resolve_libs_dir = lambda: str(Path(self.tempdir.name) / "libs")
         prod_main.init_runtime = (
             lambda runtime_so, libs_dir, models_dir, license_path: records.update({
@@ -272,7 +273,17 @@ class ProdMainTests(unittest.TestCase):
         self.assertTrue(self.original_runtime_bootstrap())
         self.assertNotEqual(records["libs_dir"], str(Path(self.tempdir.name) / "libs"))
         self.assertTrue(Path(records["libs_dir"], "libface_detect.so").exists())
-        self.assertEqual(prod_main.PUBKEY_PATH, str(pubkey_path))
+        self.assertEqual(os.environ.get("AI_PUBKEY_PATH"), str(pubkey_path))
+
+    def test_resolve_effective_pubkey_path_falls_back_to_license_sibling(self):
+        pubkey_path = Path(self.tempdir.name) / "licenses" / "pubkey.pem"
+        pubkey_path.parent.mkdir(parents=True, exist_ok=True)
+        pubkey_path.write_text("fake-pubkey", encoding="utf-8")
+        prod_main.PUBKEY_PATH = ""
+        prod_main.LICENSE_PATH = str(pubkey_path.parent / "license.bin")
+        os.environ.pop("AI_PUBKEY_PATH", None)
+
+        self.assertEqual(prod_main._resolve_effective_pubkey_path(), str(pubkey_path))
 
     def test_capabilities_endpoint_includes_manifest_metadata(self):
         body = prod_main.list_capabilities()
