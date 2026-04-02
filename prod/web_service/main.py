@@ -562,7 +562,7 @@ async def infer(
     image: UploadFile = File(...),
     options: Optional[str] = Form(default=None),
 ):
-    """Run inference for a specific AI capability using C++ Runtime."""
+    """Run inference for a specific AI capability using C++ Runtime instance pool."""
     # License check
     _check_license(capability)
 
@@ -598,42 +598,10 @@ async def infer(
         height, width, channels = img.shape
         img_bytes = img.tobytes()
 
-        # Call AiInfer via ctypes (need to add this method to AiRuntime class)
-        # For now, we'll use a workaround: create capability instance directly
-        # TODO: Implement AiInfer wrapper in AiRuntime class
-        from ai_runtime_ctypes import AiCapability, AiImage as CAiImage
-        import ctypes
-
-        # Get capability SO path
-        from resource_resolver import resolve_lib_path
-        cap_so = resolve_lib_path(capability)
-        if not cap_so:
-            runtime.release(handle)
-            return _error_response(2001, f"Capability SO not found: {capability}", capability)
-
-        # Load capability SO and call AiInfer
-        cap = AiCapability(cap_so)
-        model_dir = resolve_model_dir(capability)
-        if not model_dir:
-            runtime.release(handle)
-            return _error_response(2001, f"Model directory not found: {capability}", capability)
-
-        if not cap.create(model_dir):
-            runtime.release(handle)
-            return _error_response(2002, f"Failed to create capability instance", capability)
-
-        init_ret = cap.init()
-        if init_ret != AI_OK:
-            cap.destroy()
-            runtime.release(handle)
-            return _error_response(init_ret, f"Failed to initialize capability", capability)
-
-        # Run inference
-        result = cap.infer(img_bytes, width, height, channels)
-        cap.destroy()
+        # Call inference via Runtime (uses instance pool - PRODUCTION GRADE)
+        result = runtime.infer(handle, img_bytes, width, height, channels)
 
         if result.get("error_code", 0) != AI_OK:
-            runtime.release(handle)
             return _error_response(
                 result.get("error_code", 5001),
                 result.get("error_msg", "Inference failed"),
@@ -644,14 +612,17 @@ async def infer(
         elapsed = (time.perf_counter() - t0) * 1000.0
 
         # Extract version from manifest
-        manifest_path = os.path.join(model_dir, "manifest.json")
+        from resource_resolver import resolve_model_dir
+        model_dir = resolve_model_dir(capability)
         version = "unknown"
-        try:
-            with open(manifest_path, encoding="utf-8") as f:
-                manifest = json.load(f)
-                version = manifest.get("model_version", "unknown")
-        except Exception:
-            pass
+        if model_dir:
+            manifest_path = os.path.join(model_dir, "manifest.json")
+            try:
+                with open(manifest_path, encoding="utf-8") as f:
+                    manifest = json.load(f)
+                    version = manifest.get("model_version", "unknown")
+            except Exception:
+                pass
 
         return _success(capability, version, result.get("result", {}), round(elapsed, 2))
 

@@ -98,6 +98,14 @@ class AiRuntime:
         self._lib.AiRuntimeDestroy.argtypes = []
         self._lib.AiRuntimeDestroy.restype = None
 
+        # int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* output)
+        self._lib.AiInfer.argtypes = [AiHandle, ctypes.POINTER(AiImage), ctypes.POINTER(AiResult)]
+        self._lib.AiInfer.restype = ctypes.c_int32
+
+        # void AiFreeResult(AiResult* result)
+        self._lib.AiFreeResult.argtypes = [ctypes.POINTER(AiResult)]
+        self._lib.AiFreeResult.restype = None
+
         logger.info("Loaded libai_runtime.so from %s", so_path)
 
     def init(self, so_dir: str, model_base_dir: str, license_path: str) -> int:
@@ -191,6 +199,63 @@ class AiRuntime:
         except Exception as e:
             logger.error("Failed to parse license status JSON: %s", e)
             return None
+
+    def infer(self, handle: AiHandle, image_data: bytes, width: int, height: int, channels: int = 3) -> dict[str, Any]:
+        """Run inference using acquired instance handle (proper instance pool usage).
+
+        This method should be used instead of directly creating AiCapability instances,
+        as it leverages the Runtime's instance pool for better performance.
+
+        Args:
+            handle: Instance handle from acquire()
+            image_data: Raw image bytes (BGR format)
+            width: Image width
+            height: Image height
+            channels: Image channels (default 3 for BGR)
+
+        Returns:
+            dict with "error_code" and optionally "result" or "error_msg"
+        """
+        if not handle:
+            return {"error_code": AI_ERR_INVALID_PARAM, "error_msg": "Handle is NULL"}
+
+        # Create AiImage structure
+        img_array = (ctypes.c_uint8 * len(image_data)).from_buffer_copy(image_data)
+        ai_img = AiImage(
+            data=ctypes.cast(img_array, ctypes.POINTER(ctypes.c_uint8)),
+            width=width,
+            height=height,
+            channels=channels,
+            data_type=0,  # uint8
+            color_format=0,  # BGR
+            stride=0,  # tightly packed
+        )
+
+        # Create AiResult structure
+        ai_result = AiResult()
+
+        # Call AiInfer via Runtime (uses instance pool)
+        ret = self._lib.AiInfer(handle, ctypes.byref(ai_img), ctypes.byref(ai_result))
+
+        # Parse result
+        result = {
+            "error_code": ai_result.error_code,
+        }
+
+        if ai_result.json_result:
+            try:
+                result["result"] = json.loads(ai_result.json_result.decode("utf-8"))
+            except Exception as e:
+                logger.error("Failed to parse result JSON: %s", e)
+                result["result"] = {}
+
+        if ai_result.error_msg:
+            result["error_msg"] = ai_result.error_msg.decode("utf-8")
+
+        # Free result memory allocated by SO
+        self._lib.AiFreeResult(ctypes.byref(ai_result))
+
+        return result
 
     def destroy(self) -> None:
         """Destroy runtime and cleanup all resources."""

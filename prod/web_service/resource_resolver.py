@@ -38,30 +38,69 @@ def resolve_model_dir(capability: str) -> str | None:
 
 
 def resolve_lib_path(capability: str) -> str | None:
-    """Return path to libcapability.so — mount takes priority over built-in."""
+    """Return path to libcapability.so — mount takes priority over built-in.
+
+    Supports two directory structures:
+    1. Flat: /libs/lib<capability>.so
+    2. Nested (from builder): /libs/linux_x86_64/<capability>/lib/lib<capability>.so
+    """
     for base in (MOUNT_ROOT, BUILTIN_ROOT):
-        path = os.path.join(base, "libs", f"lib{capability}.so")
-        if os.path.exists(path):
-            return path
+        # Try nested structure first (from ai-builder output)
+        nested_path = os.path.join(base, "libs", "linux_x86_64", capability, "lib", f"lib{capability}.so")
+        if os.path.exists(nested_path):
+            return nested_path
+
+        # Try flat structure
+        flat_path = os.path.join(base, "libs", f"lib{capability}.so")
+        if os.path.exists(flat_path):
+            return flat_path
+
     return None
 
 
 def resolve_runtime_so_path() -> str | None:
-    """Return path to libai_runtime.so — mount takes priority over built-in."""
+    """Return path to libai_runtime.so — mount takes priority over built-in.
+
+    Supports two directory structures:
+    1. Flat: /libs/libai_runtime.so
+    2. Nested (from builder): /libs/linux_x86_64/<capability>/lib/libai_runtime.so
+    """
     for base in (MOUNT_ROOT, BUILTIN_ROOT):
-        path = os.path.join(base, "libs", "libai_runtime.so")
-        if os.path.exists(path):
-            return path
+        # Try to find libai_runtime.so in any capability's lib directory
+        # (builder outputs libai_runtime.so alongside each capability SO)
+        libs_x86_64 = os.path.join(base, "libs", "linux_x86_64")
+        if os.path.isdir(libs_x86_64):
+            for cap_dir in os.listdir(libs_x86_64):
+                nested_path = os.path.join(libs_x86_64, cap_dir, "lib", "libai_runtime.so")
+                if os.path.exists(nested_path):
+                    return nested_path
+
+        # Try flat structure
+        flat_path = os.path.join(base, "libs", "libai_runtime.so")
+        if os.path.exists(flat_path):
+            return flat_path
+
     return None
 
 
 def resolve_libs_dir() -> str:
-    """Return libs directory path — mount takes priority over built-in."""
+    """Return libs directory path — mount takes priority over built-in.
+
+    For nested structure, returns the linux_x86_64 directory containing capability subdirs.
+    For flat structure, returns the libs directory directly.
+    """
     for base in (MOUNT_ROOT, BUILTIN_ROOT):
-        libs_dir = os.path.join(base, "libs")
-        if os.path.isdir(libs_dir):
-            return libs_dir
-    # Fallback to built-in even if directory doesn't exist
+        # Try nested structure first (builder output)
+        nested_libs = os.path.join(base, "libs", "linux_x86_64")
+        if os.path.isdir(nested_libs):
+            return nested_libs
+
+        # Try flat structure
+        flat_libs = os.path.join(base, "libs")
+        if os.path.isdir(flat_libs):
+            return flat_libs
+
+    # Fallback to built-in flat structure even if directory doesn't exist
     return os.path.join(BUILTIN_ROOT, "libs")
 
 

@@ -16,8 +16,11 @@ RUN cd prod/frontend \
     && npm install \
     && npm run build
 
-# ─── Stage 2: Runtime ───────────────────────────────────────────────────────
-FROM ubuntu:22.04
+# ─── Stage 2: Runtime (GPU-first with CPU fallback) ────────────────────────
+# Use NVIDIA CUDA Runtime base image to enable GPU acceleration
+# This provides CUDA Runtime libraries + cuDNN for ONNXRuntime GPU inference
+# CPU-only fallback works automatically if no GPU is detected
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
