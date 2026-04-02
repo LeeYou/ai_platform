@@ -11,6 +11,7 @@ import io
 import json
 import logging
 import os
+import tempfile
 import sys
 import time
 import traceback
@@ -29,6 +30,7 @@ MODELS_ROOT   = os.getenv("MODELS_ROOT",   "/workspace/models")
 DATASETS_ROOT = os.getenv("DATASETS_ROOT", "/workspace/datasets")
 LOG_DIR       = os.getenv("LOG_DIR", "/workspace/logs")
 TEST_LOG_DIR  = "./data/test_logs"
+TEST_STATE_FILE = "./data/test_jobs.json"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme").strip()
 
@@ -94,11 +96,53 @@ except Exception:
 _batch_jobs: dict[str, dict] = {}
 
 
+def _persist_batch_jobs() -> None:
+    os.makedirs(os.path.dirname(TEST_STATE_FILE) or ".", exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="test_jobs_", suffix=".json", dir=os.path.dirname(TEST_STATE_FILE) or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(list(_batch_jobs.values()), f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, TEST_STATE_FILE)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _load_batch_jobs() -> None:
+    if not os.path.exists(TEST_STATE_FILE):
+        return
+    try:
+        with open(TEST_STATE_FILE, encoding="utf-8") as f:
+            jobs = json.load(f)
+        _batch_jobs.clear()
+        for job in jobs:
+            if isinstance(job, dict) and job.get("job_id"):
+                _batch_jobs[job["job_id"]] = job
+    except Exception as exc:
+        logger.warning("Failed to load persisted batch jobs from %s: %s", TEST_STATE_FILE, exc)
+
+
+def _mark_interrupted_batch_jobs_failed() -> None:
+    changed = False
+    finished_at = datetime.now(timezone.utc).isoformat()
+    for job in _batch_jobs.values():
+        if job.get("status") in {"pending", "running"}:
+            job["status"] = "failed"
+            job["error_msg"] = "Service restarted before batch job completed"
+            job["finished_at"] = finished_at
+            changed = True
+    if changed:
+        _persist_batch_jobs()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(TEST_LOG_DIR, exist_ok=True)
+    _load_batch_jobs()
+    _mark_interrupted_batch_jobs_failed()
     logger.info("Test Management service started")
     yield
+    _persist_batch_jobs()
     logger.info("Test Management service stopped")
 
 
@@ -265,66 +309,78 @@ async def _run_batch(job_id: str, capability: str, model_dir: str, dataset_path:
 
     job = _batch_jobs[job_id]
     job["status"] = "running"
+    job["error_msg"] = None
     log_path = os.path.join(TEST_LOG_DIR, f"batch_{job_id}.json")
     job["log_path"] = log_path
+    _persist_batch_jobs()
 
-    inferencer = get_inferencer(capability, model_dir)
-    img_exts = {".jpg", ".jpeg", ".png", ".bmp"}
-    samples = []
-    for root, _, files in os.walk(dataset_path):
-        for fn in files:
-            if os.path.splitext(fn)[1].lower() in img_exts:
-                samples.append(os.path.join(root, fn))
-    samples.sort()
+    try:
+        inferencer = get_inferencer(capability, model_dir)
+        img_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+        samples = []
+        for root, _, files in os.walk(dataset_path):
+            for fn in files:
+                if os.path.splitext(fn)[1].lower() in img_exts:
+                    samples.append(os.path.join(root, fn))
+        samples.sort()
 
-    job["total"] = len(samples)
-    job["done"]  = 0
-    results = []
+        job["total"] = len(samples)
+        job["done"] = 0
+        _persist_batch_jobs()
+        results = []
 
-    for fp in samples:
-        img = cv2.imread(fp)
-        if img is None:
-            continue
-        try:
-            r = inferencer.infer(img)
-        except Exception as exc:
-            r = {"error": str(exc)}
-        results.append({"file": fp, **r})
-        job["done"] += 1
+        for fp in samples:
+            img = cv2.imread(fp)
+            if img is None:
+                continue
+            try:
+                r = inferencer.infer(img)
+            except Exception as exc:
+                r = {"error": str(exc)}
+            results.append({"file": fp, **r})
+            job["done"] += 1
+            _persist_batch_jobs()
 
-    # Simple accuracy calculation for binary classification
-    correct = 0
-    total_valid = 0
-    for r in results:
-        if "error" in r:
-            continue
-        total_valid += 1
-        label_dir = os.path.basename(os.path.dirname(r["file"])).lower()
-        if capability == "desktop_recapture_detect":
-            gt = "recaptured" in label_dir
-            pred = r.get("is_recaptured", False)
-            if gt == pred:
-                correct += 1
+        # Simple accuracy calculation for binary classification
+        correct = 0
+        total_valid = 0
+        for r in results:
+            if "error" in r:
+                continue
+            total_valid += 1
+            label_dir = os.path.basename(os.path.dirname(r["file"])).lower()
+            if capability == "desktop_recapture_detect":
+                gt = "recaptured" in label_dir
+                pred = r.get("is_recaptured", False)
+                if gt == pred:
+                    correct += 1
 
-    accuracy = round(correct / total_valid, 4) if total_valid > 0 else None
+        accuracy = round(correct / total_valid, 4) if total_valid > 0 else None
 
-    report = {
-        "capability": capability,
-        "model_dir": model_dir,
-        "total_samples": len(samples),
-        "processed": total_valid,
-        "accuracy": accuracy,
-        "results": results,
-        "finished_at": datetime.now(timezone.utc).isoformat(),
-    }
+        report = {
+            "capability": capability,
+            "model_dir": model_dir,
+            "total_samples": len(samples),
+            "processed": total_valid,
+            "accuracy": accuracy,
+            "results": results,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-    with open(log_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+        with open(log_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
 
-    job["status"]      = "done"
-    job["accuracy"]    = accuracy
-    job["processed"]   = total_valid
-    job["finished_at"] = report["finished_at"]
+        job["status"] = "done"
+        job["accuracy"] = accuracy
+        job["processed"] = total_valid
+        job["finished_at"] = report["finished_at"]
+        _persist_batch_jobs()
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error_msg"] = str(exc)
+        job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _persist_batch_jobs()
+        logger.error("Batch inference job %s failed: %s", job_id, exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -398,10 +454,13 @@ async def batch_infer(req: BatchRequest):
         "total":        0,
         "done":         0,
         "accuracy":     None,
+        "processed":    0,
         "log_path":     None,
         "created_at":   datetime.now(timezone.utc).isoformat(),
         "finished_at":  None,
+        "error_msg":    None,
     }
+    _persist_batch_jobs()
     asyncio.create_task(_run_batch(job_id, req.capability, model_dir, req.dataset_path))
     return _batch_jobs[job_id]
 
