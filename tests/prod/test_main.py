@@ -201,6 +201,16 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["status"], "expired")
         self.assertEqual(body["days_remaining"], 0)
 
+    def test_license_status_endpoint_reports_not_yet_valid(self):
+        self._write_license(
+            valid_from=(datetime.now(prod_main.CST) + timedelta(days=2)).isoformat(),
+            valid_until=(datetime.now(prod_main.CST) + timedelta(days=10)).isoformat(),
+        )
+        prod_main._verify_license_signature = lambda raw: True
+        body = prod_main.license_status()
+        self.assertEqual(body["status"], "not_yet_valid")
+        self.assertLess(body["days_remaining"], 0)
+
     def test_license_status_endpoint_reports_invalid_for_malformed_json(self):
         Path(prod_main.LICENSE_PATH).write_text("{bad json", encoding="utf-8")
         body = prod_main.license_status()
@@ -218,6 +228,24 @@ class ProdMainTests(unittest.TestCase):
             prod_main._check_license("face_detect")
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertEqual(ctx.exception.detail["code"], 4004)
+
+    def test_check_license_rejects_not_yet_valid_license(self):
+        self._write_license(
+            valid_from=(datetime.now(prod_main.CST) + timedelta(days=2)).isoformat(),
+            valid_until=(datetime.now(prod_main.CST) + timedelta(days=10)).isoformat(),
+        )
+        prod_main._verify_license_signature = lambda raw: True
+        prod_main._check_license = self.original_check_license
+        with self.assertRaises(HTTPException) as ctx:
+            prod_main._check_license("face_detect")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["code"], 4003)
+
+    def test_check_license_allows_wildcard_capability(self):
+        self._write_license(capabilities=["*"])
+        prod_main._verify_license_signature = lambda raw: True
+        prod_main._check_license = self.original_check_license
+        prod_main._check_license("arbitrary_capability")
 
     def test_infer_endpoint_returns_expired_license_before_runtime(self):
         self._write_license(valid_until=(datetime.now(prod_main.CST) - timedelta(days=1)).isoformat())
@@ -408,6 +436,67 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["steps"][0]["status"], "success")
         self.assertEqual(body["steps"][1]["status"], "error")
         self.assertEqual(body["steps"][1]["error"], "License check failed")
+
+    def test_run_pipeline_endpoint_skips_step_when_condition_not_met(self):
+        pipeline = {
+            "pipeline_id": "pipe_condition",
+            "name": "Condition skip",
+            "steps": [
+                {
+                    "step_id": "s1",
+                    "capability": "face_detect",
+                    "output_mapping": {"count": "$.count"},
+                },
+                {
+                    "step_id": "s2",
+                    "capability": "second_cap",
+                    "condition": "${s1.count} > 5",
+                },
+            ],
+        }
+        (self.pipeline_dir / "pipe_condition.json").write_text(json.dumps(pipeline), encoding="utf-8")
+
+        calls = []
+
+        def fake_infer(capability, image_bytes, options):
+            calls.append(capability)
+            return {"count": 1}
+
+        prod_main._infer_for_pipeline = fake_infer
+
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        body = asyncio.run(prod_main.run_pipeline_endpoint("pipe_condition", upload))
+        self.assertEqual(calls, ["face_detect"])
+        self.assertEqual(body["steps"][0]["status"], "success")
+        self.assertEqual(body["steps"][1]["status"], "skipped")
+        self.assertEqual(body["steps"][1]["reason"], "condition not met")
+
+    def test_run_pipeline_endpoint_continues_after_step_failure_with_skip(self):
+        pipeline = {
+            "pipeline_id": "pipe_continue",
+            "name": "Continue after failure",
+            "steps": [
+                {"step_id": "s1", "capability": "face_detect"},
+                {"step_id": "s2", "capability": "second_cap", "on_failure": "skip"},
+                {"step_id": "s3", "capability": "third_cap"},
+            ],
+        }
+        (self.pipeline_dir / "pipe_continue.json").write_text(json.dumps(pipeline), encoding="utf-8")
+
+        calls = []
+
+        def fake_infer(capability, image_bytes, options):
+            calls.append(capability)
+            if capability == "second_cap":
+                raise RuntimeError("boom")
+            return {"ok": capability}
+
+        prod_main._infer_for_pipeline = fake_infer
+
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        body = asyncio.run(prod_main.run_pipeline_endpoint("pipe_continue", upload))
+        self.assertEqual(calls, ["face_detect", "second_cap", "third_cap"])
+        self.assertEqual([step["status"] for step in body["steps"]], ["success", "error", "success"])
 
 
 if __name__ == "__main__":
