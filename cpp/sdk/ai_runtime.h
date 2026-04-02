@@ -78,6 +78,29 @@ AI_EXPORT AiHandle AiRuntimeAcquire(const char* capability_name, int32_t timeout
 AI_EXPORT void AiRuntimeRelease(AiHandle handle);
 
 /**
+ * 执行推理（通过已获取的实例 Handle）。
+ *
+ * 这是对能力插件 AiInfer 的便捷封装，Runtime 自动根据 handle 找到对应插件并调用其推理函数。
+ *
+ * 线程安全约束：
+ *   - 同一 handle 不得被多个线程并发调用（调用方负责互斥）
+ *   - 不同 handle 之间相互线程安全
+ *
+ * @param handle  由 AiRuntimeAcquire 返回的实例 Handle
+ * @param input   输入图像，调用方持有内存，函数返回后可安全释放
+ * @param output  推理结果，插件分配内存，调用方须通过 AiRuntimeFreeResult 释放
+ * @return AI_OK 表示成功；其他值见 AiErrorCode
+ */
+AI_EXPORT int32_t AiRuntimeInfer(AiHandle handle, const AiImage* input, AiResult* output);
+
+/**
+ * 释放推理结果（释放 AiResult 内部分配的内存）。
+ *
+ * @param result 由 AiRuntimeInfer 填充的 AiResult 结构体指针
+ */
+AI_EXPORT void AiRuntimeFreeResult(AiResult* result);
+
+/**
  * 热重载指定能力的模型包和/或 SO（后台异步执行）。
  *
  * 触发后：

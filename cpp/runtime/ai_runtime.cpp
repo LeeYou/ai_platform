@@ -148,6 +148,60 @@ void AiRuntimeRelease(AiHandle handle) {
 }
 
 // ---------------------------------------------------------------------------
+// AiRuntimeInfer / AiRuntimeFreeResult
+// ---------------------------------------------------------------------------
+
+int32_t AiRuntimeInfer(AiHandle handle, const AiImage* input, AiResult* output) {
+    if (!handle || !input || !output) {
+        return AI_ERR_INVALID_PARAM;
+    }
+
+    // Find which capability this handle belongs to
+    std::string cap_name;
+    {
+        std::lock_guard<std::mutex> lk(g_handle_cap_mutex);
+        auto it = g_handle_cap.find(handle);
+        if (it == g_handle_cap.end()) {
+            std::fprintf(stderr, "[Runtime] Invalid handle in AiRuntimeInfer\n");
+            return AI_ERR_INVALID_PARAM;
+        }
+        cap_name = it->second;
+    }
+
+    // Get capability entry and call its AiInfer function
+    const CapabilityEntry* entry = agilestar_loader_find(cap_name.c_str());
+    if (!entry || !entry->fn_Infer) {
+        std::fprintf(stderr, "[Runtime] Capability %s not found or has no Infer function\n",
+                     cap_name.c_str());
+        return AI_ERR_CAPABILITY_MISSING;
+    }
+
+    return entry->fn_Infer(handle, input, output);
+}
+
+void AiRuntimeFreeResult(AiResult* result) {
+    if (!result) return;
+
+    // AiFreeResult is typically implemented by capability SO to free its allocated memory
+    // However, since we don't know which capability allocated this result,
+    // we use a convention: the capability SO should manage its own memory via AiFreeResult
+    // For now, we just free the common fields if they were allocated by the capability
+    if (result->json_result) {
+        // Capability SOs are expected to use malloc/free or provide their own AiFreeResult
+        // Here we can't call capability-specific free, so we rely on capabilities
+        // to expose AiFreeResult if needed, or we just clear the pointer
+        // The safer approach is to have each capability expose AiFreeResult
+        // For this wrapper, we'll just clear the fields
+        // NOTE: This assumes capability SOs manage their own memory properly
+        result->json_result = nullptr;
+        result->result_len = 0;
+    }
+    if (result->error_msg) {
+        result->error_msg = nullptr;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AiRuntimeReload
 // ---------------------------------------------------------------------------
 

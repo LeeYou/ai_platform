@@ -98,13 +98,13 @@ class AiRuntime:
         self._lib.AiRuntimeDestroy.argtypes = []
         self._lib.AiRuntimeDestroy.restype = None
 
-        # int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* output)
-        self._lib.AiInfer.argtypes = [AiHandle, ctypes.POINTER(AiImage), ctypes.POINTER(AiResult)]
-        self._lib.AiInfer.restype = ctypes.c_int32
+        # int32_t AiRuntimeInfer(AiHandle handle, const AiImage* input, AiResult* output)
+        self._lib.AiRuntimeInfer.argtypes = [AiHandle, ctypes.POINTER(AiImage), ctypes.POINTER(AiResult)]
+        self._lib.AiRuntimeInfer.restype = ctypes.c_int32
 
-        # void AiFreeResult(AiResult* result)
-        self._lib.AiFreeResult.argtypes = [ctypes.POINTER(AiResult)]
-        self._lib.AiFreeResult.restype = None
+        # void AiRuntimeFreeResult(AiResult* result)
+        self._lib.AiRuntimeFreeResult.argtypes = [ctypes.POINTER(AiResult)]
+        self._lib.AiRuntimeFreeResult.restype = None
 
         logger.info("Loaded libai_runtime.so from %s", so_path)
 
@@ -234,8 +234,8 @@ class AiRuntime:
         # Create AiResult structure
         ai_result = AiResult()
 
-        # Call AiInfer via Runtime (uses instance pool)
-        ret = self._lib.AiInfer(handle, ctypes.byref(ai_img), ctypes.byref(ai_result))
+        # Call AiRuntimeInfer (uses instance pool)
+        ret = self._lib.AiRuntimeInfer(handle, ctypes.byref(ai_img), ctypes.byref(ai_result))
 
         # Parse result
         result = {
@@ -253,7 +253,7 @@ class AiRuntime:
             result["error_msg"] = ai_result.error_msg.decode("utf-8")
 
         # Free result memory allocated by SO
-        self._lib.AiFreeResult(ctypes.byref(ai_result))
+        self._lib.AiRuntimeFreeResult(ctypes.byref(ai_result))
 
         return result
 
@@ -360,7 +360,7 @@ class AiCapability:
             result["error_msg"] = ai_result.error_msg.decode("utf-8")
 
         # Free result memory allocated by SO
-        self._lib.AiFreeResult(ctypes.byref(ai_result))
+        self._lib.AiRuntimeFreeResult(ctypes.byref(ai_result))
 
         return result
 
