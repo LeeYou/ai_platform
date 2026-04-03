@@ -36,6 +36,13 @@ LOG_DIR = os.getenv("LOG_DIR", "/mnt/ai_platform/logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
 
 
+class _HealthCheckFilter(logging.Filter):
+    """Suppress high-frequency health-probe entries from uvicorn access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /api/v1/health" not in record.getMessage()
+
+
 def _setup_logging() -> logging.Logger:
     os.makedirs(LOG_DIR, exist_ok=True)
     fmt = logging.Formatter(
@@ -58,6 +65,9 @@ def _setup_logging() -> logging.Logger:
     app_logger.addHandler(file_handler)
     app_logger.addHandler(console_handler)
     app_logger.propagate = False
+
+    # Silence health-probe noise from uvicorn's built-in access logger.
+    logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
 
     return app_logger
 
@@ -661,10 +671,11 @@ async def log_requests(request: Request, call_next):
                 return _payload_too_large_response()
         response = await call_next(request)
         elapsed_ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            "%s %s → %s (%.0fms)",
-            request.method, request.url.path, response.status_code, elapsed_ms,
-        )
+        if request.url.path != "/api/v1/health":
+            logger.info(
+                "%s %s → %s (%.0fms)",
+                request.method, request.url.path, response.status_code, elapsed_ms,
+            )
         return response
     except Exception as exc:
         elapsed_ms = (time.perf_counter() - start) * 1000
