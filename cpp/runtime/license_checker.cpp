@@ -13,7 +13,9 @@
 #include "ai_runtime_impl.h"
 
 #include <atomic>
+#include <cmath>
 #include <chrono>
+#include <ctime>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -126,12 +128,49 @@ static std::string _json_string(const std::string& json, const std::string& key)
 struct LicenseStatus {
     bool        valid       = false;
     bool        expired     = false;
+    bool        not_yet_valid = false;
     std::string license_id;
+    std::string valid_from;    // ISO-8601
     std::string valid_until;   // ISO-8601
     int32_t     days_remaining = 0;
     std::vector<std::string> capabilities;
     std::string raw_json;      // original license body
 };
+
+static int32_t _compute_days_remaining(const std::string& iso_time) {
+    if (iso_time.empty()) return 9999;  // permanent license
+
+    struct tm tm_value = {};
+    if (std::sscanf(iso_time.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d",
+                    &tm_value.tm_year,
+                    &tm_value.tm_mon,
+                    &tm_value.tm_mday,
+                    &tm_value.tm_hour,
+                    &tm_value.tm_min,
+                    &tm_value.tm_sec) < 3) {
+        return 0;
+    }
+
+    tm_value.tm_year -= 1900;
+    tm_value.tm_mon  -= 1;
+
+#ifdef _WIN32
+    time_t ts = _mkgmtime(&tm_value) - (8 * 3600);
+#else
+    time_t ts = timegm(&tm_value) - (8 * 3600);
+#endif
+    time_t now = time(nullptr);
+    double diff_days = std::difftime(ts, now) / 86400.0;
+    return static_cast<int32_t>(std::floor(diff_days));
+}
+
+static std::pair<bool, int32_t> _check_valid_from(const std::string& valid_from) {
+    if (valid_from.empty()) return {true, 0};
+
+    int32_t days_until = _compute_days_remaining(valid_from);
+    if (days_until <= 0) return {true, 0};
+    return {false, days_until};
+}
 
 class LicenseCache {
 public:
@@ -166,9 +205,9 @@ public:
     // Check if a specific capability is licensed
     bool is_capability_licensed(const std::string& cap_name) {
         LicenseStatus s = get();
-        if (!s.valid || s.expired) return false;
+        if (!s.valid || s.expired || s.not_yet_valid) return false;
         for (const auto& c : s.capabilities) {
-            if (c == cap_name) return true;
+            if (c == cap_name || c == "*") return true;
         }
         return false;
     }
@@ -177,7 +216,9 @@ public:
         LicenseStatus s = get();
         std::ostringstream os;
         os << "{"
-           << "\"status\":\"" << (s.expired ? "expired" : (s.valid ? "valid" : "invalid")) << "\","
+           << "\"status\":\""
+           << (s.expired ? "expired" : (s.not_yet_valid ? "not_yet_valid" : (s.valid ? "valid" : "invalid")))
+           << "\","
            << "\"license_id\":\"" << s.license_id << "\","
            << "\"valid_until\":\"" << s.valid_until << "\","
            << "\"days_remaining\":" << s.days_remaining << ","
@@ -246,10 +287,19 @@ private:
 
         cached_.raw_json      = json;
         cached_.license_id    = _json_string(json, "license_id");
+        cached_.valid_from    = _json_string(json, "valid_from");
         cached_.valid_until   = _json_string(json, "valid_until");
         std::string status    = _json_string(json, "status");
-        cached_.valid         = (status == "active");
-        cached_.expired       = (status == "expired");
+        const bool explicit_active = (status == "active" || status == "valid");
+        const bool explicit_expired = (status == "expired");
+        const bool explicit_not_yet_valid = (status == "not_yet_valid");
+        const bool explicit_invalid = !status.empty() &&
+                                      !explicit_active &&
+                                      !explicit_expired &&
+                                      !explicit_not_yet_valid;
+        cached_.valid         = explicit_active;
+        cached_.expired       = explicit_expired;
+        cached_.not_yet_valid = explicit_not_yet_valid;
 
         // Parse capabilities array
         auto cap_pos = json.find("\"capabilities\"");
@@ -271,39 +321,44 @@ private:
             }
         }
 
-        // Compute days remaining from valid_until (simplified: compare ISO date prefix)
-        // All license times are in CST (UTC+8)
-        if (!cached_.valid_until.empty() && cached_.valid) {
-            // Use ctime to parse
-            struct tm tm_exp = {};
-            if (std::sscanf(cached_.valid_until.c_str(), "%4d-%2d-%2dT",
-                            &tm_exp.tm_year, &tm_exp.tm_mon, &tm_exp.tm_mday) == 3) {
-                tm_exp.tm_year -= 1900;
-                tm_exp.tm_mon  -= 1;
-                tm_exp.tm_hour = 0;
-                tm_exp.tm_min  = 0;
-                tm_exp.tm_sec  = 0;
-#ifdef _WIN32
-                // Convert CST time to epoch (subtract 8 hours from GMT conversion)
-                time_t exp_t = _mkgmtime(&tm_exp) - (8 * 3600);
-#else
-                // Convert CST time to epoch (subtract 8 hours from GMT conversion)
-                time_t exp_t = timegm(&tm_exp) - (8 * 3600);
-#endif
-                time_t now_t    = time(nullptr);
-                int64_t diff    = static_cast<int64_t>(exp_t) - static_cast<int64_t>(now_t);
-                cached_.days_remaining = static_cast<int32_t>(diff / 86400);
-                if (cached_.days_remaining < 0) {
-                    cached_.expired       = true;
-                    cached_.days_remaining = 0;
-                }
+        auto [has_started, days_until_start] = _check_valid_from(cached_.valid_from);
+        if (!has_started) {
+            cached_.valid = false;
+            cached_.expired = false;
+            cached_.not_yet_valid = true;
+            cached_.days_remaining = -days_until_start;
+        } else if (explicit_not_yet_valid) {
+            cached_.valid = false;
+            cached_.expired = false;
+            cached_.not_yet_valid = true;
+            cached_.days_remaining = 0;
+        } else if (explicit_expired) {
+            cached_.valid = false;
+            cached_.expired = true;
+            cached_.not_yet_valid = false;
+            cached_.days_remaining = 0;
+        } else {
+            cached_.days_remaining = _compute_days_remaining(cached_.valid_until);
+            if (cached_.days_remaining <= 0) {
+                cached_.valid = false;
+                cached_.expired = true;
+                cached_.not_yet_valid = false;
+                cached_.days_remaining = 0;
+            } else if (!explicit_invalid) {
+                cached_.valid = true;
+                cached_.expired = false;
+                cached_.not_yet_valid = false;
+            } else {
+                cached_.valid = false;
+                cached_.expired = false;
+                cached_.not_yet_valid = false;
             }
         }
 
         std::fprintf(stdout,
             "[LicenseChecker] License %s: status=%s caps=%zu days_remaining=%d\n",
             cached_.license_id.c_str(),
-            cached_.expired ? "expired" : (cached_.valid ? "valid" : "invalid"),
+            cached_.expired ? "expired" : (cached_.not_yet_valid ? "not_yet_valid" : (cached_.valid ? "valid" : "invalid")),
             cached_.capabilities.size(),
             cached_.days_remaining);
     }
