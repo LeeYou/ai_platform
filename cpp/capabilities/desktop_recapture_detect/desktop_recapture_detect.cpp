@@ -341,8 +341,19 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
 
     // Allocate output tensor
     Ort::MemoryInfo mem_info_out = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    std::vector<int64_t> output_shape = {1, 1};  // [batch_size, num_outputs]
-    std::vector<float> output_data(1);  // Single output value
+    auto output_type_info = ctx->session->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo();
+    std::vector<int64_t> output_shape = output_type_info.GetShape();
+    if (output_shape.empty()) {
+        output_shape.push_back(1);
+    }
+    for (auto& dim : output_shape) {
+        if (dim <= 0) dim = 1;
+    }
+    size_t output_elements = 1;
+    for (const auto dim : output_shape) {
+        output_elements *= static_cast<size_t>(dim);
+    }
+    std::vector<float> output_data(output_elements > 0 ? output_elements : 1, 0.0f);
     Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
         mem_info_out,
         output_data.data(),
