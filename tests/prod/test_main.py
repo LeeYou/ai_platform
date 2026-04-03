@@ -255,6 +255,21 @@ class ProdMainTests(unittest.TestCase):
         self.assertTrue(prod_main._is_shared_library_filename("libface_detect.so.1"))
         self.assertFalse(prod_main._is_shared_library_filename("libface_detect.so.bak"))
 
+    def test_prepare_runtime_libs_dir_stages_current_layout_shared_objects(self):
+        base_root = Path(self.tempdir.name) / "current_layout_libs"
+        current_lib_dir = base_root / "face_detect" / "current" / "lib"
+        current_lib_dir.mkdir(parents=True, exist_ok=True)
+        (current_lib_dir / "libface_detect.so").write_bytes(b"fake")
+        (current_lib_dir / "libai_runtime.so").write_bytes(b"fake")
+        (current_lib_dir / "libonnxruntime.so.1.18.1").write_bytes(b"fake")
+
+        staged_dir = prod_main._prepare_runtime_libs_dir(str(base_root))
+
+        self.assertNotEqual(staged_dir, str(base_root))
+        self.assertTrue(Path(staged_dir, "libface_detect.so").exists())
+        self.assertFalse(Path(staged_dir, "libai_runtime.so").exists())
+        self.assertFalse(Path(staged_dir, "libonnxruntime.so.1.18.1").exists())
+
     def test_preload_runtime_dependencies_skips_plugins_and_runtime(self):
         loaded_paths = []
         prod_main.ctypes.CDLL = lambda path, mode=0: loaded_paths.append(path) or object()
@@ -264,6 +279,23 @@ class ProdMainTests(unittest.TestCase):
         self.assertIn(str(self.libs_dir / "libonnxruntime.so.1.18.1"), loaded_paths)
         self.assertNotIn(str(self.libs_dir / "libface_detect.so"), loaded_paths)
         self.assertNotIn(str(self.libs_dir / "libai_runtime.so"), loaded_paths)
+
+    def test_resolve_runtime_so_path_supports_current_layout(self):
+        mount_root = Path(self.tempdir.name) / "mount_root"
+        current_lib_dir = mount_root / "libs" / "desktop_recapture_detect" / "current" / "lib"
+        current_lib_dir.mkdir(parents=True, exist_ok=True)
+        runtime_so = current_lib_dir / "libai_runtime.so"
+        runtime_so.write_bytes(b"fake")
+
+        original_mount_root = resource_resolver.MOUNT_ROOT
+        original_builtin_root = resource_resolver.BUILTIN_ROOT
+        try:
+            resource_resolver.MOUNT_ROOT = str(mount_root)
+            resource_resolver.BUILTIN_ROOT = str(Path(self.tempdir.name) / "builtin_root")
+            self.assertEqual(resource_resolver.resolve_runtime_so_path(), str(runtime_so))
+        finally:
+            resource_resolver.MOUNT_ROOT = original_mount_root
+            resource_resolver.BUILTIN_ROOT = original_builtin_root
 
     def test_init_runtime_uses_staged_loader_dir_and_sets_pubkey_env(self):
         records = {}

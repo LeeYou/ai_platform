@@ -40,10 +40,11 @@ def resolve_model_dir(capability: str) -> str | None:
 def resolve_lib_path(capability: str) -> str | None:
     """Return path to libcapability.so — mount takes priority over built-in.
 
-    Supports three directory structures:
+    Supports four directory structures:
     1. Flat: /libs/lib<capability>.so
     2. Nested (from builder): /libs/linux_x86_64/<capability>/lib/lib<capability>.so
     3. Flattened mount (docker-compose.prod.yml): /libs/<capability>/lib/lib<capability>.so
+    4. Current symlink/dir: /libs/<capability>/current/lib/lib<capability>.so
     """
     for base in (MOUNT_ROOT, BUILTIN_ROOT):
         # Try nested structure first (from ai-builder output)
@@ -56,6 +57,10 @@ def resolve_lib_path(capability: str) -> str | None:
         if os.path.exists(flattened_path):
             return flattened_path
 
+        current_path = os.path.join(base, "libs", capability, "current", "lib", f"lib{capability}.so")
+        if os.path.exists(current_path):
+            return current_path
+
         # Try flat structure
         flat_path = os.path.join(base, "libs", f"lib{capability}.so")
         if os.path.exists(flat_path):
@@ -67,10 +72,11 @@ def resolve_lib_path(capability: str) -> str | None:
 def resolve_runtime_so_path() -> str | None:
     """Return path to libai_runtime.so — mount takes priority over built-in.
 
-    Supports three directory structures:
+    Supports four directory structures:
     1. Flat: /libs/libai_runtime.so
     2. Nested (from builder): /libs/linux_x86_64/<capability>/lib/libai_runtime.so
     3. Flattened mount (docker-compose.prod.yml): /libs/<capability>/lib/libai_runtime.so
+    4. Current symlink/dir: /libs/<capability>/current/lib/libai_runtime.so
     """
     for base in (MOUNT_ROOT, BUILTIN_ROOT):
         # Try nested structure (builder outputs libai_runtime.so alongside each capability SO)
@@ -93,6 +99,10 @@ def resolve_runtime_so_path() -> str | None:
                 flattened_path = os.path.join(entry_path, "lib", "libai_runtime.so")
                 if os.path.exists(flattened_path):
                     return flattened_path
+
+                current_path = os.path.join(entry_path, "current", "lib", "libai_runtime.so")
+                if os.path.exists(current_path):
+                    return current_path
 
         # Try flat structure
         flat_path = os.path.join(base, "libs", "libai_runtime.so")

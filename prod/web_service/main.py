@@ -193,7 +193,10 @@ def _discover_nested_runtime_libs(libs_dir: str) -> tuple[list[str], list[str]]:
     for root, _, files in os.walk(libs_dir):
         if os.path.basename(root) != "lib":
             continue
-        capability = os.path.basename(os.path.dirname(root))
+        capability_root = os.path.dirname(root)
+        capability = os.path.basename(capability_root)
+        if capability == "current":
+            capability = os.path.basename(os.path.dirname(capability_root))
         shared_objects = [
             os.path.join(root, name)
             for name in files
