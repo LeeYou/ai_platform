@@ -761,7 +761,7 @@ def _license_error_from_status(license_status: Optional[dict[str, Any]], capabil
         return _error_response(4003, "License not yet valid", capability, status_code=403)
     if status == "expired":
         return _error_response(4002, "License expired", capability, status_code=403)
-    if status in ("invalid", "missing"):
+    if status == "invalid":
         return _error_response(4001, "License invalid", capability, status_code=403)
     return None
 
