@@ -22,6 +22,8 @@ RUN cd prod/frontend \
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Keep this aligned with the ONNX Runtime version used by ai-builder so the
+# deployed capability plugins and bundled provider shared libraries stay ABI-compatible.
 ARG ONNXRUNTIME_VERSION=1.18.1
 ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64-gpu
 
