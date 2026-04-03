@@ -255,6 +255,13 @@ class ProdMainTests(unittest.TestCase):
         self.assertTrue(prod_main._is_shared_library_filename("libface_detect.so.1"))
         self.assertFalse(prod_main._is_shared_library_filename("libface_detect.so.bak"))
 
+    def test_prepare_runtime_libs_dir_keeps_flat_shared_object_layout(self):
+        flat_root = Path(self.tempdir.name) / "flat_layout_libs"
+        flat_root.mkdir(parents=True, exist_ok=True)
+        (flat_root / "libface_detect.so").write_bytes(b"fake")
+
+        self.assertEqual(prod_main._prepare_runtime_libs_dir(str(flat_root)), str(flat_root))
+
     def test_prepare_runtime_libs_dir_stages_current_layout_shared_objects(self):
         base_root = Path(self.tempdir.name) / "current_layout_libs"
         current_lib_dir = base_root / "face_detect" / "current" / "lib"
