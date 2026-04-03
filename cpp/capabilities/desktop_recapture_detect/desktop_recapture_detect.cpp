@@ -346,8 +346,18 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
     if (output_shape.empty()) {
         output_shape.push_back(1);
     }
+    bool had_dynamic_output_dim = false;
     for (auto& dim : output_shape) {
-        if (dim <= 0) dim = 1;
+        if (dim <= 0) {
+            had_dynamic_output_dim = true;
+            dim = 1;
+        }
+    }
+    if (had_dynamic_output_dim) {
+        std::fprintf(stderr,
+                     "[desktop_recapture_detect] Dynamic output shape detected for %s; "
+                     "using batch=1 fallback for inference\n",
+                     ctx->output_names.empty() ? "<unknown>" : ctx->output_names[0]);
     }
     size_t output_elements = 1;
     for (const auto dim : output_shape) {
