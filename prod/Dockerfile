@@ -26,6 +26,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # deployed capability plugins and bundled provider shared libraries stay ABI-compatible.
 ARG ONNXRUNTIME_VERSION=1.18.1
 ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64-gpu
+ARG GITHUB_HTTPS_PROXY=
+ARG GITHUB_HTTP_PROXY=
 
 # ---------------------------------------------------------------------------
 # System dependencies
@@ -60,11 +62,22 @@ RUN python3 - <<'PY'
 import cryptography
 print("cryptography:", cryptography.__version__)
 PY
-RUN curl -fsSL \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
-    -o /tmp/ort.tgz \
-    && tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1 \
-    && rm /tmp/ort.tgz
+RUN set -eux; \
+    github_proxy="${GITHUB_HTTPS_PROXY:-}"; \
+    if [ -z "${github_proxy}" ]; then github_proxy="${HTTPS_PROXY:-${https_proxy:-}}"; fi; \
+    if [ -z "${github_proxy}" ]; then github_proxy="${GITHUB_HTTP_PROXY:-}"; fi; \
+    if [ -z "${github_proxy}" ]; then github_proxy="${HTTP_PROXY:-${http_proxy:-}}"; fi; \
+    if [ -n "${github_proxy}" ]; then \
+        curl -x "${github_proxy}" -fsSL \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
+            -o /tmp/ort.tgz; \
+    else \
+        curl -fsSL \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
+            -o /tmp/ort.tgz; \
+    fi; \
+    tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1; \
+    rm /tmp/ort.tgz
 RUN ldconfig \
     && ldconfig -p | grep -q "libcublasLt.so.11" \
     && ldconfig -p | grep -q "libcudnn.so.8"

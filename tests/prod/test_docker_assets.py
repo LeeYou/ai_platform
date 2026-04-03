@@ -17,6 +17,9 @@ class ProdDockerAssetsTests(unittest.TestCase):
         content = PROD_DOCKERFILE.read_text(encoding="utf-8")
 
         self.assertIn("ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64-gpu", content)
+        self.assertIn("ARG GITHUB_HTTPS_PROXY=", content)
+        self.assertIn('curl -x "${github_proxy}" -fsSL', content)
+        self.assertIn('github_proxy="${HTTPS_PROXY:-${https_proxy:-}}"', content)
         self.assertIn(
             "${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz",
             content,
