@@ -17,13 +17,13 @@ RUN cd prod/frontend \
     && npm run build
 
 # ─── Stage 2: Runtime ──────────────────────────────────────────────────────
-# Production service uses CPU-only ONNX Runtime (no CUDA needed in container)
-# GPU acceleration is handled by compiled SO libraries (built with CUDA 11.8 support)
-# The SO files detect GPU availability at runtime and fall back to CPU if needed
+# Production service ships GPU-capable ONNX Runtime shared libraries so
+# capability SOs can enable CUDA when available and still fall back to CPU.
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG ONNXRUNTIME_VERSION=1.18.1
+ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64-gpu
 
 # ---------------------------------------------------------------------------
 # System dependencies
@@ -59,7 +59,7 @@ import cryptography
 print("cryptography:", cryptography.__version__)
 PY
 RUN curl -fsSL \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
+    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
     -o /tmp/ort.tgz \
     && tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1 \
     && rm /tmp/ort.tgz
@@ -100,6 +100,8 @@ ENV PYTHONUNBUFFERED=1 \
     BUILTIN_ROOT=/app \
     AI_BACKEND=auto \
     LOG_LEVEL=info \
+    ONNXRUNTIME_ROOT=/usr/local \
+    LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH} \
     UVICORN_WORKERS=2 \
     TZ=Asia/Shanghai
 
