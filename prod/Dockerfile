@@ -17,10 +17,9 @@ RUN cd prod/frontend \
     && npm run build
 
 # ─── Stage 2: Runtime ──────────────────────────────────────────────────────
-# Production service must ship a CUDA 11.8 runtime so GPU-capable capability
-# SOs can load the ONNX Runtime CUDA provider when the host exposes a GPU.
-ARG CUDA_BASE_IMAGE=nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
-FROM ${CUDA_BASE_IMAGE}
+# Production service must ship a fixed CUDA 11.8 runtime so the delivered
+# customer image has a consistent GPU-capable environment.
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Keep this aligned with the ONNX Runtime version used by ai-builder so the

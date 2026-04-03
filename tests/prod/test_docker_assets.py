@@ -10,11 +10,8 @@ class ProdDockerAssetsTests(unittest.TestCase):
     def test_prod_dockerfile_uses_cuda_11_8_runtime_base(self):
         content = PROD_DOCKERFILE.read_text(encoding="utf-8")
 
-        self.assertIn(
-            "ARG CUDA_BASE_IMAGE=nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04",
-            content,
-        )
-        self.assertIn("FROM ${CUDA_BASE_IMAGE}", content)
+        self.assertIn("FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04", content)
+        self.assertNotIn("CUDA_BASE_IMAGE", content)
 
     def test_prod_dockerfile_installs_gpu_onnxruntime_bundle(self):
         content = PROD_DOCKERFILE.read_text(encoding="utf-8")
