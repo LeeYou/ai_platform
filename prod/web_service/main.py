@@ -190,7 +190,7 @@ def _discover_nested_runtime_libs(libs_dir: str) -> tuple[list[str], list[str]]:
     plugin_paths: list[str] = []
     dependency_paths: set[str] = set()
 
-    for root, _, files in os.walk(libs_dir):
+    for root, _, files in os.walk(libs_dir, followlinks=True):
         if os.path.basename(root) != "lib":
             continue
         capability_root = os.path.dirname(root)

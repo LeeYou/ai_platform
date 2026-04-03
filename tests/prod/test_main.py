@@ -277,6 +277,22 @@ class ProdMainTests(unittest.TestCase):
         self.assertFalse(Path(staged_dir, "libai_runtime.so").exists())
         self.assertFalse(Path(staged_dir, "libonnxruntime.so.1.18.1").exists())
 
+    def test_prepare_runtime_libs_dir_stages_current_symlink_layout_shared_objects(self):
+        base_root = Path(self.tempdir.name) / "current_symlink_layout_libs"
+        version_lib_dir = base_root / "face_detect" / "v1.2.3" / "job-123" / "lib"
+        version_lib_dir.mkdir(parents=True, exist_ok=True)
+        (version_lib_dir / "libface_detect.so").write_bytes(b"fake")
+        (version_lib_dir / "libai_runtime.so").write_bytes(b"fake")
+        (version_lib_dir / "libonnxruntime.so.1.18.1").write_bytes(b"fake")
+        os.symlink(version_lib_dir.parent, base_root / "face_detect" / "current")
+
+        staged_dir = prod_main._prepare_runtime_libs_dir(str(base_root))
+
+        self.assertNotEqual(staged_dir, str(base_root))
+        self.assertTrue(Path(staged_dir, "libface_detect.so").exists())
+        self.assertFalse(Path(staged_dir, "libai_runtime.so").exists())
+        self.assertFalse(Path(staged_dir, "libonnxruntime.so.1.18.1").exists())
+
     def test_preload_runtime_dependencies_skips_plugins_and_runtime(self):
         loaded_paths = []
         prod_main.ctypes.CDLL = lambda path, mode=0: loaded_paths.append(path) or object()
