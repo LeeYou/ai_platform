@@ -17,9 +17,10 @@ RUN cd prod/frontend \
     && npm run build
 
 # ─── Stage 2: Runtime ──────────────────────────────────────────────────────
-# Production service ships GPU-capable ONNX Runtime shared libraries so
-# capability SOs can enable CUDA when available and still fall back to CPU.
-FROM ubuntu:22.04
+# Production service must ship a CUDA 11.8 runtime so GPU-capable capability
+# SOs can load the ONNX Runtime CUDA provider when the host exposes a GPU.
+ARG CUDA_BASE_IMAGE=nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+FROM ${CUDA_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Keep this aligned with the ONNX Runtime version used by ai-builder so the
@@ -65,7 +66,9 @@ RUN curl -fsSL \
     -o /tmp/ort.tgz \
     && tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1 \
     && rm /tmp/ort.tgz
-RUN ldconfig
+RUN ldconfig \
+    && ldconfig -p | grep -q "libcublasLt.so.11" \
+    && ldconfig -p | grep -q "libcudnn.so.8"
 
 # ---------------------------------------------------------------------------
 # Web service source
@@ -102,8 +105,9 @@ ENV PYTHONUNBUFFERED=1 \
     BUILTIN_ROOT=/app \
     AI_BACKEND=auto \
     LOG_LEVEL=info \
+    CUDA_HOME=/usr/local/cuda \
     ONNXRUNTIME_ROOT=/usr/local \
-    LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH} \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/usr/local/lib:${LD_LIBRARY_PATH} \
     UVICORN_WORKERS=2 \
     TZ=Asia/Shanghai
 
