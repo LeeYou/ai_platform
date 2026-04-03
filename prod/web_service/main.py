@@ -768,14 +768,24 @@ def _license_error_from_status(license_status: Optional[dict[str, Any]], capabil
 
 def _acquire_failure_response(runtime: Any, capability: str) -> JSONResponse:
     runtime_license = runtime.get_license_status() if runtime else None
-    license_error = _license_error_from_status(runtime_license, capability)
-    if license_error:
-        return license_error
-
     python_license = _license_status()
-    license_error = _license_error_from_status(python_license, capability)
-    if license_error:
-        return license_error
+    runtime_error = _license_error_from_status(runtime_license, capability)
+    python_error = _license_error_from_status(python_license, capability)
+
+    if runtime_error:
+        runtime_status = runtime_license.get("status") if isinstance(runtime_license, dict) else None
+        python_status = python_license.get("status") if isinstance(python_license, dict) else None
+        if python_error and runtime_status != python_status:
+            logger.warning(
+                "Conflicting runtime/python license states for %s: runtime=%s python=%s; using runtime result",
+                capability,
+                runtime_status,
+                python_status,
+            )
+        return runtime_error
+
+    if python_error:
+        return python_error
 
     return _error_response(3001, "Instance pool timeout or capability not available", capability)
 
