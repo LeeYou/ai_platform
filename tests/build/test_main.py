@@ -1,3 +1,5 @@
+import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -117,3 +119,27 @@ class BuildCapabilityDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(body["available_capabilities"], ["desktop_recapture_detect"])
+
+
+class DesktopRecaptureExportTests(unittest.TestCase):
+    def test_export_preprocess_json_uses_numeric_resize_dimensions(self):
+        export_path = (
+            Path(__file__).resolve().parents[2]
+            / "train"
+            / "scripts"
+            / "desktop_recapture_detect"
+            / "export.py"
+        )
+        spec = importlib.util.spec_from_file_location("desktop_recapture_export", export_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module._write_preprocess_json(temp_dir)
+            payload = json.loads(Path(temp_dir, "preprocess.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["resize"]["width"], 224)
+        self.assertEqual(payload["resize"]["height"], 224)
+        self.assertIsInstance(payload["resize"]["width"], int)
+        self.assertIsInstance(payload["resize"]["height"], int)

@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -93,18 +94,42 @@ static bool _read_file(const std::string& path, std::string& out) {
     return true;
 }
 
-// Simple JSON string extractor
-static std::string _jstr(const std::string& json, const std::string& key) {
+static bool _jint(const std::string& json, const std::string& key, int* out) {
+    if (!out) return false;
     std::string needle = "\"" + key + "\"";
     auto pos = json.find(needle);
-    if (pos == std::string::npos) return "";
+    if (pos == std::string::npos) return false;
     pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return "";
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return "";
-    auto end = json.find('"', pos + 1);
-    if (end == std::string::npos) return "";
-    return json.substr(pos + 1, end - pos - 1);
+    if (pos == std::string::npos) return false;
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        ++pos;
+    }
+    if (pos >= json.size()) return false;
+
+    std::string token;
+    if (json[pos] == '"') {
+        auto end = json.find('"', pos + 1);
+        if (end == std::string::npos) return false;
+        token = json.substr(pos + 1, end - pos - 1);
+    } else {
+        auto end = pos;
+        if (json[end] == '-' || json[end] == '+') ++end;
+        while (end < json.size() && std::isdigit(static_cast<unsigned char>(json[end]))) {
+            ++end;
+        }
+        if (end == pos || ((json[pos] == '-' || json[pos] == '+') && end == pos + 1)) {
+            return false;
+        }
+        token = json.substr(pos, end - pos);
+    }
+
+    try {
+        *out = std::stoi(token);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,11 +223,14 @@ AI_EXPORT AiHandle AiCreate(const char* model_dir, const char* /*config_json*/) 
     std::string prep_path = ctx->model_dir + "/preprocess.json";
     std::string prep_json;
     if (_read_file(prep_path, prep_json)) {
-        // Parse resize.width / resize.height
-        auto rw = _jstr(prep_json, "width");
-        auto rh = _jstr(prep_json, "height");
-        if (!rw.empty()) ctx->input_width  = std::stoi(rw);
-        if (!rh.empty()) ctx->input_height = std::stoi(rh);
+        int parsed_width = 0;
+        int parsed_height = 0;
+        if (_jint(prep_json, "width", &parsed_width)) {
+            ctx->input_width = parsed_width;
+        }
+        if (_jint(prep_json, "height", &parsed_height)) {
+            ctx->input_height = parsed_height;
+        }
     }
 
     return static_cast<AiHandle>(ctx);
