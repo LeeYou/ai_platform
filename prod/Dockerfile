@@ -28,6 +28,12 @@ ARG ONNXRUNTIME_VERSION=1.18.1
 ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64-gpu
 ARG GITHUB_HTTPS_PROXY=
 ARG GITHUB_HTTP_PROXY=
+# Declare standard proxy build-args so users can pass --build-arg HTTPS_PROXY=...
+# without needing BuildKit's automatic env-var forwarding.
+ARG HTTPS_PROXY=
+ARG https_proxy=
+ARG HTTP_PROXY=
+ARG http_proxy=
 
 # ---------------------------------------------------------------------------
 # System dependencies
