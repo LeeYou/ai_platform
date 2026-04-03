@@ -506,6 +506,51 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertEqual(ctx.exception.detail["code"], 3002)
 
+    def test_infer_endpoint_maps_runtime_invalid_license_after_acquire_failure(self):
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
+        self.fake_runtime.get_license_status = lambda: {"status": "invalid"}
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(body["code"], 4001)
+
+    def test_infer_endpoint_maps_runtime_expired_license_after_acquire_failure(self):
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
+        self.fake_runtime.get_license_status = lambda: {"status": "expired"}
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(body["code"], 4002)
+
+    def test_infer_endpoint_maps_runtime_not_yet_valid_license_after_acquire_failure(self):
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
+        self.fake_runtime.get_license_status = lambda: {"status": "not_yet_valid"}
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(body["code"], 4003)
+
+    def test_infer_endpoint_maps_runtime_unlicensed_capability_after_acquire_failure(self):
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
+        self.fake_runtime.get_license_status = lambda: {"status": "active", "capabilities": ["other_cap"]}
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(body["code"], 4004)
+
+    def test_infer_endpoint_keeps_3001_for_non_license_acquire_failure(self):
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
+        self.fake_runtime.get_license_status = lambda: {"status": "active", "capabilities": ["face_detect"]}
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(body["code"], 3001)
+
     def test_infer_endpoint_returns_ab_test_metadata(self):
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         body = asyncio.run(

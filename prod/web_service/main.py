@@ -731,11 +731,53 @@ def _success(
     return payload
 
 
-def _error_response(code: int, message: str, capability: str = "") -> JSONResponse:
+def _error_response(
+    code: int,
+    message: str,
+    capability: str = "",
+    status_code: int = 400,
+) -> JSONResponse:
     return JSONResponse(
-        status_code=400,
+        status_code=status_code,
         content={"code": code, "message": message, "capability": capability},
     )
+
+
+def _license_error_from_status(license_status: Optional[dict[str, Any]], capability: str) -> Optional[JSONResponse]:
+    if not license_status:
+        return None
+
+    status = str(license_status.get("status", "")).strip().lower()
+    capabilities = license_status.get("capabilities", []) or []
+
+    if status in ("active", "valid"):
+        if capabilities and capability not in capabilities and "*" not in capabilities:
+            return _error_response(4004, "Capability not licensed", capability, status_code=403)
+        return None
+
+    if status == "signature_invalid":
+        return _error_response(4005, "License signature invalid", capability, status_code=403)
+    if status == "not_yet_valid":
+        return _error_response(4003, "License not yet valid", capability, status_code=403)
+    if status == "expired":
+        return _error_response(4002, "License expired", capability, status_code=403)
+    if status in ("invalid", "missing"):
+        return _error_response(4001, "License invalid", capability, status_code=403)
+    return None
+
+
+def _acquire_failure_response(runtime: Any, capability: str) -> JSONResponse:
+    runtime_license = runtime.get_license_status() if runtime else None
+    license_error = _license_error_from_status(runtime_license, capability)
+    if license_error:
+        return license_error
+
+    python_license = _license_status()
+    license_error = _license_error_from_status(python_license, capability)
+    if license_error:
+        return license_error
+
+    return _error_response(3001, "Instance pool timeout or capability not available", capability)
 
 
 def _validate_capability_name(capability: str) -> None:
@@ -1014,7 +1056,7 @@ async def infer(
         handle = runtime.acquire(capability, timeout_ms=30000)
         if not handle:
             logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
-            return _error_response(3001, "Instance pool timeout or capability not available", capability)
+            return _acquire_failure_response(runtime, capability)
 
         try:
             height, width, channels = img.shape
