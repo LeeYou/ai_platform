@@ -28,6 +28,7 @@
             :auto-upload="false"
             :limit="1"
             :on-change="onFileChange"
+            :on-exceed="onFileExceed"
             :on-remove="onFileRemove"
             accept="image/*"
           >
@@ -85,7 +86,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getCapabilities, infer, extractErrorMessage } from '../api/index.js'
-import { ElMessage } from 'element-plus'
+import { ElMessage, genFileId } from 'element-plus'
 
 const capabilities = ref([])
 const capability = ref('')
@@ -98,12 +99,31 @@ const resultText = ref('')
 const inferTime = ref(null)
 const uploadRef = ref(null)
 
+function resetResult() {
+  result.value = null
+  resultOk.value = false
+  resultText.value = ''
+  inferTime.value = null
+}
+
 function onFileChange(file) {
   imageFile.value = file.raw
+  resetResult()
+}
+
+function onFileExceed(files) {
+  const file = files[files.length - 1]
+  if (!file) return
+  uploadRef.value?.clearFiles()
+  file.uid = genFileId()
+  uploadRef.value?.handleStart(file)
+  imageFile.value = file.raw
+  resetResult()
 }
 
 function onFileRemove() {
   imageFile.value = null
+  resetResult()
 }
 
 async function doInfer() {
@@ -126,7 +146,7 @@ async function doInfer() {
   }
 
   running.value = true
-  result.value = null
+  resetResult()
   const startTime = Date.now()
 
   try {
