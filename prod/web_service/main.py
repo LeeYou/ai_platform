@@ -747,8 +747,14 @@ def _get_capability_input_size(capability: str) -> tuple[int, int] | None:
     if not model_dir:
         return None
     prep_path = os.path.join(model_dir, "preprocess.json")
+    # Normalise and confirm the resolved path stays under model_dir, preventing
+    # any path-traversal via unexpected symlinks returned by resolve_model_dir.
+    real_model_dir = os.path.realpath(model_dir)
+    real_prep_path = os.path.realpath(prep_path)
+    if not real_prep_path.startswith(real_model_dir + os.sep) and real_prep_path != real_model_dir:
+        return None
     try:
-        with open(prep_path, encoding="utf-8") as fh:
+        with open(real_prep_path, encoding="utf-8") as fh:
             cfg = json.load(fh)
         resize = cfg.get("resize", {})
         w = int(resize.get("width", 0))
