@@ -161,18 +161,28 @@ def list_available_capabilities() -> list[dict]:
             manifest_path = os.path.join(model_dir, "manifest.json")
             if not os.path.isdir(model_dir) or not os.path.exists(manifest_path):
                 continue
+            real_model_dir = os.path.realpath(model_dir)
             try:
                 with open(manifest_path, encoding="utf-8") as f:
                     manifest = json.load(f)
             except Exception:
                 manifest = {}
+            preprocess = {}
+            preprocess_path = os.path.join(model_dir, "preprocess.json")
+            try:
+                with open(preprocess_path, encoding="utf-8") as f:
+                    preprocess = json.load(f)
+            except Exception:
+                preprocess = {}
             seen.add(cap)
             results.append({
                 "capability":    cap,
                 "version":       manifest.get("model_version", "unknown"),
                 "model_dir":     model_dir,
+                "real_model_dir": real_model_dir,
                 "source":        "mount" if base == MOUNT_ROOT else "builtin",
                 "manifest":      manifest,
+                "preprocess":    preprocess,
             })
 
     return results

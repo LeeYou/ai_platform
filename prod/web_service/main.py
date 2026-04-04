@@ -768,71 +768,6 @@ def _decode_image(data: bytes) -> np.ndarray:
     return img
 
 
-# ---------------------------------------------------------------------------
-# Helper: read model input size from preprocess.json (cached per capability)
-# ---------------------------------------------------------------------------
-
-_capability_input_sizes: dict[str, tuple[int, int]] = {}
-
-
-def _get_capability_input_size(capability: str) -> tuple[int, int] | None:
-    """Return (width, height) target size from the capability's preprocess.json.
-
-    The result is cached so the file is only read once per process lifetime.
-    Returns None if preprocess.json is absent or does not contain resize info.
-    """
-    # Reject names that contain path-traversal characters.  Capability names
-    # are always lowercase alphanumeric + underscore (validated upstream by
-    # _validate_capability_name), but we enforce this here as well so the path
-    # construction is self-contained and cannot be exploited if the function is
-    # called from a new code path that skips the upstream validation.
-    if not re.fullmatch(r"[a-z][a-z0-9_]*", capability):
-        return None
-    if capability in _capability_input_sizes:
-        return _capability_input_sizes[capability]
-    model_dir = resolve_model_dir(capability)
-    if not model_dir:
-        return None
-    prep_path = os.path.join(model_dir, "preprocess.json")
-    # Normalise and confirm the resolved path stays under model_dir, preventing
-    # any path-traversal via unexpected symlinks returned by resolve_model_dir.
-    real_model_dir = os.path.realpath(model_dir)
-    real_prep_path = os.path.realpath(prep_path)
-    if not real_prep_path.startswith(real_model_dir + os.sep) and real_prep_path != real_model_dir:
-        return None
-    try:
-        with open(real_prep_path, encoding="utf-8") as fh:
-            cfg = json.load(fh)
-        resize = cfg.get("resize", {})
-        w = int(resize.get("width", 0))
-        h = int(resize.get("height", 0))
-        if w > 0 and h > 0:
-            _capability_input_sizes[capability] = (w, h)
-            return (w, h)
-    except Exception:
-        pass
-    return None
-
-
-def _preprocess_image_for_capability(img: np.ndarray, capability: str) -> np.ndarray:
-    """Resize *img* (uint8 BGR) to the model's expected input dimensions.
-
-    Using OpenCV's highly optimised INTER_LINEAR implementation avoids the
-    pure-Python per-pixel bilinear loop inside the C++ plugin, reducing
-    preprocessing time from ~100-200 ms (C++ scalar) down to < 2 ms.
-    When the image is already the correct size the function returns it as-is.
-    """
-    import cv2  # type: ignore
-    size = _get_capability_input_size(capability)
-    if size is None:
-        return img
-    target_w, target_h = size
-    h, w = img.shape[:2]
-    if w == target_w and h == target_h:
-        return img
-    return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-
-
 def _success(
     capability: str,
     version: str,
@@ -980,7 +915,6 @@ def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dic
 
     try:
         img = _decode_image(image_bytes)
-        img = _preprocess_image_for_capability(img, capability)
         height, width, channels = img.shape
         result = runtime.infer(handle, img.tobytes(), width, height, channels)
         if result.get("error_code", 0) != AI_OK:
@@ -1011,6 +945,7 @@ def _capability_diagnostics() -> dict:
         "pubkey_path": effective_pubkey_path,
         "pubkey_exists": os.path.exists(effective_pubkey_path),
         "loaded_capabilities": [cap.get("name", "") for cap in loaded_caps if cap.get("name")],
+        "loaded_capability_details": loaded_caps,
         "discovered_model_capabilities": [
             cap.get("capability", "") for cap in discovered_caps if cap.get("capability")
         ],
@@ -1019,7 +954,10 @@ def _capability_diagnostics() -> dict:
                 "capability": cap.get("capability", ""),
                 "version": cap.get("version", "unknown"),
                 "model_dir": cap.get("model_dir", ""),
+                "real_model_dir": cap.get("real_model_dir", ""),
                 "source": cap.get("source", ""),
+                "manifest": cap.get("manifest", {}),
+                "preprocess": cap.get("preprocess", {}),
             }
             for cap in discovered_caps
         ],
@@ -1176,7 +1114,6 @@ async def infer(
         raw = await image.read()
         _check_upload_size(raw)
         img = _decode_image(raw)
-        img = _preprocess_image_for_capability(img, capability)
 
         if options:
             try:

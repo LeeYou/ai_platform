@@ -52,6 +52,15 @@ class _FakeImage:
         return b"\x00" * 12
 
 
+class _RecordedImage:
+    def __init__(self, width, height, channels=3):
+        self.shape = (height, width, channels)
+        self._bytes = b"\x00" * (width * height * channels)
+
+    def tobytes(self):
+        return self._bytes
+
+
 class _FakeABManager:
     def __init__(self):
         self.reload_called = False
@@ -126,6 +135,7 @@ class ProdMainTests(unittest.TestCase):
         self.original_runtime_bootstrap = prod_main._init_runtime
         self.original_runtime_init = prod_main.init_runtime
         self.original_get_runtime = prod_main.get_runtime
+        self.original_decode_image = prod_main._decode_image
         self.original_verify_license_signature = prod_main._verify_license_signature
         self.original_verify_license_signature_with_cryptography = (
             prod_main._verify_license_signature_with_cryptography
@@ -154,7 +164,10 @@ class ProdMainTests(unittest.TestCase):
                 "capability": "face_detect",
                 "version": "v1.2.3",
                 "model_dir": str(self.model_dir),
+                "real_model_dir": str(self.model_dir.resolve()),
                 "source": "mount",
+                "manifest": {"capability": "face_detect", "model_version": "v1.2.3"},
+                "preprocess": {},
             }
         ]
         prod_main._init_runtime = lambda: True
@@ -185,6 +198,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main._init_runtime = self.original_runtime_bootstrap
         prod_main.init_runtime = self.original_runtime_init
         prod_main.get_runtime = self.original_get_runtime
+        prod_main._decode_image = self.original_decode_image
         prod_main._verify_license_signature = self.original_verify_license_signature
         prod_main._verify_license_signature_with_cryptography = (
             self.original_verify_license_signature_with_cryptography
@@ -411,6 +425,9 @@ class ProdMainTests(unittest.TestCase):
         self.assertTrue(body["libs_dir_exists"])
         self.assertIn("face_detect", body["loaded_capabilities"])
         self.assertIn("face_detect", body["discovered_model_capabilities"])
+        self.assertEqual(body["loaded_capability_details"][0]["version"], "v1.2.3")
+        self.assertEqual(body["discovered_models"][0]["real_model_dir"], str(self.model_dir.resolve()))
+        self.assertEqual(body["discovered_models"][0]["manifest"]["model_version"], "v1.2.3")
 
     def test_license_status_endpoint_reports_missing_when_no_file(self):
         body = prod_main.license_status()
@@ -564,6 +581,29 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["ab_test"]["selected_version"], "v2.0.0")
         self.assertEqual(body["ab_test"]["applied_version"], "v1.2.3")
         self.assertFalse(body["ab_test"]["selection_matches_runtime"])
+
+    def test_infer_endpoint_routes_raw_decoded_image_without_python_resize(self):
+        recorded = {}
+
+        class _RecordingRuntime(_FakeRuntime):
+            def infer(self, handle, image_data, width, height, channels):
+                recorded["width"] = width
+                recorded["height"] = height
+                recorded["channels"] = channels
+                recorded["payload_len"] = len(image_data)
+                return super().infer(handle, image_data, width, height, channels)
+
+        self.fake_runtime = _RecordingRuntime()
+        prod_main.get_runtime = lambda: self.fake_runtime
+        prod_main._decode_image = lambda data: _RecordedImage(width=5, height=4)
+
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+
+        self.assertEqual(recorded["width"], 5)
+        self.assertEqual(recorded["height"], 4)
+        self.assertEqual(recorded["channels"], 3)
+        self.assertEqual(recorded["payload_len"], 5 * 4 * 3)
 
     def test_admin_ab_tests_endpoint_requires_token_and_returns_data(self):
         body = prod_main.list_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer test-token"}))

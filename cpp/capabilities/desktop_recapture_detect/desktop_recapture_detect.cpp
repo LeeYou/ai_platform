@@ -12,6 +12,8 @@
 
 #include "desktop_recapture_detect.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cctype>
@@ -45,12 +47,16 @@
 struct DesktopRecaptureContext {
     std::string model_dir;
     std::string license_path;
+    std::string model_version = "unknown";
 
     // Pre-process config (EfficientNet-B0 224×224 with ImageNet normalization)
     int   input_width  = 224;
     int   input_height = 224;
+    float scale        = 1.0f / 255.0f;
+    bool  normalize    = true;
     float mean[3]      = {0.485f, 0.456f, 0.406f};
     float std_dev[3]   = {0.229f, 0.224f, 0.225f};
+    int   target_color_format = 1;  // 0=BGR, 1=RGB
 
     // Inference counter (for periodic license checks)
     std::atomic<uint64_t> infer_count{0};
@@ -133,6 +139,143 @@ static bool _jint(const std::string& json, const std::string& key, int* out) {
     }
 }
 
+static bool _jvalue_pos(const std::string& json, const std::string& key, size_t* out_pos) {
+    if (!out_pos) return false;
+    std::string needle = "\"" + key + "\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return false;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return false;
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        ++pos;
+    }
+    if (pos >= json.size()) return false;
+    *out_pos = pos;
+    return true;
+}
+
+static bool _jstr(const std::string& json, const std::string& key, std::string* out) {
+    if (!out) return false;
+    size_t pos = 0;
+    if (!_jvalue_pos(json, key, &pos) || json[pos] != '"') return false;
+    auto end = json.find('"', pos + 1);
+    if (end == std::string::npos) return false;
+    *out = json.substr(pos + 1, end - pos - 1);
+    return true;
+}
+
+static bool _jbool(const std::string& json, const std::string& key, bool* out) {
+    if (!out) return false;
+    size_t pos = 0;
+    if (!_jvalue_pos(json, key, &pos)) return false;
+    if (json.compare(pos, 4, "true") == 0) {
+        *out = true;
+        return true;
+    }
+    if (json.compare(pos, 5, "false") == 0) {
+        *out = false;
+        return true;
+    }
+    return false;
+}
+
+static bool _jfloat(const std::string& json, const std::string& key, float* out) {
+    if (!out) return false;
+    size_t pos = 0;
+    if (!_jvalue_pos(json, key, &pos)) return false;
+    const char* start = json.c_str() + pos;
+    char* end = nullptr;
+    float value = std::strtof(start, &end);
+    if (end == start) return false;
+    *out = value;
+    return true;
+}
+
+static bool _jfloat_array3(const std::string& json, const std::string& key, float out[3]) {
+    if (!out) return false;
+    std::string needle = "\"" + key + "\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return false;
+    pos = json.find('[', pos + needle.size());
+    if (pos == std::string::npos) return false;
+    ++pos;
+    for (int i = 0; i < 3; ++i) {
+        while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+            ++pos;
+        }
+        if (pos >= json.size()) return false;
+        const char* start = json.c_str() + pos;
+        char* end = nullptr;
+        float value = std::strtof(start, &end);
+        if (end == start) return false;
+        out[i] = value;
+        pos = static_cast<size_t>(end - json.c_str());
+        while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+            ++pos;
+        }
+        if (i < 2) {
+            if (pos >= json.size() || json[pos] != ',') return false;
+            ++pos;
+        }
+    }
+    return true;
+}
+
+static void _load_manifest_config(DesktopRecaptureContext* ctx) {
+    if (!ctx) return;
+    std::string manifest_json;
+    if (!_read_file(ctx->model_dir + "/manifest.json", manifest_json)) return;
+    std::string parsed_version;
+    if (_jstr(manifest_json, "model_version", &parsed_version) && !parsed_version.empty()) {
+        ctx->model_version = parsed_version;
+    }
+}
+
+static void _load_preprocess_config(DesktopRecaptureContext* ctx) {
+    if (!ctx) return;
+    std::string prep_json;
+    if (!_read_file(ctx->model_dir + "/preprocess.json", prep_json)) return;
+
+    int parsed_width = 0;
+    int parsed_height = 0;
+    float parsed_scale = 0.0f;
+    float parsed_mean[3] = {};
+    float parsed_std[3] = {};
+    bool parsed_normalize = false;
+    std::string parsed_color_convert;
+
+    if (_jint(prep_json, "width", &parsed_width) && parsed_width > 0) {
+        ctx->input_width = parsed_width;
+    }
+    if (_jint(prep_json, "height", &parsed_height) && parsed_height > 0) {
+        ctx->input_height = parsed_height;
+    }
+    if (_jfloat(prep_json, "scale", &parsed_scale) && parsed_scale > 0.0f) {
+        ctx->scale = parsed_scale;
+    }
+    if (_jbool(prep_json, "normalize", &parsed_normalize)) {
+        ctx->normalize = parsed_normalize;
+    }
+    if (_jfloat_array3(prep_json, "mean", parsed_mean)) {
+        std::copy(parsed_mean, parsed_mean + 3, ctx->mean);
+    }
+    if (_jfloat_array3(prep_json, "std", parsed_std)) {
+        for (int i = 0; i < 3; ++i) {
+            if (parsed_std[i] > 0.0f) {
+                ctx->std_dev[i] = parsed_std[i];
+            }
+        }
+    }
+    if (_jstr(prep_json, "color_convert", &parsed_color_convert)) {
+        if (parsed_color_convert == "BGR2RGB") {
+            ctx->target_color_format = 1;
+        } else if (parsed_color_convert == "RGB2BGR") {
+            ctx->target_color_format = 0;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // License check
 // ---------------------------------------------------------------------------
@@ -154,10 +297,45 @@ static bool _check_license_capability(const std::string& license_path) {
 // ---------------------------------------------------------------------------
 
 #if HAS_ORT
+static int _semantic_to_source_channel(int input_color_format, int semantic_channel) {
+    if (input_color_format == 0) return 2 - semantic_channel;  // BGR input
+    if (input_color_format == 1) return semantic_channel;      // RGB input
+    return semantic_channel;
+}
+
+static int _output_channel_to_source_channel(const DesktopRecaptureContext* ctx,
+                                             const AiImage* img,
+                                             int output_channel) {
+    if (!ctx || !img) return output_channel;
+    if (ctx->target_color_format == 0) {
+        int semantic_channel = 2 - output_channel;  // B,G,R output
+        return _semantic_to_source_channel(img->color_format, semantic_channel);
+    }
+    if (ctx->target_color_format == 1) {
+        return _semantic_to_source_channel(img->color_format, output_channel);  // R,G,B output
+    }
+    return output_channel;
+}
+
+static float _transform_pixel(float pixel_value,
+                              const DesktopRecaptureContext* ctx,
+                              int output_channel) {
+    float value = pixel_value;
+    if (ctx) {
+        value *= ctx->scale;
+        if (ctx->normalize) {
+            float denom = ctx->std_dev[output_channel];
+            if (std::fabs(denom) < 1e-12f) denom = 1.0f;
+            value = (value - ctx->mean[output_channel]) / denom;
+        }
+    }
+    return value;
+}
+
 static std::vector<float> _preprocess(const AiImage* img,
-                                       int target_w, int target_h,
-                                       const float mean[3],
-                                       const float std_dev[3]) {
+                                       const DesktopRecaptureContext* ctx) {
+    int target_w = ctx->input_width;
+    int target_h = ctx->input_height;
     int src_w = img->width;
     int src_h = img->height;
     int ch    = img->channels;
@@ -173,11 +351,11 @@ static std::vector<float> _preprocess(const AiImage* img,
         for (int y = 0; y < target_h; ++y) {
             for (int x = 0; x < target_w; ++x) {
                 for (int c = 0; c < 3; ++c) {
-                    int sc = (img->color_format == 0) ? (2 - c) : c;  // 0=BGR→flip
+                    int sc = _output_channel_to_source_channel(ctx, img, c);
                     if (sc >= ch) sc = 0;
                     float val = static_cast<float>(
-                        img->data[y * stride + x * ch + sc]) / 255.0f;
-                    val = (val - mean[c]) / std_dev[c];
+                        img->data[y * stride + x * ch + sc]);
+                    val = _transform_pixel(val, ctx, c);
                     out[c * target_h * target_w + y * target_w + x] = val;
                 }
             }
@@ -197,22 +375,22 @@ static std::vector<float> _preprocess(const AiImage* img,
             float wy = sy - y0;
 
             for (int c = 0; c < 3; ++c) {
-                int sc = (img->color_format == 0) ? (2 - c) : c;  // 0=BGR→flip
+                int sc = _output_channel_to_source_channel(ctx, img, c);
                 if (sc >= ch) sc = 0;
 
                 float p00 = static_cast<float>(
-                    img->data[y0 * stride + x0 * ch + sc]) / 255.0f;
+                    img->data[y0 * stride + x0 * ch + sc]);
                 float p10 = static_cast<float>(
-                    img->data[y0 * stride + x1 * ch + sc]) / 255.0f;
+                    img->data[y0 * stride + x1 * ch + sc]);
                 float p01 = static_cast<float>(
-                    img->data[y1 * stride + x0 * ch + sc]) / 255.0f;
+                    img->data[y1 * stride + x0 * ch + sc]);
                 float p11 = static_cast<float>(
-                    img->data[y1 * stride + x1 * ch + sc]) / 255.0f;
+                    img->data[y1 * stride + x1 * ch + sc]);
                 float val = (1 - wx) * (1 - wy) * p00
                           + wx       * (1 - wy) * p10
                           + (1 - wx) * wy        * p01
                           + wx       * wy        * p11;
-                val = (val - mean[c]) / std_dev[c];
+                val = _transform_pixel(val, ctx, c);
                 out[c * target_h * target_w + y * target_w + x] = val;
             }
         }
@@ -233,20 +411,8 @@ AI_EXPORT AiHandle AiCreate(const char* model_dir, const char* /*config_json*/) 
     if (!model_dir) return nullptr;
     auto* ctx = new DesktopRecaptureContext();
     ctx->model_dir = model_dir;
-
-    // Load preprocess config
-    std::string prep_path = ctx->model_dir + "/preprocess.json";
-    std::string prep_json;
-    if (_read_file(prep_path, prep_json)) {
-        int parsed_width = 0;
-        int parsed_height = 0;
-        if (_jint(prep_json, "width", &parsed_width)) {
-            ctx->input_width = parsed_width;
-        }
-        if (_jint(prep_json, "height", &parsed_height)) {
-            ctx->input_height = parsed_height;
-        }
-    }
+    _load_manifest_config(ctx);
+    _load_preprocess_config(ctx);
 
     return static_cast<AiHandle>(ctx);
 }
@@ -396,9 +562,7 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
 
     std::vector<float> tensor_data;
     try {
-        tensor_data = _preprocess(input,
-                                  ctx->input_width, ctx->input_height,
-                                  ctx->mean, ctx->std_dev);
+        tensor_data = _preprocess(input, ctx);
     } catch (const std::exception& ex) {
         _set_result(output, AI_ERR_INFER_FAILED, nullptr, ex.what());
         return AI_ERR_INFER_FAILED;
@@ -493,8 +657,14 @@ AI_EXPORT int32_t AiReload(AiHandle handle, const char* new_model_dir) {
     ctx->output_names          = std::move(new_ctx->output_names);
 #endif
     ctx->model_dir       = new_ctx->model_dir;
+    ctx->model_version   = new_ctx->model_version;
     ctx->input_width     = new_ctx->input_width;
     ctx->input_height    = new_ctx->input_height;
+    ctx->scale           = new_ctx->scale;
+    ctx->normalize       = new_ctx->normalize;
+    ctx->target_color_format = new_ctx->target_color_format;
+    std::copy(new_ctx->mean, new_ctx->mean + 3, ctx->mean);
+    std::copy(new_ctx->std_dev, new_ctx->std_dev + 3, ctx->std_dev);
     ctx->infer_count     = 0;
 
     AiDestroy(new_h);
@@ -502,15 +672,19 @@ AI_EXPORT int32_t AiReload(AiHandle handle, const char* new_model_dir) {
 }
 
 AI_EXPORT int32_t AiGetInfo(AiHandle handle, char* info_buf, int32_t buf_len) {
-    static const char kInfo[] =
+    auto* ctx = static_cast<DesktopRecaptureContext*>(handle);
+    std::string model_version = (ctx && !ctx->model_version.empty()) ? ctx->model_version : "unknown";
+    char info[256];
+    std::snprintf(info, sizeof(info),
         "{\"capability\":\"desktop_recapture_detect\","
         "\"capability_name_cn\":\"桌面翻拍检测\","
         "\"abi_version\":\"10000\","
-        "\"company\":\"agilestar.cn\"}";
-    (void)handle;
-    int32_t needed = static_cast<int32_t>(std::strlen(kInfo));
+        "\"model_version\":\"%s\","
+        "\"company\":\"agilestar.cn\"}",
+        model_version.c_str());
+    int32_t needed = static_cast<int32_t>(std::strlen(info));
     if (!info_buf || buf_len <= needed) return needed;
-    std::memcpy(info_buf, kInfo, static_cast<size_t>(needed) + 1);
+    std::memcpy(info_buf, info, static_cast<size_t>(needed) + 1);
     return needed;
 }
 

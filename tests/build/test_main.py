@@ -143,3 +143,23 @@ class DesktopRecaptureExportTests(unittest.TestCase):
         self.assertEqual(payload["resize"]["height"], 224)
         self.assertIsInstance(payload["resize"]["width"], int)
         self.assertIsInstance(payload["resize"]["height"], int)
+
+    def test_export_manifest_json_uses_model_version_field(self):
+        export_path = (
+            Path(__file__).resolve().parents[2]
+            / "train"
+            / "scripts"
+            / "desktop_recapture_detect"
+            / "export.py"
+        )
+        spec = importlib.util.spec_from_file_location("desktop_recapture_export", export_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            module._write_manifest_json(temp_dir, "v9.9.9")
+            payload = json.loads(Path(temp_dir, "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["model_version"], "v9.9.9")
+        self.assertNotIn("version", payload)
