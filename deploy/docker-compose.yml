@@ -130,6 +130,13 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s

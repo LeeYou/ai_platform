@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -466,7 +467,11 @@ def _verify_license_signature(license_json: str) -> bool:
                                ensure_ascii=False).encode("utf-8")
         sig_bytes = base64.b64decode(sig_b64)
         return _verify_license_signature_with_cryptography(pubkey_pem, canonical, sig_bytes)
-    except ImportError:
+    except ImportError as import_err:
+        logger.warning(
+            "cryptography library unavailable (%s) — falling back to OpenSSL CLI",
+            import_err,
+        )
         if _verify_license_signature_with_openssl(effective_pubkey_path, canonical, sig_bytes):
             return True
         if TRUSTED_PUBKEY_SHA256:
@@ -533,7 +538,49 @@ def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
         return (True, 0)  # On error, assume started
 
 
+# ---------------------------------------------------------------------------
+# License status — cached to avoid spawning an OpenSSL CLI subprocess on every
+# inference request.  The cache is invalidated when the license file's mtime
+# changes or when the TTL expires, whichever comes first.
+# ---------------------------------------------------------------------------
+
+_LICENSE_CACHE_TTL: float = 30.0  # seconds
+_license_cache_lock = threading.Lock()
+_license_cache: dict | None = None
+_license_cache_time: float = 0.0
+_license_cache_mtime: float = 0.0
+
+
+def _invalidate_license_cache() -> None:
+    """Force the next call to _license_status() to re-verify the license."""
+    global _license_cache
+    with _license_cache_lock:
+        _license_cache = None
+
+
 def _license_status() -> dict:
+    global _license_cache, _license_cache_time, _license_cache_mtime
+    now = time.monotonic()
+    try:
+        mtime = os.path.getmtime(LICENSE_PATH) if os.path.exists(LICENSE_PATH) else 0.0
+    except OSError:
+        mtime = 0.0
+    with _license_cache_lock:
+        if (
+            _license_cache is not None
+            and now - _license_cache_time < _LICENSE_CACHE_TTL
+            and mtime == _license_cache_mtime
+        ):
+            return _license_cache
+    result = _license_status_uncached()
+    with _license_cache_lock:
+        _license_cache = result
+        _license_cache_time = now
+        _license_cache_mtime = mtime
+    return result
+
+
+def _license_status_uncached() -> dict:
     if not os.path.exists(LICENSE_PATH):
         return {
             "status":         "missing",

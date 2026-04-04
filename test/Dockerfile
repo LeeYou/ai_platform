@@ -5,16 +5,23 @@
 # 服务端口：8002
 # =============================================================================
 
-FROM python:3.11-slim
+# Use the same CUDA runtime base as the prod image so that onnxruntime-gpu can
+# find the required CUDA / cuDNN shared libraries for GPU-accelerated inference.
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
     curl \
     libgl1 \
     libglib2.0-0 \
     nodejs \
     npm \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -39,7 +46,9 @@ COPY test/backend/ test/backend/
 
 ENV PYTHONUNBUFFERED=1 \
     MODELS_ROOT=/workspace/models \
-    DATASETS_ROOT=/workspace/datasets
+    DATASETS_ROOT=/workspace/datasets \
+    CUDA_HOME=/usr/local/cuda \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH}
 
 # Ensure log directory exists (volume mount may override at runtime)
 RUN mkdir -p /workspace/logs
