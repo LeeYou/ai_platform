@@ -322,9 +322,15 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
         return AI_ERR_LOAD_FAILED;
     }
 
-    auto tensor_data = _preprocess(input,
-                                   ctx->input_width, ctx->input_height,
-                                   ctx->mean, ctx->std_dev);
+    std::vector<float> tensor_data;
+    try {
+        tensor_data = _preprocess(input,
+                                  ctx->input_width, ctx->input_height,
+                                  ctx->mean, ctx->std_dev);
+    } catch (const std::exception& ex) {
+        _set_result(output, AI_ERR_INFER_FAILED, nullptr, ex.what());
+        return AI_ERR_INFER_FAILED;
+    }
 
     std::array<int64_t, 4> input_shape = {1, 3,
         static_cast<int64_t>(ctx->input_height),
@@ -339,50 +345,30 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
         input_shape.data(),
         input_shape.size());
 
-    // Allocate output tensor
-    Ort::MemoryInfo mem_info_out = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    auto output_type_info = ctx->session->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo();
-    std::vector<int64_t> output_shape = output_type_info.GetShape();
-    if (output_shape.empty()) {
-        output_shape.push_back(1);
-    }
-    bool had_dynamic_output_dim = false;
-    for (auto& dim : output_shape) {
-        if (dim <= 0) {
-            had_dynamic_output_dim = true;
-            dim = 1;
-        }
-    }
-    if (had_dynamic_output_dim) {
-        std::fprintf(stderr,
-                     "[desktop_recapture_detect] Dynamic output shape detected for %s; "
-                     "using batch=1 fallback for inference\n",
-                     ctx->output_names.empty() ? "<unknown>" : ctx->output_names[0]);
-    }
-    size_t output_elements = 1;
-    for (const auto dim : output_shape) {
-        output_elements *= static_cast<size_t>(dim);
-    }
-    std::vector<float> output_data(output_elements > 0 ? output_elements : 1, 0.0f);
-    Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
-        mem_info_out,
-        output_data.data(),
-        output_data.size(),
-        output_shape.data(),
-        output_shape.size());
-
+    // Let ORT allocate the output tensor — pre-allocating a CPU buffer and passing
+    // it to Run() causes ORT's CUDA provider to allocate internal staging buffers
+    // whose size computation can overflow, throwing std::length_error inside ORT.
+    std::vector<Ort::Value> outputs;
     try {
-        ctx->session->Run(
+        outputs = ctx->session->Run(
             Ort::RunOptions{nullptr},
-            ctx->input_names.data(),  &input_tensor,      1,
-            ctx->output_names.data(), &output_tensor,     1);
-    } catch (const Ort::Exception& ex) {
+            ctx->input_names.data(), &input_tensor,           1,
+            ctx->output_names.data(), ctx->output_names.size());
+    } catch (const std::exception& ex) {
         _set_result(output, AI_ERR_INFER_FAILED, nullptr, ex.what());
+        return AI_ERR_INFER_FAILED;
+    } catch (...) {
+        _set_result(output, AI_ERR_INFER_FAILED, nullptr, "Unknown inference error");
+        return AI_ERR_INFER_FAILED;
+    }
+
+    if (outputs.empty() || !outputs[0].IsTensor()) {
+        _set_result(output, AI_ERR_INFER_FAILED, nullptr, "No output tensor returned");
         return AI_ERR_INFER_FAILED;
     }
 
     // EfficientNet-B0 output: single logit → sigmoid = P(fake)
-    float logit = output_data[0];
+    float logit = outputs[0].GetTensorData<float>()[0];
     float prob_fake = 1.0f / (1.0f + std::exp(-logit));
     float prob_real = 1.0f - prob_fake;
 
