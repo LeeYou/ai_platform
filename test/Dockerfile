@@ -5,8 +5,25 @@
 # 服务端口：8002
 # =============================================================================
 
+# Stage 1 – build Vue3 / Vite frontend.
+# vite@5 and @vitejs/plugin-vue@5 require Node.js >= 18; use the official
+# node:20-slim image so the correct engine is always available regardless of
+# what the host OS package manager provides.
+FROM node:20-slim AS frontend-build
+
+WORKDIR /app
+COPY test/frontend/ test/frontend/
+# Use Taobao npm registry for faster downloads in China
+RUN cd test/frontend \
+    && npm config set registry https://registry.npmmirror.com \
+    && npm install \
+    && npm run build
+
+# =============================================================================
+# Stage 2 – runtime image
 # Use the same CUDA runtime base as the prod image so that onnxruntime-gpu can
 # find the required CUDA / cuDNN shared libraries for GPU-accelerated inference.
+# =============================================================================
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -18,8 +35,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libgl1 \
     libglib2.0-0 \
-    nodejs \
-    npm \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
@@ -33,13 +48,9 @@ RUN pip install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     -r test/backend/requirements.txt
 
-# Frontend build
-# Use Taobao npm registry for faster downloads in China
-COPY test/frontend/ test/frontend/
-RUN cd test/frontend \
-    && npm config set registry https://registry.npmmirror.com \
-    && npm install \
-    && npm run build
+# Copy pre-built frontend assets from the frontend-build stage.
+# Node.js and npm are NOT present in the final image, keeping it lean.
+COPY --from=frontend-build /app/test/frontend/dist/ test/frontend/dist/
 
 # Backend source
 COPY test/backend/ test/backend/
