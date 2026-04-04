@@ -324,9 +324,12 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
 
     std::fprintf(stdout, "[desktop_recapture_detect] Model loaded: %s\n", model_path.c_str());
 
-    // Warm-up: run one dummy inference so that CUDA JIT kernel compilation happens
-    // at init time rather than on the first real request (avoids 300-500 ms cold-start
-    // latency spike that would otherwise hit the very first end-user call).
+    // Warm-up: run multiple dummy inferences so that CUDA JIT kernel compilation,
+    // cuDNN algorithm selection, and GPU memory arena allocation all happen at
+    // init time rather than on the first real request.  A single pass primes the
+    // kernels; additional passes cause the CUDA memory arena to reach its steady-
+    // state size so that it does not need to grow (and re-allocate) on the first
+    // real call after a period of GPU idle.
     {
         size_t n = static_cast<size_t>(ctx->input_width) *
                    static_cast<size_t>(ctx->input_height) * 3;
@@ -335,19 +338,32 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
             static_cast<int64_t>(ctx->input_height),
             static_cast<int64_t>(ctx->input_width)};
         Ort::MemoryInfo mi = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        Ort::Value wt = Ort::Value::CreateTensor<float>(mi, dummy.data(), n, sh.data(), sh.size());
-        try {
-            ctx->session->Run(Ort::RunOptions{nullptr},
-                              ctx->input_names.data(), &wt, 1,
-                              ctx->output_names.data(), ctx->output_names.size());
-            std::fprintf(stdout, "[desktop_recapture_detect] GPU warm-up inference completed.\n");
-        } catch (const std::exception& ex) {
-            std::fprintf(stderr,
-                "[desktop_recapture_detect] GPU warm-up inference failed (non-fatal): %s\n",
-                ex.what());
-        } catch (...) {
-            std::fprintf(stderr,
-                "[desktop_recapture_detect] GPU warm-up inference failed (non-fatal, unknown error)\n");
+
+        bool warmup_ok = true;
+        for (int wi = 0; wi < 3; ++wi) {
+            Ort::Value wt = Ort::Value::CreateTensor<float>(
+                mi, dummy.data(), n, sh.data(), sh.size());
+            try {
+                ctx->session->Run(Ort::RunOptions{nullptr},
+                                  ctx->input_names.data(), &wt, 1,
+                                  ctx->output_names.data(), ctx->output_names.size());
+            } catch (const std::exception& ex) {
+                std::fprintf(stderr,
+                    "[desktop_recapture_detect] GPU warm-up pass %d failed (non-fatal): %s\n",
+                    wi + 1, ex.what());
+                warmup_ok = false;
+                break;
+            } catch (...) {
+                std::fprintf(stderr,
+                    "[desktop_recapture_detect] GPU warm-up pass %d failed (non-fatal, unknown error)\n",
+                    wi + 1);
+                warmup_ok = false;
+                break;
+            }
+        }
+        if (warmup_ok) {
+            std::fprintf(stdout,
+                "[desktop_recapture_detect] GPU warm-up completed (3 passes).\n");
         }
     }
 #else
@@ -429,6 +445,14 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
     float prob_real = 1.0f - prob_fake;
 
     bool is_fake = (prob_fake > 0.5f);
+
+    // Diagnostic log: helps operators verify model output and detect bias issues
+    // (e.g. model always outputting positive logits regardless of input).
+    std::fprintf(stdout,
+        "[desktop_recapture_detect] logit=%.4f prob_fake=%.4f is_fake=%s\n",
+        static_cast<double>(logit),
+        static_cast<double>(prob_fake),
+        is_fake ? "true" : "false");
     char json_buf[256];
     std::snprintf(json_buf, sizeof(json_buf),
         "{\"is_fake\":%s,\"label\":\"%s\","
