@@ -165,6 +165,26 @@ static std::vector<float> _preprocess(const AiImage* img,
 
     std::vector<float> out(3 * target_h * target_w);
 
+    // Fast path: when the caller has already resized the image to the target
+    // dimensions (e.g. via cv2.resize in Python), skip bilinear interpolation
+    // and only perform the normalization.  This is ~10–100× faster than the
+    // general bilinear path for large source images.
+    if (src_w == target_w && src_h == target_h) {
+        for (int y = 0; y < target_h; ++y) {
+            for (int x = 0; x < target_w; ++x) {
+                for (int c = 0; c < 3; ++c) {
+                    int sc = (img->color_format == 0) ? (2 - c) : c;  // 0=BGR→flip
+                    if (sc >= ch) sc = 0;
+                    float val = static_cast<float>(
+                        img->data[y * stride + x * ch + sc]) / 255.0f;
+                    val = (val - mean[c]) / std_dev[c];
+                    out[c * target_h * target_w + y * target_w + x] = val;
+                }
+            }
+        }
+        return out;
+    }
+
     for (int y = 0; y < target_h; ++y) {
         for (int x = 0; x < target_w; ++x) {
             float sx = (x + 0.5f) * src_w  / target_w - 0.5f;
@@ -258,7 +278,11 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
         OrtCUDAProviderOptions cuda_options;
         cuda_options.device_id = 0;
         cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
-        cuda_options.gpu_mem_limit = SIZE_MAX;
+        // Use 0 (unlimited) instead of SIZE_MAX.  Passing SIZE_MAX causes ORT's
+        // CUDA-provider arena code to overflow when computing buffer sizes, which
+        // eventually throws std::length_error inside an ORT worker thread and calls
+        // std::terminate before our try/catch can intercept it.
+        cuda_options.gpu_mem_limit = 0;
         cuda_options.arena_extend_strategy = 0;
         cuda_options.do_copy_in_default_stream = 1;
         ctx->session_opts.AppendExecutionProvider_CUDA(cuda_options);
@@ -275,6 +299,11 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
             ctx->session_opts);
     } catch (const Ort::Exception& ex) {
         std::fprintf(stderr, "[desktop_recapture_detect] Failed to load model %s: %s\n",
+                     model_path.c_str(), ex.what());
+        return AI_ERR_LOAD_FAILED;
+    } catch (const std::exception& ex) {
+        // Catch non-ORT C++ exceptions (e.g. std::length_error from CUDA arena init)
+        std::fprintf(stderr, "[desktop_recapture_detect] Unexpected error loading model %s: %s\n",
                      model_path.c_str(), ex.what());
         return AI_ERR_LOAD_FAILED;
     }
@@ -294,6 +323,33 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
     for (auto& s : ctx->output_names_storage) ctx->output_names.push_back(s.c_str());
 
     std::fprintf(stdout, "[desktop_recapture_detect] Model loaded: %s\n", model_path.c_str());
+
+    // Warm-up: run one dummy inference so that CUDA JIT kernel compilation happens
+    // at init time rather than on the first real request (avoids 300-500 ms cold-start
+    // latency spike that would otherwise hit the very first end-user call).
+    {
+        size_t n = static_cast<size_t>(ctx->input_width) *
+                   static_cast<size_t>(ctx->input_height) * 3;
+        std::vector<float> dummy(n, 0.0f);
+        std::array<int64_t, 4> sh = {1, 3,
+            static_cast<int64_t>(ctx->input_height),
+            static_cast<int64_t>(ctx->input_width)};
+        Ort::MemoryInfo mi = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        Ort::Value wt = Ort::Value::CreateTensor<float>(mi, dummy.data(), n, sh.data(), sh.size());
+        try {
+            ctx->session->Run(Ort::RunOptions{nullptr},
+                              ctx->input_names.data(), &wt, 1,
+                              ctx->output_names.data(), ctx->output_names.size());
+            std::fprintf(stdout, "[desktop_recapture_detect] GPU warm-up inference completed.\n");
+        } catch (const std::exception& ex) {
+            std::fprintf(stderr,
+                "[desktop_recapture_detect] GPU warm-up inference failed (non-fatal): %s\n",
+                ex.what());
+        } catch (...) {
+            std::fprintf(stderr,
+                "[desktop_recapture_detect] GPU warm-up inference failed (non-fatal, unknown error)\n");
+        }
+    }
 #else
     std::fprintf(stderr,
         "[desktop_recapture_detect] ONNXRuntime not available — AiInfer will return stub result.\n");
