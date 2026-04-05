@@ -92,9 +92,13 @@ static std::string _sha256_hex(const std::string& path) {
     }
     EVP_MD_CTX_free(ctx);
 
-    std::string hex(static_cast<size_t>(digest_len) * 2, '\0');
+    static constexpr char kHexDigits[] = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(static_cast<size_t>(digest_len) * 2);
     for (unsigned int i = 0; i < digest_len; ++i) {
-        std::snprintf(&hex[static_cast<size_t>(i) * 2], 3, "%02x", digest[i]);
+        const unsigned char byte = digest[i];
+        hex.push_back(kHexDigits[byte >> 4]);
+        hex.push_back(kHexDigits[byte & 0x0F]);
     }
     return hex;
 #else
