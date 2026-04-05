@@ -17,7 +17,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -313,75 +312,6 @@ def _resolve_effective_pubkey_path() -> str:
     return configured_pubkey_path
 
 
-def _verify_license_signature_with_cryptography(
-    pubkey_pem: str,
-    canonical: bytes,
-    sig_bytes: bytes,
-) -> bool:
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding
-
-    public_key = serialization.load_pem_public_key(pubkey_pem.encode("utf-8"))
-    public_key.verify(
-        sig_bytes,
-        canonical,
-        padding.PSS(
-            mgf=padding.MGF1(hashes.SHA256()),
-            salt_length=padding.PSS.MAX_LENGTH,
-        ),
-        hashes.SHA256(),
-    )
-    return True
-
-
-def _verify_license_signature_with_openssl(
-    pubkey_path: str,
-    canonical: bytes,
-    sig_bytes: bytes,
-) -> bool:
-    openssl_bin = shutil.which("openssl")
-    if not openssl_bin:
-        logger.warning("OpenSSL CLI not available for license signature fallback verification")
-        return False
-
-    with tempfile.TemporaryDirectory(prefix="ai_license_verify_") as temp_dir:
-        payload_path = os.path.join(temp_dir, "payload.json")
-        signature_path = os.path.join(temp_dir, "signature.bin")
-        with open(payload_path, "wb") as payload_file:
-            payload_file.write(canonical)
-        with open(signature_path, "wb") as signature_file:
-            signature_file.write(sig_bytes)
-
-        completed = subprocess.run(
-            [
-                openssl_bin,
-                "dgst",
-                "-sha256",
-                "-verify",
-                pubkey_path,
-                "-signature",
-                signature_path,
-                "-sigopt",
-                "rsa_padding_mode:pss",
-                "-sigopt",
-                "rsa_pss_saltlen:-2",
-                "-sigopt",
-                "rsa_mgf1_md:sha256",
-                payload_path,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode == 0:
-            logger.info("License signature verified via OpenSSL CLI fallback")
-            return True
-
-        details = (completed.stderr or completed.stdout or "").strip()
-        logger.warning("OpenSSL CLI license verification failed: %s", details or f"exit={completed.returncode}")
-        return False
-
-
 def _init_runtime() -> bool:
     """Initialize C++ Runtime layer with SO directory, models, and license."""
     runtime_so = resolve_runtime_so_path()
@@ -428,240 +358,29 @@ def _init_runtime() -> bool:
 # License status helper
 # ---------------------------------------------------------------------------
 
-def _verify_license_signature(license_json: str) -> bool:
-    """Verify license RSA signature using mounted public key. Returns True if valid."""
-    effective_pubkey_path = _resolve_effective_pubkey_path()
-    if not os.path.exists(effective_pubkey_path):
-        if TRUSTED_PUBKEY_SHA256:
-            logger.error("No public key at %s but TRUSTED_PUBKEY_SHA256 is set — DENIED", effective_pubkey_path)
-            return False
-        logger.warning("No public key at %s — skipping signature verification", effective_pubkey_path)
-        return True  # no pubkey = skip verification (dev/test mode)
-    try:
-        with open(effective_pubkey_path, encoding="utf-8") as f:
-            pubkey_pem = f.read()
-
-        # Verify public key fingerprint against trusted hash (anti-forgery)
-        if TRUSTED_PUBKEY_SHA256:
-            import hashlib
-            actual_fp = hashlib.sha256(pubkey_pem.encode("utf-8")).hexdigest()
-            if actual_fp != TRUSTED_PUBKEY_SHA256:
-                logger.error(
-                    "Public key fingerprint MISMATCH — possible tampering!\n"
-                    "  expected: %s\n  actual:   %s",
-                    TRUSTED_PUBKEY_SHA256, actual_fp,
-                )
-                return False
-            logger.debug("Public key fingerprint verified: %s", actual_fp[:16] + "...")
-
-        # Re-use the same signing logic as license_signer for verification
-        import base64
-        data = json.loads(license_json)
-        sig_b64 = data.get("signature")
-        if not sig_b64:
-            logger.warning("License has no signature field")
-            return False
-        # Build canonical JSON (sorted keys, no spaces, excluding signature)
-        payload = {k: v for k, v in data.items() if k != "signature"}
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                               ensure_ascii=False).encode("utf-8")
-        sig_bytes = base64.b64decode(sig_b64)
-        return _verify_license_signature_with_cryptography(pubkey_pem, canonical, sig_bytes)
-    except ImportError as import_err:
-        logger.warning(
-            "cryptography library unavailable (%s) — falling back to OpenSSL CLI",
-            import_err,
-        )
-        if _verify_license_signature_with_openssl(effective_pubkey_path, canonical, sig_bytes):
-            return True
-        if TRUSTED_PUBKEY_SHA256:
-            logger.error(
-                "cryptography library not available and OpenSSL fallback failed "
-                "while TRUSTED_PUBKEY_SHA256 is set — DENIED"
-            )
-            return False
-        logger.warning("cryptography library not available and OpenSSL fallback failed — skipping signature verification")
-        return True
-    except Exception as exc:
-        if exc.__class__.__name__ == "InvalidSignature":
-            logger.error("License signature verification FAILED — signature invalid")
-            return False
-        logger.error("License signature verification error: %s", exc)
-        return False
-
-
-def _compute_days_remaining(valid_until: str | None) -> int:
-    """Compute days remaining from ISO-8601 valid_until string.
-    All times are treated as CST (UTC+8)."""
-    if not valid_until:
-        return 9999  # permanent license
-    try:
-        from datetime import datetime as dt
-        import math
-        # Parse ISO-8601 (with or without Z/offset)
-        exp_str = valid_until.replace("Z", "+08:00")
-        exp = dt.fromisoformat(exp_str)
-        # If naive datetime (no timezone), treat as CST
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=CST)
-        now = dt.now(CST)
-        diff = (exp - now).total_seconds() / 86400  # Use total_seconds for precision
-        # Use floor to ensure negative fractional days are rounded down (e.g., -0.5 -> -1)
-        return math.floor(diff)
-    except Exception:
-        return 0
-
-
-def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
-    """
-    Check if license has started based on valid_from.
-    Returns (has_started, days_until_start).
-    All times are treated as CST (UTC+8).
-    """
-    if not valid_from:
-        return (True, 0)  # No valid_from means license is always active
-    try:
-        from datetime import datetime as dt
-        import math
-        # Parse ISO-8601 (with or without Z/offset)
-        start_str = valid_from.replace("Z", "+08:00")
-        start = dt.fromisoformat(start_str)
-        # If naive datetime (no timezone), treat as CST
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=CST)
-        now = dt.now(CST)
-        diff = (start - now).total_seconds() / 86400
-        # Use floor for consistent rounding (e.g., 0.5 days until start -> 0 days)
-        days_until = math.floor(diff)
-        return (days_until <= 0, max(days_until, 0))
-    except Exception:
-        return (True, 0)  # On error, assume started
-
-
-# ---------------------------------------------------------------------------
-# License status — cached to avoid spawning an OpenSSL CLI subprocess on every
-# inference request.  The cache is invalidated when the license file's mtime
-# changes or when the TTL expires, whichever comes first.
-# ---------------------------------------------------------------------------
-
-_LICENSE_CACHE_TTL: float = 30.0  # seconds
-_license_cache_lock = threading.Lock()
-_license_cache: dict | None = None
-_license_cache_time: float = 0.0
-_license_cache_mtime: float = 0.0
-
-
-def _invalidate_license_cache() -> None:
-    """Force the next call to _license_status() to re-verify the license."""
-    global _license_cache
-    with _license_cache_lock:
-        _license_cache = None
-
-
-def _license_status() -> dict:
-    global _license_cache, _license_cache_time, _license_cache_mtime
-    now = time.monotonic()
-    try:
-        mtime = os.path.getmtime(LICENSE_PATH) if os.path.exists(LICENSE_PATH) else 0.0
-    except OSError:
-        mtime = 0.0
-    with _license_cache_lock:
-        if (
-            _license_cache is not None
-            and now - _license_cache_time < _LICENSE_CACHE_TTL
-            and mtime == _license_cache_mtime
-        ):
-            return _license_cache
-    result = _license_status_uncached()
-    with _license_cache_lock:
-        _license_cache = result
-        _license_cache_time = now
-        _license_cache_mtime = mtime
-    return result
-
-
-def _license_status_uncached() -> dict:
-    if not os.path.exists(LICENSE_PATH):
+def _runtime_license_status(runtime: Any | None = None) -> dict[str, Any]:
+    runtime = runtime or get_runtime()
+    if not runtime:
         return {
-            "status":         "missing",
-            "license_id":     None,
-            "valid_until":    None,
+            "status": "unavailable",
+            "license_id": None,
+            "valid_from": None,
+            "valid_until": None,
             "days_remaining": 0,
-            "capabilities":   [],
+            "capabilities": [],
         }
-    try:
-        with open(LICENSE_PATH, encoding="utf-8") as f:
-            raw = f.read()
-        data = json.loads(raw)
-
-        # Verify RSA signature against mounted public key
-        if not _verify_license_signature(raw):
-            return {
-                "status":         "signature_invalid",
-                "license_id":     data.get("license_id"),
-                "valid_until":    None,
-                "days_remaining": 0,
-                "capabilities":   [],
-            }
-
-        # Check valid_from (has license started?)
-        has_started, days_until = _check_valid_from(data.get("valid_from"))
-        if not has_started:
-            return {
-                "status":         "not_yet_valid",
-                "license_id":     data.get("license_id"),
-                "valid_until":    data.get("valid_until"),
-                "days_remaining": -days_until,  # Negative means days until start
-                "capabilities":   [],
-            }
-
-        # Compute days remaining until expiration
-        days = _compute_days_remaining(data.get("valid_until"))
-        if days <= 0:
-            status = "expired"
-            days = 0  # Don't return negative days to client
-        else:
-            status = "active"
-
-        return {
-            "status":         status,
-            "license_id":     data.get("license_id"),
-            "valid_until":    data.get("valid_until"),
-            "days_remaining": days,
-            "capabilities":   data.get("capabilities", []),
-        }
-    except Exception as exc:
-        logger.error("Failed to parse license file %s: %s", LICENSE_PATH, exc)
-        return {"status": "invalid", "license_id": None, "valid_until": None,
-                "days_remaining": 0, "capabilities": []}
-
-
-def _check_license(capability: str) -> None:
-    lic = _license_status()
-    if lic["status"] == "missing":
-        # Dev/test mode — no license file present, allow all
-        return
-    if lic["status"] == "signature_invalid":
-        raise HTTPException(status_code=403,
-                            detail={"code": 4005, "message": "License signature invalid",
-                                    "capability": capability})
-    if lic["status"] == "not_yet_valid":
-        raise HTTPException(status_code=403,
-                            detail={"code": 4003, "message": "License not yet valid",
-                                    "capability": capability})
-    if lic["status"] == "expired":
-        raise HTTPException(status_code=403,
-                            detail={"code": 4002, "message": "License expired",
-                                    "capability": capability})
-    if lic["status"] not in ("active", "valid"):
-        raise HTTPException(status_code=403,
-                            detail={"code": 4001, "message": "License invalid",
-                                    "capability": capability})
-    caps = lic.get("capabilities", [])
-    if capability not in caps and "*" not in caps:
-        raise HTTPException(status_code=403,
-                            detail={"code": 4004, "message": "Capability not licensed",
-                                    "capability": capability})
+    status = runtime.get_license_status()
+    if isinstance(status, dict):
+        return status
+    logger.warning("Runtime license status unavailable")
+    return {
+        "status": "unavailable",
+        "license_id": None,
+        "valid_from": None,
+        "valid_until": None,
+        "days_remaining": 0,
+        "capabilities": [],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -801,7 +520,7 @@ def _error_response(
     )
 
 
-def _license_error_from_status(license_status: Optional[dict[str, Any]], capability: str) -> Optional[JSONResponse]:
+def _runtime_license_error_response(license_status: Optional[dict[str, Any]], capability: str) -> Optional[JSONResponse]:
     if not license_status:
         return None
 
@@ -825,26 +544,9 @@ def _license_error_from_status(license_status: Optional[dict[str, Any]], capabil
 
 
 def _acquire_failure_response(runtime: Any, capability: str) -> JSONResponse:
-    runtime_license = runtime.get_license_status() if runtime else None
-    python_license = _license_status()
-    runtime_error = _license_error_from_status(runtime_license, capability)
-    python_error = _license_error_from_status(python_license, capability)
-
+    runtime_error = _runtime_license_error_response(_runtime_license_status(runtime), capability)
     if runtime_error:
-        runtime_status = runtime_license.get("status") if isinstance(runtime_license, dict) else None
-        python_status = python_license.get("status") if isinstance(python_license, dict) else None
-        if python_error and runtime_status != python_status:
-            logger.warning(
-                "Conflicting runtime/python license states for %s: runtime=%s python=%s; using runtime result",
-                capability,
-                runtime_status,
-                python_status,
-            )
         return runtime_error
-
-    if python_error:
-        return python_error
-
     return _error_response(3001, "Instance pool timeout or capability not available", capability)
 
 
@@ -904,14 +606,15 @@ def _get_runtime_capability_version(runtime: Any, capability: str) -> str:
 
 def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dict:
     _validate_capability_name(capability)
-    _check_license(capability)
     runtime = get_runtime()
     if not runtime:
         raise ValueError("Runtime not initialized")
 
     handle = runtime.acquire(capability, timeout_ms=30000)
     if not handle:
-        raise ValueError(f"Capability '{capability}' not available")
+        response = _acquire_failure_response(runtime, capability)
+        body = json.loads(response.body)
+        raise HTTPException(status_code=response.status_code, detail=body)
 
     try:
         img = _decode_image(image_bytes)
@@ -994,17 +697,7 @@ def health():
     """Health check endpoint with capabilities and license status."""
     runtime = get_runtime()
     diagnostics = _capability_diagnostics()
-
-    # Get license status from C++ Runtime if available
-    if runtime:
-        lic_from_runtime = runtime.get_license_status()
-        if lic_from_runtime:
-            lic = lic_from_runtime
-        else:
-            # Fallback to Python license check
-            lic = _license_status()
-    else:
-        lic = _license_status()
+    lic = _runtime_license_status(runtime)
 
     # Get capabilities from C++ Runtime
     caps = []
@@ -1085,7 +778,7 @@ def capability_diagnostics():
 
 @app.get("/api/v1/license/status", tags=["license"])
 def license_status():
-    return _license_status()
+    return _runtime_license_status()
 
 
 # ---------------------------------------------------------------------------
@@ -1102,7 +795,6 @@ async def infer(
     """Run inference for a specific AI capability using C++ Runtime instance pool."""
     async with _acquire_infer_slot():
         _validate_capability_name(capability)
-        _check_license(capability)
 
         runtime = get_runtime()
         if not runtime:
@@ -1336,7 +1028,7 @@ async def run_pipeline_endpoint(
             except Exception:
                 pass
 
-        result = execute_pipeline(p, raw, _infer_for_pipeline, _check_license, global_opts)
+        result = execute_pipeline(p, raw, _infer_for_pipeline, None, global_opts)
         return result
 
 

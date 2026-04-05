@@ -133,23 +133,6 @@ static bool _jint(const std::string& json, const std::string& key, int* out) {
 }
 
 // ---------------------------------------------------------------------------
-// License check (runtime soft check — does not re-read file every call)
-// ---------------------------------------------------------------------------
-
-static bool _check_license_capability(const std::string& license_path) {
-    std::string content;
-    if (!_read_file(license_path, content)) return false;
-    // Check capability "recapture_detect" appears in capabilities array
-    auto cap_pos = content.find("\"capabilities\"");
-    if (cap_pos == std::string::npos) return false;
-    auto arr_start = content.find('[', cap_pos);
-    auto arr_end   = content.find(']', arr_start);
-    if (arr_start == std::string::npos || arr_end == std::string::npos) return false;
-    std::string arr = content.substr(arr_start, arr_end - arr_start + 1);
-    return arr.find("\"recapture_detect\"") != std::string::npos;
-}
-
-// ---------------------------------------------------------------------------
 // Pre-process: NHWC uint8 BGR → NCHW float32, normalised
 // ---------------------------------------------------------------------------
 
@@ -240,21 +223,6 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
     if (!handle) return AI_ERR_INVALID_PARAM;
     auto* ctx = static_cast<RecaptureContext*>(handle);
 
-    // License check
-    std::string license_path = std::string(ctx->model_dir) + "/../../../licenses/license.bin";
-    // Allow override via env
-    const char* env_lic = std::getenv("AI_LICENSE_PATH");
-    if (env_lic) license_path = env_lic;
-
-    if (!_check_license_capability(license_path)) {
-        // License file may not exist in dev/test mode — warn but proceed
-        std::fprintf(stderr,
-            "[recapture_detect] WARNING: License check failed for recapture_detect "
-            "(path=%s). Proceeding in dev mode.\n",
-            license_path.c_str());
-    }
-    ctx->license_path = license_path;
-
 #if HAS_ORT
     // Load ONNX model
     std::string model_path = ctx->model_dir + "/model.onnx";
@@ -314,16 +282,6 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
 AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* output) {
     if (!handle || !input || !output) return AI_ERR_INVALID_PARAM;
     auto* ctx = static_cast<RecaptureContext*>(handle);
-
-    // Periodic license check every 1000 inferences
-    uint64_t cnt = ctx->infer_count.fetch_add(1);
-    if (cnt % 1000 == 0 && cnt > 0) {
-        if (!_check_license_capability(ctx->license_path)) {
-            _set_result(output, AI_ERR_LICENSE_EXPIRED,
-                        nullptr, "License expired or invalid");
-            return AI_ERR_LICENSE_EXPIRED;
-        }
-    }
 
 #if HAS_ORT
     if (!ctx->session) {

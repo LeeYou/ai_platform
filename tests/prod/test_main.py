@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import io
 import json
 import os
@@ -136,14 +135,6 @@ class ProdMainTests(unittest.TestCase):
         self.original_runtime_init = prod_main.init_runtime
         self.original_get_runtime = prod_main.get_runtime
         self.original_decode_image = prod_main._decode_image
-        self.original_verify_license_signature = prod_main._verify_license_signature
-        self.original_verify_license_signature_with_cryptography = (
-            prod_main._verify_license_signature_with_cryptography
-        )
-        self.original_verify_license_signature_with_openssl = (
-            prod_main._verify_license_signature_with_openssl
-        )
-        self.original_check_license = prod_main._check_license
         self.original_infer_for_pipeline = prod_main._infer_for_pipeline
         self.original_subprocess_run = prod_main.subprocess.run
         self.original_ctypes_cdll = prod_main.ctypes.CDLL
@@ -173,7 +164,6 @@ class ProdMainTests(unittest.TestCase):
         prod_main._init_runtime = lambda: True
         prod_main.destroy_runtime = lambda: None
         prod_main.get_runtime = lambda: self.fake_runtime
-        prod_main._check_license = lambda capability: None
         prod_main._decode_image = lambda data: _FakeImage()
         prod_main.ab_manager = _FakeABManager()
         prod_main.ADMIN_TOKEN = "test-token"
@@ -199,14 +189,6 @@ class ProdMainTests(unittest.TestCase):
         prod_main.init_runtime = self.original_runtime_init
         prod_main.get_runtime = self.original_get_runtime
         prod_main._decode_image = self.original_decode_image
-        prod_main._verify_license_signature = self.original_verify_license_signature
-        prod_main._verify_license_signature_with_cryptography = (
-            self.original_verify_license_signature_with_cryptography
-        )
-        prod_main._verify_license_signature_with_openssl = (
-            self.original_verify_license_signature_with_openssl
-        )
-        prod_main._check_license = self.original_check_license
         prod_main._infer_for_pipeline = self.original_infer_for_pipeline
         prod_main.subprocess.run = self.original_subprocess_run
         prod_main.ctypes.CDLL = self.original_ctypes_cdll
@@ -367,46 +349,6 @@ class ProdMainTests(unittest.TestCase):
 
         self.assertEqual(prod_main._resolve_effective_pubkey_path(), str(pubkey_path))
 
-    def test_verify_license_signature_falls_back_to_openssl_when_cryptography_missing(self):
-        pubkey_path = Path(self.tempdir.name) / "licenses" / "pubkey.pem"
-        pubkey_path.parent.mkdir(parents=True, exist_ok=True)
-        pubkey_path.write_text("fake-pubkey", encoding="utf-8")
-        prod_main.PUBKEY_PATH = str(pubkey_path)
-        prod_main._verify_license_signature_with_cryptography = (
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(ImportError("no cryptography"))
-        )
-        records = {}
-        prod_main._verify_license_signature_with_openssl = (
-            lambda path, canonical, sig_bytes: records.update({
-                "path": path,
-                "canonical": canonical,
-                "sig_bytes": sig_bytes,
-            }) or True
-        )
-        raw_license = json.dumps({
-            "license_id": "lic-test",
-            "valid_until": "2099-01-01T00:00:00+08:00",
-            "capabilities": ["face_detect"],
-            "signature": base64.b64encode(b"sig").decode("ascii"),
-        })
-
-        self.assertTrue(prod_main._verify_license_signature(raw_license))
-        self.assertEqual(records["path"], str(pubkey_path))
-        self.assertEqual(records["sig_bytes"], b"sig")
-        self.assertEqual(
-            records["canonical"],
-            json.dumps(
-                {
-                    "license_id": "lic-test",
-                    "valid_until": "2099-01-01T00:00:00+08:00",
-                    "capabilities": ["face_detect"],
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8"),
-        )
-
     def test_capabilities_endpoint_includes_manifest_metadata(self):
         body = prod_main.list_capabilities()
         self.assertEqual(body["capabilities"][0]["version"], "v1.2.3")
@@ -430,82 +372,33 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["discovered_models"][0]["manifest"]["model_version"], "v1.2.3")
 
     def test_license_status_endpoint_reports_missing_when_no_file(self):
+        self.fake_runtime.get_license_status = lambda: {"status": "missing", "capabilities": []}
         body = prod_main.license_status()
         self.assertEqual(body["status"], "missing")
         self.assertEqual(body["capabilities"], [])
 
     def test_license_status_endpoint_reports_signature_invalid(self):
-        self._write_license()
-        prod_main._verify_license_signature = lambda raw: False
+        self.fake_runtime.get_license_status = lambda: {"status": "signature_invalid", "license_id": "lic-test"}
         body = prod_main.license_status()
         self.assertEqual(body["status"], "signature_invalid")
         self.assertEqual(body["license_id"], "lic-test")
 
     def test_license_status_endpoint_reports_expired(self):
-        self._write_license(valid_until=(datetime.now(prod_main.CST) - timedelta(days=1)).isoformat())
-        prod_main._verify_license_signature = lambda raw: True
+        self.fake_runtime.get_license_status = lambda: {"status": "expired", "days_remaining": 0}
         body = prod_main.license_status()
         self.assertEqual(body["status"], "expired")
         self.assertEqual(body["days_remaining"], 0)
 
     def test_license_status_endpoint_reports_not_yet_valid(self):
-        self._write_license(
-            valid_from=(datetime.now(prod_main.CST) + timedelta(days=2)).isoformat(),
-            valid_until=(datetime.now(prod_main.CST) + timedelta(days=10)).isoformat(),
-        )
-        prod_main._verify_license_signature = lambda raw: True
+        self.fake_runtime.get_license_status = lambda: {"status": "not_yet_valid", "days_remaining": -2}
         body = prod_main.license_status()
         self.assertEqual(body["status"], "not_yet_valid")
         self.assertLess(body["days_remaining"], 0)
 
-    def test_license_status_endpoint_reports_invalid_for_malformed_json(self):
-        Path(prod_main.LICENSE_PATH).write_text("{bad json", encoding="utf-8")
+    def test_license_status_endpoint_reports_runtime_unavailable_when_missing(self):
+        prod_main.get_runtime = lambda: None
         body = prod_main.license_status()
-        self.assertEqual(body["status"], "invalid")
-
-    def test_check_license_allows_missing_license_in_dev_mode(self):
-        prod_main._check_license = self.original_check_license
-        prod_main._check_license("face_detect")
-
-    def test_check_license_rejects_unlicensed_capability(self):
-        self._write_license(capabilities=["other_cap"])
-        prod_main._verify_license_signature = lambda raw: True
-        prod_main._check_license = self.original_check_license
-        with self.assertRaises(HTTPException) as ctx:
-            prod_main._check_license("face_detect")
-        self.assertEqual(ctx.exception.status_code, 403)
-        self.assertEqual(ctx.exception.detail["code"], 4004)
-
-    def test_check_license_rejects_not_yet_valid_license(self):
-        self._write_license(
-            valid_from=(datetime.now(prod_main.CST) + timedelta(days=2)).isoformat(),
-            valid_until=(datetime.now(prod_main.CST) + timedelta(days=10)).isoformat(),
-        )
-        prod_main._verify_license_signature = lambda raw: True
-        prod_main._check_license = self.original_check_license
-        with self.assertRaises(HTTPException) as ctx:
-            prod_main._check_license("face_detect")
-        self.assertEqual(ctx.exception.status_code, 403)
-        self.assertEqual(ctx.exception.detail["code"], 4003)
-
-    def test_check_license_allows_wildcard_capability(self):
-        self._write_license(capabilities=["*"])
-        prod_main._verify_license_signature = lambda raw: True
-        prod_main._check_license = self.original_check_license
-        prod_main._check_license("arbitrary_capability")
-
-    def test_infer_endpoint_returns_expired_license_before_runtime(self):
-        self._write_license(valid_until=(datetime.now(prod_main.CST) - timedelta(days=1)).isoformat())
-        prod_main._verify_license_signature = lambda raw: True
-        prod_main._check_license = self.original_check_license
-        runtime_calls = []
-        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: runtime_calls.append(capability)
-        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
-        with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
-        self.assertEqual(ctx.exception.status_code, 403)
-        self.assertEqual(ctx.exception.detail["code"], 4002)
-        self.assertEqual(runtime_calls, [])
+        self.assertEqual(body["status"], "unavailable")
 
     def test_infer_endpoint_rejects_large_payload(self):
         prod_main.MAX_UPLOAD_BYTES = 1
@@ -721,7 +614,7 @@ class ProdMainTests(unittest.TestCase):
             asyncio.run(prod_main.run_pipeline_endpoint("pipe_disabled", upload))
         self.assertEqual(ctx.exception.status_code, 400)
 
-    def test_run_pipeline_endpoint_stops_after_license_failure(self):
+    def test_run_pipeline_endpoint_stops_after_runtime_license_failure(self):
         pipeline = {
             "pipeline_id": "pipe_license",
             "name": "License stop",
@@ -736,21 +629,18 @@ class ProdMainTests(unittest.TestCase):
 
         def fake_infer(capability, image_bytes, options):
             calls.append(capability)
-            return {"ok": True}
-
-        def fake_check_license(capability):
             if capability == "second_cap":
                 raise HTTPException(status_code=403, detail={"code": 4004})
+            return {"ok": True}
 
         prod_main._infer_for_pipeline = fake_infer
-        prod_main._check_license = fake_check_license
 
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         body = asyncio.run(prod_main.run_pipeline_endpoint("pipe_license", upload))
-        self.assertEqual(calls, ["face_detect"])
+        self.assertEqual(calls, ["face_detect", "second_cap"])
         self.assertEqual(body["steps"][0]["status"], "success")
         self.assertEqual(body["steps"][1]["status"], "error")
-        self.assertEqual(body["steps"][1]["error"], "License check failed")
+        self.assertEqual(body["steps"][1]["error"], "Step execution failed")
 
     def test_run_pipeline_endpoint_skips_step_when_condition_not_met(self):
         pipeline = {
