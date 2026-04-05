@@ -403,9 +403,9 @@ AI_EXPORT AiHandle AiCreate(const char* model_dir, const char* /*config_json*/) 
 
 AI_EXPORT int32_t AiInit(AiHandle handle) {
     if (!handle) return AI_ERR_INVALID_PARAM;
-    auto* ctx = static_cast<DesktopRecaptureContext*>(handle);
 
 #if HAS_ORT
+    auto* ctx = static_cast<DesktopRecaptureContext*>(handle);
     std::string model_path = ctx->model_dir + "/model.onnx";
     ctx->session_opts.SetIntraOpNumThreads(1);
     ctx->session_opts.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
@@ -513,9 +513,9 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
 
 AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* output) {
     if (!handle || !input || !output) return AI_ERR_INVALID_PARAM;
-    auto* ctx = static_cast<DesktopRecaptureContext*>(handle);
 
 #if HAS_ORT
+    auto* ctx = static_cast<DesktopRecaptureContext*>(handle);
     if (!ctx->session) {
         _set_result(output, AI_ERR_LOAD_FAILED, nullptr, "Model not loaded");
         return AI_ERR_LOAD_FAILED;

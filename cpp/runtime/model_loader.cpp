@@ -14,8 +14,8 @@
 #include <string>
 
 // Simple SHA-256 using OpenSSL (available on all target platforms)
-#if __has_include(<openssl/sha.h>)
-#  include <openssl/sha.h>
+#if __has_include(<openssl/evp.h>)
+#  include <openssl/evp.h>
 #  define HAS_OPENSSL_SHA 1
 #else
 #  define HAS_OPENSSL_SHA 0
@@ -69,22 +69,34 @@ static std::string _sha256_hex(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) return "";
 
-    SHA256_CTX ctx;
-    SHA256_Init(&ctx);
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return "";
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return "";
+    }
 
     char buf[65536];
     while (f.read(buf, sizeof(buf)) || f.gcount() > 0) {
-        SHA256_Update(&ctx, buf, static_cast<size_t>(f.gcount()));
+        if (EVP_DigestUpdate(ctx, buf, static_cast<size_t>(f.gcount())) != 1) {
+            EVP_MD_CTX_free(ctx);
+            return "";
+        }
     }
 
-    unsigned char digest[SHA256_DIGEST_LENGTH];
-    SHA256_Final(digest, &ctx);
-
-    char hex[SHA256_DIGEST_LENGTH * 2 + 1];
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
-        std::snprintf(hex + i * 2, 3, "%02x", digest[i]);
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_len = 0;
+    if (EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return "";
     }
-    return std::string(hex);
+    EVP_MD_CTX_free(ctx);
+
+    std::string hex(static_cast<size_t>(digest_len) * 2, '\0');
+    for (unsigned int i = 0; i < digest_len; ++i) {
+        std::snprintf(&hex[static_cast<size_t>(i) * 2], 3, "%02x", digest[i]);
+    }
+    return hex;
 #else
     (void)path;
     return "";  // checksum validation skipped — OpenSSL not available
