@@ -113,7 +113,7 @@ static std::string _json_string(const std::string& json, const std::string& key)
 }
 
 static int32_t _compute_days_remaining(const std::string& iso_time) {
-    if (iso_time.empty() || iso_time == "null") return 9999;
+    if (iso_time.empty() || iso_time == "null") return -1;
 
     struct tm tm_value = {};
     if (std::sscanf(iso_time.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d",
@@ -576,6 +576,12 @@ private:
         }
 
         const int32_t days = _compute_days_remaining(status.valid_until);
+        if (days < 0) {
+            status.status = "valid";
+            status.valid = true;
+            status.days_remaining = -1;
+            return;
+        }
         if (days <= 0) {
             status.status = "expired";
             status.expired = true;
