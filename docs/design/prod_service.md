@@ -36,7 +36,7 @@
 
 ### Layer 1：HTTP 服务层
 
-职责：接收外部 HTTP 请求 → 参数校验 → License 状态检查 → 路由到 Runtime 层 → 返回统一 JSON 响应
+职责：接收外部 HTTP 请求 → 参数校验 → 路由到 Runtime 层 → 透传 Runtime 错误 → 返回统一 JSON 响应
 
 技术：Python FastAPI（快速开发、Swagger 自动生成）
 
@@ -102,7 +102,7 @@ def resolve_resource_path(capability: str, resource_type: str) -> str:
 |------|------|------|------|
 | `/api/v1/health` | GET | 服务健康状态、各能力加载状态 | 无 |
 | `/api/v1/capabilities` | GET | 已加载能力列表及版本信息 | 无 |
-| `/api/v1/infer/{capability}` | POST | 推理接口 | License |
+| `/api/v1/infer/{capability}` | POST | 推理接口（License 由 SO 层执行） | SO License |
 | `/api/v1/license/status` | GET | 授权状态、有效期、覆盖能力列表 | 无 |
 | `/api/v1/admin/reload` | POST | 热重载模型/SO | Admin Token |
 | `/api/v1/admin/reload/{capability}` | POST | 热重载指定能力 | Admin Token |
@@ -181,7 +181,7 @@ options: {"threshold": 0.5}   # 可选 JSON 参数
 
 ```
 请求到达
-  → HTTP 层 License 校验（缓存 60 秒）
+  → 调用 Runtime Acquire（由 SO 层执行 License 校验）
   → 从对应能力的实例池获取可用实例
     （若池已满 → 等待，超时返回 503）
   → 执行 AiInfer()

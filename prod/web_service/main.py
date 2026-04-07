@@ -520,33 +520,15 @@ def _error_response(
     )
 
 
-def _runtime_license_error_response(license_status: Optional[dict[str, Any]], capability: str) -> Optional[JSONResponse]:
-    if not license_status:
-        return None
-
-    status = str(license_status.get("status", "")).strip().lower()
-    capabilities = license_status.get("capabilities", []) or []
-
-    if status in ("active", "valid"):
-        if capabilities and capability not in capabilities and "*" not in capabilities:
-            return _error_response(4004, "Capability not licensed", capability, status_code=403)
-        return None
-
-    if status == "signature_invalid":
-        return _error_response(4005, "License signature invalid", capability, status_code=403)
-    if status == "not_yet_valid":
-        return _error_response(4003, "License not yet valid", capability, status_code=403)
-    if status == "expired":
-        return _error_response(4002, "License expired", capability, status_code=403)
-    if status == "invalid":
-        return _error_response(4001, "License invalid", capability, status_code=403)
-    return None
-
-
 def _acquire_failure_response(runtime: Any, capability: str) -> JSONResponse:
-    runtime_error = _runtime_license_error_response(_runtime_license_status(runtime), capability)
-    if runtime_error:
-        return runtime_error
+    runtime_error = runtime.get_last_error() if runtime and hasattr(runtime, "get_last_error") else None
+    if isinstance(runtime_error, dict) and runtime_error.get("code"):
+        return _error_response(
+            int(runtime_error["code"]),
+            str(runtime_error.get("message", "Inference failed")),
+            capability,
+            status_code=int(runtime_error.get("status_code", 403)),
+        )
     return _error_response(3001, "Instance pool timeout or capability not available", capability)
 
 
@@ -1028,7 +1010,7 @@ async def run_pipeline_endpoint(
             except Exception:
                 pass
 
-        result = execute_pipeline(p, raw, _infer_for_pipeline, None, global_opts)
+        result = execute_pipeline(p, raw, _infer_for_pipeline, global_opts)
         return result
 
 

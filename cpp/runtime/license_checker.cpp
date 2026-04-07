@@ -15,6 +15,7 @@
 #include <atomic>
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -112,38 +113,207 @@ static std::string _json_string(const std::string& json, const std::string& key)
     return json.substr(pos + 1, end - pos - 1);
 }
 
-static int32_t _compute_days_remaining(const std::string& iso_time) {
-    if (iso_time.empty() || iso_time == "null") return -1;
+struct ParsedTimestamp {
+    bool present = false;
+    bool valid = false;
+    int64_t unix_seconds = 0;
+};
 
-    struct tm tm_value = {};
-    if (std::sscanf(iso_time.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d",
-                    &tm_value.tm_year,
-                    &tm_value.tm_mon,
-                    &tm_value.tm_mday,
-                    &tm_value.tm_hour,
-                    &tm_value.tm_min,
-                    &tm_value.tm_sec) < 3) {
-        return 0;
+static ParsedTimestamp _parse_iso8601_timestamp(const std::string& iso_time) {
+    if (iso_time.empty() || iso_time == "null") {
+        return {false, true, 0};
+    }
+    if (iso_time.size() < 19) {
+        return {true, false, 0};
     }
 
-    tm_value.tm_year -= 1900;
-    tm_value.tm_mon  -= 1;
+    const auto parse_int_segment = [&](size_t pos, size_t len, int* out) -> bool {
+        if (pos + len > iso_time.size()) return false;
+        int value = 0;
+        for (size_t i = pos; i < pos + len; ++i) {
+            const unsigned char ch = static_cast<unsigned char>(iso_time[i]);
+            if (!std::isdigit(ch)) return false;
+            value = value * 10 + (iso_time[i] - '0');
+        }
+        *out = value;
+        return true;
+    };
+
+    if (iso_time[4] != '-' || iso_time[7] != '-' || iso_time[10] != 'T' ||
+        iso_time[13] != ':' || iso_time[16] != ':') {
+        return {true, false, 0};
+    }
+
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    if (!parse_int_segment(0, 4, &year) ||
+        !parse_int_segment(5, 2, &month) ||
+        !parse_int_segment(8, 2, &day) ||
+        !parse_int_segment(11, 2, &hour) ||
+        !parse_int_segment(14, 2, &minute) ||
+        !parse_int_segment(17, 2, &second)) {
+        return {true, false, 0};
+    }
+
+    size_t pos = 19;
+    if (pos < iso_time.size() && iso_time[pos] == '.') {
+        ++pos;
+        while (pos < iso_time.size() && std::isdigit(static_cast<unsigned char>(iso_time[pos]))) {
+            ++pos;
+        }
+    }
+
+    int tz_offset_seconds = 8 * 3600;
+    if (pos < iso_time.size()) {
+        if (iso_time[pos] == 'Z') {
+            tz_offset_seconds = 0;
+            ++pos;
+        } else if (iso_time[pos] == '+' || iso_time[pos] == '-') {
+            const int sign = iso_time[pos] == '+' ? 1 : -1;
+            ++pos;
+            int tz_hour = 0;
+            int tz_minute = 0;
+            if (!parse_int_segment(pos, 2, &tz_hour)) {
+                return {true, false, 0};
+            }
+            pos += 2;
+            if (pos < iso_time.size() && iso_time[pos] == ':') {
+                ++pos;
+            }
+            if (!parse_int_segment(pos, 2, &tz_minute)) {
+                return {true, false, 0};
+            }
+            pos += 2;
+            tz_offset_seconds = sign * (tz_hour * 3600 + tz_minute * 60);
+        } else {
+            return {true, false, 0};
+        }
+    }
+
+    if (pos != iso_time.size()) {
+        return {true, false, 0};
+    }
+
+    struct tm tm_value = {};
+    tm_value.tm_year = year - 1900;
+    tm_value.tm_mon = month - 1;
+    tm_value.tm_mday = day;
+    tm_value.tm_hour = hour;
+    tm_value.tm_min = minute;
+    tm_value.tm_sec = second;
+    tm_value.tm_isdst = 0;
 
 #ifdef _WIN32
-    time_t ts = _mkgmtime(&tm_value) - (8 * 3600);
+    const time_t ts = _mkgmtime(&tm_value);
 #else
-    time_t ts = timegm(&tm_value) - (8 * 3600);
+    const time_t ts = timegm(&tm_value);
 #endif
-    const time_t now = time(nullptr);
-    const double diff_days = std::difftime(ts, now) / 86400.0;
-    return static_cast<int32_t>(std::floor(diff_days));
+    if (ts == static_cast<time_t>(-1)) {
+        return {true, false, 0};
+    }
+    return {true, true, static_cast<int64_t>(ts) - tz_offset_seconds};
 }
 
-static std::pair<bool, int32_t> _check_valid_from(const std::string& valid_from) {
-    if (valid_from.empty() || valid_from == "null") return {true, 0};
-    const int32_t days_until = _compute_days_remaining(valid_from);
-    if (days_until <= 0) return {true, 0};
-    return {false, days_until};
+static int32_t _ceil_days_from_seconds(int64_t seconds) {
+    if (seconds <= 0) return 0;
+    return static_cast<int32_t>((seconds + 86399) / 86400);
+}
+
+struct SemVer {
+    int major = 0;
+    int minor = 0;
+    int patch = 0;
+    bool valid = false;
+};
+
+static SemVer _parse_semver(const std::string& version) {
+    std::string trimmed = _trim_copy(version);
+    if (trimmed.empty() || trimmed == "null") return {};
+    if (trimmed[0] == 'v' || trimmed[0] == 'V') {
+        trimmed.erase(trimmed.begin());
+    }
+
+    std::vector<int> parts;
+    parts.reserve(3);
+    size_t pos = 0;
+    while (pos < trimmed.size() && parts.size() < 3) {
+        size_t end = pos;
+        while (end < trimmed.size() && std::isdigit(static_cast<unsigned char>(trimmed[end]))) {
+            ++end;
+        }
+        if (end == pos) return {};
+        parts.push_back(std::atoi(trimmed.substr(pos, end - pos).c_str()));
+        if (end >= trimmed.size()) break;
+        if (trimmed[end] != '.') break;
+        pos = end + 1;
+    }
+
+    if (parts.empty()) return {};
+    while (parts.size() < 3) parts.push_back(0);
+    return {parts[0], parts[1], parts[2], true};
+}
+
+static int _compare_semver(const SemVer& lhs, const SemVer& rhs) {
+    if (lhs.major != rhs.major) return lhs.major < rhs.major ? -1 : 1;
+    if (lhs.minor != rhs.minor) return lhs.minor < rhs.minor ? -1 : 1;
+    if (lhs.patch != rhs.patch) return lhs.patch < rhs.patch ? -1 : 1;
+    return 0;
+}
+
+static bool _version_satisfies_constraint(const std::string& version, const std::string& constraint) {
+    std::string trimmed_constraint = _trim_copy(constraint);
+    if (trimmed_constraint.empty() || trimmed_constraint == "null") return true;
+
+    const SemVer parsed_version = _parse_semver(version);
+    if (!parsed_version.valid) return false;
+
+    size_t pos = 0;
+    while (pos < trimmed_constraint.size()) {
+        size_t end = trimmed_constraint.find(',', pos);
+        std::string clause = _trim_copy(trimmed_constraint.substr(pos, end == std::string::npos ? std::string::npos : end - pos));
+        if (!clause.empty()) {
+            std::string op = "=";
+            if (clause.rfind(">=", 0) == 0 || clause.rfind("<=", 0) == 0 || clause.rfind("==", 0) == 0) {
+                op = clause.substr(0, 2);
+                clause = _trim_copy(clause.substr(2));
+            } else if (clause[0] == '>' || clause[0] == '<' || clause[0] == '=') {
+                op = clause.substr(0, 1);
+                clause = _trim_copy(clause.substr(1));
+            }
+
+            const SemVer target = _parse_semver(clause);
+            if (!target.valid) return false;
+
+            const int cmp = _compare_semver(parsed_version, target);
+            const bool matched =
+                (op == ">=" && cmp >= 0) ||
+                (op == "<=" && cmp <= 0) ||
+                (op == ">"  && cmp > 0) ||
+                (op == "<"  && cmp < 0) ||
+                ((op == "=" || op == "==") && cmp == 0);
+            if (!matched) return false;
+        }
+        if (end == std::string::npos) break;
+        pos = end + 1;
+    }
+    return true;
+}
+
+static bool _parse_int32_value(const std::string& raw, int32_t* out) {
+    if (!out) return false;
+    std::string trimmed = _trim_copy(raw);
+    if (trimmed.empty() || trimmed == "null") return false;
+    char* end = nullptr;
+    const long value = std::strtol(trimmed.c_str(), &end, 10);
+    if (!end || *end != '\0' || value < INT32_MIN || value > INT32_MAX) {
+        return false;
+    }
+    *out = static_cast<int32_t>(value);
+    return true;
 }
 
 struct ParsedJsonObject {
@@ -406,11 +576,15 @@ struct LicenseStatus {
     bool        not_yet_valid = false;
     bool        missing = false;
     bool        signature_invalid = false;
+    bool        machine_mismatch = false;
     std::string status = "invalid";
     std::string license_id;
     std::string valid_from;
     std::string valid_until;
+    std::string machine_fingerprint;
+    std::string version_constraint;
     int32_t     days_remaining = 0;
+    int32_t     max_instances = 4;
     std::vector<std::string> capabilities;
     std::string raw_json;
     int64_t     source_mtime = -1;
@@ -472,15 +646,23 @@ public:
         return *snapshot;
     }
 
-    bool is_capability_licensed(const std::string& cap_name) {
+    bool is_capability_licensed(const std::string& cap_name, const std::string& cap_version) {
         const LicenseStatus status = get();
-        if (!status.valid || status.expired || status.not_yet_valid || status.signature_invalid || status.missing) {
+        if (!status.valid || status.expired || status.not_yet_valid || status.signature_invalid ||
+            status.missing || status.machine_mismatch) {
             return false;
         }
         for (const auto& licensed : status.capabilities) {
-            if (licensed == "*" || licensed == cap_name) return true;
+            if (licensed == "*" || licensed == cap_name) {
+                return _version_satisfies_constraint(cap_version, status.version_constraint);
+            }
         }
         return false;
+    }
+
+    int32_t max_instances() {
+        const LicenseStatus status = get();
+        return status.max_instances > 0 ? status.max_instances : 1;
     }
 
     std::string to_json() {
@@ -506,7 +688,15 @@ public:
         } else {
             os << "\"" << _json_escape(status.valid_until) << "\"";
         }
-        os << ",\"days_remaining\":" << status.days_remaining
+        os << ",\"version_constraint\":";
+        if (status.version_constraint.empty()) {
+            os << "null";
+        } else {
+            os << "\"" << _json_escape(status.version_constraint) << "\"";
+        }
+        os << ",\"max_instances\":" << status.max_instances
+           << ",\"machine_mismatch\":" << (status.machine_mismatch ? "true" : "false")
+           << ",\"days_remaining\":" << status.days_remaining
            << ",\"source_mtime\":" << status.source_mtime
            << ",\"refreshed_at_ms\":" << status.refreshed_at_ms
            << ",\"last_success_at_ms\":" << status.last_success_at_ms
@@ -517,6 +707,53 @@ public:
             os << "\"" << _json_escape(status.capabilities[i]) << "\"";
         }
         os << "]}";
+        return os.str();
+    }
+
+    std::string failure_json(const std::string& cap_name, const std::string& cap_version) {
+        const LicenseStatus status = get();
+        int32_t code = 0;
+        std::string message;
+
+        if (status.signature_invalid) {
+            code = AI_ERR_LICENSE_SIGNATURE_INVALID;
+            message = "License signature invalid";
+        } else if (status.missing || status.status == "invalid") {
+            code = AI_ERR_LICENSE_INVALID;
+            message = "License invalid";
+        } else if (status.not_yet_valid) {
+            code = AI_ERR_LICENSE_NOT_YET_VALID;
+            message = "License not yet valid";
+        } else if (status.expired) {
+            code = AI_ERR_LICENSE_EXPIRED;
+            message = "License expired";
+        } else if (status.machine_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "Machine fingerprint mismatch";
+        } else {
+            bool capability_licensed = false;
+            for (const auto& licensed : status.capabilities) {
+                if (licensed == "*" || licensed == cap_name) {
+                    capability_licensed = true;
+                    break;
+                }
+            }
+            if (!capability_licensed) {
+                code = AI_ERR_CAP_NOT_LICENSED;
+                message = "Capability not licensed";
+            } else if (!_version_satisfies_constraint(cap_version, status.version_constraint)) {
+                code = AI_ERR_CAP_NOT_LICENSED;
+                message = "Capability version not licensed";
+            }
+        }
+
+        if (code == 0) return "";
+        std::ostringstream os;
+        os << "{"
+           << "\"code\":" << code
+           << ",\"message\":\"" << _json_escape(message) << "\""
+           << ",\"status_code\":403"
+           << "}";
         return os.str();
     }
 
@@ -567,22 +804,48 @@ private:
             return;
         }
 
-        const auto [has_started, days_until_start] = _check_valid_from(status.valid_from);
-        if (!has_started) {
-            status.status = "not_yet_valid";
-            status.not_yet_valid = true;
-            status.days_remaining = -days_until_start;
+        if (status.machine_mismatch) {
+            status.status = "machine_mismatch";
             return;
         }
 
-        const int32_t days = _compute_days_remaining(status.valid_until);
-        if (days < 0) {
+        const ParsedTimestamp valid_from = _parse_iso8601_timestamp(status.valid_from);
+        if (!valid_from.valid) {
+            status.status = "invalid";
+            return;
+        }
+        if (valid_from.present) {
+            const int64_t now = std::time(nullptr);
+            if (now < valid_from.unix_seconds) {
+                status.status = "not_yet_valid";
+                status.not_yet_valid = true;
+                status.days_remaining = -_ceil_days_from_seconds(valid_from.unix_seconds - now);
+                return;
+            }
+        }
+
+        const ParsedTimestamp valid_until = _parse_iso8601_timestamp(status.valid_until);
+        if (!valid_until.valid) {
+            status.status = "invalid";
+            return;
+        }
+        if (!valid_until.present) {
             status.status = "valid";
             status.valid = true;
             status.days_remaining = -1;
             return;
         }
-        if (days <= 0) {
+
+        const int64_t now = std::time(nullptr);
+        if (now > valid_until.unix_seconds) {
+            status.status = "expired";
+            status.expired = true;
+            status.days_remaining = 0;
+            return;
+        }
+
+        const int64_t remaining_seconds = valid_until.unix_seconds - now;
+        if (remaining_seconds < 0) {
             status.status = "expired";
             status.expired = true;
             status.days_remaining = 0;
@@ -591,7 +854,7 @@ private:
 
         status.status = "valid";
         status.valid = true;
-        status.days_remaining = days;
+        status.days_remaining = _ceil_days_from_seconds(remaining_seconds);
     }
 
     std::shared_ptr<LicenseStatus> build_snapshot() {
@@ -709,10 +972,21 @@ private:
             next->license_id = _json_string(json, "license_id");
             next->valid_from = _json_string(json, "valid_from");
             next->valid_until = _json_string(json, "valid_until");
+            next->machine_fingerprint = _json_string(json, "machine_fingerprint");
+            next->version_constraint = _json_string(json, "version_constraint");
+            next->max_instances = 4;
+            auto max_instances_it = parsed.values.find("max_instances");
+            if (max_instances_it != parsed.values.end()) {
+                int32_t parsed_max_instances = 4;
+                if (_parse_int32_value(max_instances_it->second, &parsed_max_instances) && parsed_max_instances > 0) {
+                    next->max_instances = parsed_max_instances;
+                }
+            }
             next->raw_json = json;
             next->source_mtime = license_mtime;
             next->signature_invalid = false;
             next->missing = false;
+            next->machine_mismatch = false;
             next->last_error.clear();
 
             const auto capabilities_it = parsed.values.find("capabilities");
@@ -787,6 +1061,13 @@ private:
             }
 #endif
 
+            const char* machine_fingerprint = std::getenv("AI_MACHINE_FINGERPRINT");
+            if (machine_fingerprint && machine_fingerprint[0] != '\0' &&
+                !next->machine_fingerprint.empty() &&
+                next->machine_fingerprint != machine_fingerprint) {
+                next->machine_mismatch = true;
+            }
+
             update_temporal_status(*next);
             next->last_error.clear();
             next->last_success_at_ms = next->refreshed_at_ms;
@@ -834,9 +1115,12 @@ void agilestar_license_set_pubkey_path(const char* path) {
     agilestar::LicenseCache::instance().set_pubkey_path(path ? path : "");
 }
 
-bool agilestar_license_is_valid(const char* cap_name) {
+bool agilestar_license_is_valid(const char* cap_name, const char* cap_version) {
     if (cap_name) {
-        return agilestar::LicenseCache::instance().is_capability_licensed(cap_name);
+        return agilestar::LicenseCache::instance().is_capability_licensed(
+            cap_name,
+            cap_version ? cap_version : ""
+        );
     }
     return agilestar::LicenseCache::instance().get().valid;
 }
@@ -847,4 +1131,15 @@ int32_t agilestar_license_get_json(char* buf, int32_t buf_len) {
     if (!buf || buf_len <= needed) return needed;
     std::memcpy(buf, json.c_str(), static_cast<size_t>(needed) + 1);
     return needed;
+}
+
+int32_t agilestar_license_get_max_instances() {
+    return agilestar::LicenseCache::instance().max_instances();
+}
+
+std::string agilestar_license_get_failure_json(const char* cap_name, const char* cap_version) {
+    return agilestar::LicenseCache::instance().failure_json(
+        cap_name ? cap_name : "",
+        cap_version ? cap_version : ""
+    );
 }

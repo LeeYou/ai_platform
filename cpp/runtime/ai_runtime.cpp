@@ -8,6 +8,7 @@
 
 #include "ai_runtime_impl.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <cstdio>
@@ -34,6 +35,7 @@ static std::unordered_map<std::string, std::string> g_model_dirs;
 static std::unordered_map<std::string, std::string> g_model_real_dirs;
 static std::unordered_map<std::string, std::string> g_model_versions;
 static std::mutex g_model_dirs_mutex;
+static thread_local std::string g_last_error_json;
 
 static std::string json_escape(const std::string& value) {
     std::string escaped;
@@ -108,6 +110,24 @@ static std::string resolve_pubkey_path(const char* license_path) {
     return resolved.substr(0, slash + 1) + "pubkey.pem";
 }
 
+static std::string build_error_json(int32_t code, const std::string& message, int32_t status_code) {
+    std::ostringstream os;
+    os << "{"
+       << "\"code\":" << code
+       << ",\"message\":\"" << json_escape(message) << "\""
+       << ",\"status_code\":" << status_code
+       << "}";
+    return os.str();
+}
+
+static void clear_last_error() {
+    g_last_error_json.clear();
+}
+
+static void set_last_error(const std::string& error_json) {
+    g_last_error_json = error_json;
+}
+
 // ---------------------------------------------------------------------------
 // AiRuntimeInit
 // ---------------------------------------------------------------------------
@@ -154,8 +174,9 @@ int32_t AiRuntimeInit(const char* so_dir,
                 cap.c_str(), mv);
         }
 
-        // Create instance pool (1 min, 4 max)
-        agilestar_pool_add(cap.c_str(), 1, 4, model_dir.c_str());
+        // Create instance pool (1 min, license-constrained max)
+        const int max_instances = std::max(1, agilestar_license_get_max_instances());
+        agilestar_pool_add(cap.c_str(), 1, max_instances, model_dir.c_str());
 
         std::lock_guard<std::mutex> lk2(g_model_dirs_mutex);
         g_model_dirs[cap] = model_dir;
@@ -217,20 +238,43 @@ static std::unordered_map<AiHandle, std::string> g_handle_cap;
 static std::mutex g_handle_cap_mutex;
 
 AiHandle AiRuntimeAcquire(const char* capability_name, int32_t timeout_ms) {
-    if (!capability_name) return nullptr;
+    clear_last_error();
+    if (!capability_name) {
+        set_last_error(build_error_json(AI_ERR_INVALID_PARAM, "Invalid capability name", 400));
+        return nullptr;
+    }
 
-    // License check
-    if (!agilestar_license_is_valid(capability_name)) {
+    std::string capability_version = "unknown";
+    {
+        std::lock_guard<std::mutex> lk(g_model_dirs_mutex);
+        auto version_it = g_model_versions.find(capability_name);
+        if (version_it != g_model_versions.end()) capability_version = version_it->second;
+    }
+
+    const std::string license_error = agilestar_license_get_failure_json(
+        capability_name,
+        capability_version.c_str()
+    );
+    if (!license_error.empty()) {
+        set_last_error(license_error);
         std::fprintf(stderr, "[Runtime] License not valid for capability: %s\n",
                      capability_name);
         return nullptr;
     }
 
-    AiHandle h = agilestar_pool_acquire(capability_name, timeout_ms);
-    if (h) {
-        std::lock_guard<std::mutex> lk(g_handle_cap_mutex);
-        g_handle_cap[h] = capability_name;
+    if (!agilestar_loader_find(capability_name)) {
+        set_last_error(build_error_json(3001, "Instance pool timeout or capability not available", 400));
+        return nullptr;
     }
+
+    AiHandle h = agilestar_pool_acquire(capability_name, timeout_ms);
+    if (!h) {
+        set_last_error(build_error_json(3001, "Instance pool timeout or capability not available", 400));
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> lk(g_handle_cap_mutex);
+    g_handle_cap[h] = capability_name;
     return h;
 }
 
@@ -334,6 +378,14 @@ int32_t AiRuntimeReload(const char* capability_name) {
 
 int32_t AiRuntimeGetLicenseStatus(char* buf, int32_t buf_len) {
     return agilestar_license_get_json(buf, buf_len);
+}
+
+int32_t AiRuntimeGetLastError(char* buf, int32_t buf_len) {
+    if (g_last_error_json.empty()) return 0;
+    const int32_t needed = static_cast<int32_t>(g_last_error_json.size());
+    if (!buf || buf_len <= needed) return needed;
+    std::memcpy(buf, g_last_error_json.c_str(), static_cast<size_t>(needed) + 1);
+    return needed;
 }
 
 // ---------------------------------------------------------------------------

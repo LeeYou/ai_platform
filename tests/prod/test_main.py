@@ -31,6 +31,9 @@ class _FakeRuntime:
     def get_license_status(self):
         return {"status": "active", "capabilities": ["face_detect"]}
 
+    def get_last_error(self):
+        return None
+
     def acquire(self, capability, timeout_ms=30000):
         return object()
 
@@ -418,7 +421,7 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_invalid_license_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "invalid"}
+        self.fake_runtime.get_last_error = lambda: {"code": 4001, "message": "License invalid", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
@@ -427,7 +430,7 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_expired_license_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "expired"}
+        self.fake_runtime.get_last_error = lambda: {"code": 4002, "message": "License expired", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
@@ -436,7 +439,7 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_not_yet_valid_license_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "not_yet_valid"}
+        self.fake_runtime.get_last_error = lambda: {"code": 4003, "message": "License not yet valid", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
@@ -445,16 +448,25 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_unlicensed_capability_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "active", "capabilities": ["other_cap"]}
+        self.fake_runtime.get_last_error = lambda: {"code": 4004, "message": "Capability not licensed", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
         self.assertEqual(response.status_code, 403)
         self.assertEqual(body["code"], 4004)
 
-    def test_infer_endpoint_keeps_3001_for_non_license_acquire_failure(self):
+    def test_infer_endpoint_keeps_3001_for_non_runtime_categorized_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "active", "capabilities": ["face_detect"]}
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(body["code"], 3001)
+
+    def test_infer_endpoint_does_not_recheck_license_status_in_web_layer(self):
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
+        self.fake_runtime.get_license_status = lambda: {"status": "expired"}
+        self.fake_runtime.get_last_error = lambda: None
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
