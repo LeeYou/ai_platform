@@ -366,15 +366,24 @@ def _cmake_flag_enabled(extra_args: list[str] | None, name: str) -> bool:
 
 
 def _capability_source_files(capability: str) -> list[str]:
-    cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities", capability)
-    if not os.path.isdir(cap_dir):
+    safe_capability = _safe_path_component(capability, "")
+    if not safe_capability or safe_capability != capability:
+        return []
+    cap_root = os.path.realpath(os.path.join(CPP_SOURCE_DIR, "capabilities"))
+    cap_dir = os.path.realpath(os.path.join(cap_root, safe_capability))
+    if cap_dir != os.path.join(cap_root, safe_capability) or not os.path.isdir(cap_dir):
         return []
 
     result: list[str] = []
     for root, _dirs, files in os.walk(cap_dir):
+        root = os.path.realpath(root)
+        if not root.startswith(cap_dir + os.sep) and root != cap_dir:
+            continue
         for name in files:
             if name.endswith((".c", ".cc", ".cpp", ".cxx", ".cu", ".h", ".hpp", ".hxx", ".cuh", ".txt")):
-                result.append(os.path.join(root, name))
+                path = os.path.realpath(os.path.join(root, name))
+                if path.startswith(cap_dir + os.sep):
+                    result.append(path)
     return result
 
 
