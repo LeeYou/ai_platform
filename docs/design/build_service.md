@@ -186,6 +186,8 @@ option(BUILD_ALL_CAPS       "构建所有能力插件" ON)
 > 宿主机必须先完成 `nvidia-container-toolkit` 配置，并通过 `docker run --rm --gpus all nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 nvidia-smi` 验证容器 GPU 链路。
 >
 > GPU builder 除了 CUDA Toolkit / ONNXRuntime GPU 外，还会预装 TensorRT 开发头文件与库（如 `NvInfer.h`、`libnvinfer.so`），用于满足 `ENABLE_TENSORRT=ON` 的编译期依赖。
+>
+> 为避免 Ubuntu Jammy 仓库中的旧版 `libnvonnxparsers-dev` / `libnvparsers-dev` 与 NVIDIA CUDA 仓库中的新版 TensorRT 包产生依赖冲突，GPU builder 仅安装核心 TensorRT dev 包；当前 `FindTensorRT.cmake` 的编译期探测也只依赖 `NvInfer.h` 与 `libnvinfer.so`。
 
 **实现示例**（所有能力插件已实现）：
 

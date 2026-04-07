@@ -20,6 +20,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # ---------------------------------------------------------------------------
 # Build toolchain
 # ---------------------------------------------------------------------------
+# TensorRT compile-time integration only requires NvInfer.h + libnvinfer.so.
+# Avoid Ubuntu's legacy parser dev packages here because they can pull an older
+# TensorRT dependency chain that conflicts with the NVIDIA CUDA repo packages
+# present in the CUDA 11.8 devel base image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc-12 g++-12 \
@@ -28,8 +32,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     libnvinfer-dev \
     libnvinfer-plugin-dev \
-    libnvonnxparsers-dev \
-    libnvparsers-dev \
     curl \
     ca-certificates \
     python3 \
