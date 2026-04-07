@@ -1,8 +1,8 @@
 # =============================================================================
-# build/Dockerfile.linux_x86
-# Linux x86_64 编译镜像（GCC 12 + CMake 3.22+ + ONNXRuntime + OpenSSL）
-# 两阶段构建：Node.js 编译前端 + Ubuntu 编译环境运行后端
-# 镜像名：agilestar/ai-builder-linux-x86:latest
+# build/Dockerfile.linux_x86_gpu
+# Linux x86_64 GPU 编译镜像（CUDA 11.8 + cuDNN 8 + GCC 12 + ONNXRuntime GPU）
+# 两阶段构建：Node.js 编译前端 + NVIDIA CUDA devel 运行后端
+# 镜像名：agilestar/ai-builder-linux-x86-gpu:latest
 # =============================================================================
 
 # ─── Stage 1: Frontend builder ──────────────────────────────────────────────
@@ -13,7 +13,7 @@ COPY build/frontend/ build/frontend/
 RUN cd build/frontend && npm install && npm run build
 
 # ─── Stage 2: Runtime ───────────────────────────────────────────────────────
-FROM ubuntu:22.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -35,19 +35,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# ONNXRuntime (CPU, latest stable)
+# ONNXRuntime GPU (aligned with prod)
 # ---------------------------------------------------------------------------
 ARG ONNXRUNTIME_VERSION=1.18.1
-ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64
-RUN curl -fsSL \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
-    -o /tmp/ort.tgz \
+ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64-gpu
+ARG GITHUB_HTTPS_PROXY=
+ARG GITHUB_HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG https_proxy=
+ARG HTTP_PROXY=
+ARG http_proxy=
+RUN github_proxy="${GITHUB_HTTPS_PROXY:-${GITHUB_HTTP_PROXY:-${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}}}" \
+    && curl -x "${github_proxy}" -fsSL \
+        "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
+        -o /tmp/ort.tgz \
     && tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1 \
-    && rm /tmp/ort.tgz
+    && rm /tmp/ort.tgz \
+    && test -x /usr/local/cuda/bin/nvcc \
+    && ldconfig -p | grep -q "libcudnn.so.8" \
+    && test -f /usr/local/lib/libonnxruntime_providers_cuda.so
 
 ENV ONNXRUNTIME_ROOT=/usr/local \
-    BUILDER_IMAGE=agilestar/ai-builder-linux-x86:latest \
-    BUILDER_TOOLCHAIN_PROFILE=cpu-ort
+    CUDA_HOME=/usr/local/cuda \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib64:/usr/local/lib:${LD_LIBRARY_PATH} \
+    BUILDER_IMAGE=agilestar/ai-builder-linux-x86-gpu:latest \
+    BUILDER_TOOLCHAIN_PROFILE=cuda11.8-cudnn8
 
 # ---------------------------------------------------------------------------
 # FastAPI build management backend

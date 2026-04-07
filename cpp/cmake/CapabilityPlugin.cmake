@@ -15,7 +15,7 @@
 #   - 创建 shared library 目标（lib<NAME>.so / <NAME>.dll）
 #   - 链接公共 SDK 头文件
 #   - 链接 ONNXRuntime（必选）
-#   - 链接 TensorRT / CUDA（当 BUILD_GPU=ON 时）
+#   - 链接 TensorRT（当 ENABLE_TENSORRT=ON 时）
 #   - 链接 License 校验库（libai_license）
 #   - 应用统一编译选项
 #   - 配置安装规则（输出到 CMAKE_INSTALL_PREFIX/lib/）
@@ -77,7 +77,7 @@ function(add_capability_plugin)
     endif()
 
     # TensorRT（可选 GPU 加速）
-    if(BUILD_GPU AND TARGET TensorRT::TensorRT)
+    if(ENABLE_TENSORRT AND TARGET TensorRT::TensorRT)
         target_link_libraries(${TARGET_NAME} PRIVATE TensorRT::TensorRT)
         target_compile_definitions(${TARGET_NAME} PRIVATE AI_ENABLE_TENSORRT=1)
     endif()

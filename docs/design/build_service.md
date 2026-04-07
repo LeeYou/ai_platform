@@ -17,7 +17,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| 镜像名 | `agilestar/ai-builder-linux-x86:latest` |
+| 镜像名 | `agilestar/ai-builder-linux-x86:latest`（CPU/ORT） / `agilestar/ai-builder-linux-x86-gpu:latest`（CUDA devel） |
 | 基础镜像 | `ubuntu:22.04` |
 | 编译器 | GCC 12 / G++ 12 |
 | CMake 版本 | ≥3.26 |
@@ -136,10 +136,12 @@ add_capability_plugin(
 
 ```cmake
 # 顶层 CMakeLists.txt 主要选项
-option(BUILD_GPU        "启用 GPU 推理（需要 CUDA + TensorRT）" OFF)
-option(BUILD_JNI        "构建 JNI 接口层" OFF)
-option(BUILD_TESTS      "构建单元测试" OFF)
-option(BUILD_ALL_CAPS   "构建所有能力插件" ON)
+option(BUILD_GPU            "兼容旧参数；运行时 GPU 优先由能力插件自动探测" OFF)
+option(ENABLE_TENSORRT      "启用编译期 TensorRT 依赖" OFF)
+option(ENABLE_CUDA_KERNELS  "启用编译期 CUDA Toolkit 依赖" OFF)
+option(BUILD_JNI            "构建 JNI 接口层" OFF)
+option(BUILD_TESTS          "构建单元测试" OFF)
+option(BUILD_ALL_CAPS       "构建所有能力插件" ON)
 
 # 目标平台（交叉编译时由工具链文件指定）
 # cmake -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain_aarch64.cmake ..
@@ -167,9 +169,21 @@ option(BUILD_ALL_CAPS   "构建所有能力插件" ON)
    - GPU 性能提升：**3-10倍**
 
 4. **编译要求**
-   - 需要链接 ONNXRuntime GPU 版本
-   - 生产镜像需包含 CUDA Runtime（libcudart.so）
-   - 无需在编译时指定 BUILD_GPU=ON（运行时自动检测）
+   - 纯 ONNXRuntime CUDA EP 能力：**无需 CUDA Toolkit / nvcc 即可编译**
+   - 生产镜像需包含 CUDA Runtime（libcudart.so）和 ONNXRuntime GPU provider
+   - `BUILD_GPU` 仅为兼容旧参数；不再触发编译期 CUDA/TensorRT 探测
+   - 仅当能力需要 TensorRT / 自定义 CUDA kernels 时，才显式传：
+     - `-DENABLE_TENSORRT=ON`
+     - `-DENABLE_CUDA_KERNELS=ON`
+
+### 5.2 Builder 分层
+
+| Builder | 镜像 | 适用场景 |
+|---------|------|---------|
+| CPU/ORT Builder | `agilestar/ai-builder-linux-x86:latest` | 默认 C++ / OpenSSL / ONNXRuntime 构建；支持运行时 GPU 优先、CPU 回退的能力 |
+| GPU Builder | `agilestar/ai-builder-linux-x86-gpu:latest` | 需要 CUDA Toolkit / nvcc 的编译；与 prod 对齐 CUDA 11.8 + cuDNN 8 + ONNXRuntime GPU |
+
+> 宿主机必须先完成 `nvidia-container-toolkit` 配置，并通过 `docker run --rm --gpus all nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 nvidia-smi` 验证容器 GPU 链路。
 
 **实现示例**（所有能力插件已实现）：
 
@@ -245,8 +259,15 @@ if (status != nullptr) {
   "cmake_version": "3.26.4",
   "build_type": "Release",
   "gpu_enabled": true,
-  "onnxruntime_version": "1.16.0",
-  "tensorrt_version": "8.6.1",
+  "runtime_gpu_capable": true,
+  "compile_gpu_mode": "runtime_only",
+  "compile_gpu_features": [],
+  "build_gpu_toolchain": false,
+  "builder_toolchain_profile": "cpu-ort",
+  "builder_image": "agilestar/ai-builder-linux-x86:latest",
+  "onnxruntime_package": "cpu",
+  "cuda_toolkit_available": false,
+  "tensorrt_available": false,
   "built_at": "2026-03-27T08:00:00Z",
   "built_by": "agilestar/ai-builder-linux-x86:1.0.0",
   "git_commit": "abc1234"
@@ -267,8 +288,10 @@ if (status != nullptr) {
 容器内执行：
   cmake -B build -S /workspace/src/cpp \
         -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_GPU=ON \
         -DCMAKE_INSTALL_PREFIX=/workspace/output
+  # 如需编译期 TensorRT / CUDA kernels，再显式增加：
+  #   -DENABLE_TENSORRT=ON
+  #   -DENABLE_CUDA_KERNELS=ON
   cmake --build build --target <capability> -- -j$(nproc)
   cmake --install build
         ↓

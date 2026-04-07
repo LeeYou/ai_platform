@@ -1,6 +1,6 @@
 # =============================================================================
 # FindTensorRT.cmake
-# 查找 TensorRT 库（仅在 BUILD_GPU=ON 时使用），提供导入目标 TensorRT::TensorRT
+# 查找 TensorRT 库（仅在 ENABLE_TENSORRT=ON 时使用），提供导入目标 TensorRT::TensorRT
 # =============================================================================
 
 set(_TRT_SEARCH_ROOTS
@@ -36,6 +36,13 @@ include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(TensorRT
     REQUIRED_VARS TensorRT_INCLUDE_DIR TensorRT_LIBRARY
 )
+
+if(NOT TensorRT_FOUND)
+    message(FATAL_ERROR
+        "TensorRT is required for ENABLE_TENSORRT=ON. "
+        "Set TENSORRT_ROOT or use the GPU builder image that ships TensorRT headers/libs."
+    )
+endif()
 
 if(TensorRT_FOUND AND NOT TARGET TensorRT::TensorRT)
     add_library(TensorRT::TensorRT SHARED IMPORTED)

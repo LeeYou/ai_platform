@@ -18,7 +18,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 # 顶层构建选项
 # ---------------------------------------------------------------------------
-option(BUILD_GPU      "启用 GPU 推理（需要 CUDA + ONNXRuntime-GPU / TensorRT）" OFF)
+option(BUILD_GPU      "兼容旧参数：能力插件会在运行时自动探测 GPU；编译期 GPU 依赖请使用 ENABLE_TENSORRT / ENABLE_CUDA_KERNELS" OFF)
+option(ENABLE_TENSORRT "启用编译期 TensorRT 依赖（需要 CUDA Toolkit + TensorRT + ONNXRuntime-GPU）" OFF)
+option(ENABLE_CUDA_KERNELS "启用编译期 CUDA Toolkit 依赖（例如自定义 CUDA kernels / nvcc）" OFF)
 option(BUILD_JNI      "构建 JNI 接口层（libai_jni.so）" OFF)
 option(BUILD_TESTS    "构建单元测试（需要 Google Test）" OFF)
 option(BUILD_ALL_CAPS "构建所有能力插件" ON)
@@ -54,7 +56,14 @@ include(CompilerFlags)
 include(CapabilityPlugin)
 
 if(BUILD_GPU)
+    message(STATUS "BUILD_GPU=ON is compatibility-only; runtime GPU fallback is auto-detected by capability plugins.")
+endif()
+
+if(ENABLE_TENSORRT OR ENABLE_CUDA_KERNELS)
     include(FindCUDA)
+endif()
+
+if(ENABLE_TENSORRT)
     include(FindTensorRT)
 endif()
 
