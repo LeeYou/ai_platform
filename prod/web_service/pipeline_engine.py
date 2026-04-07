@@ -279,7 +279,7 @@ def execute_pipeline(
     pipeline: dict,
     image_bytes: bytes,
     infer_fn,
-    check_license_fn,
+    check_license_fn=None,
     global_options: dict | None = None,
 ) -> dict:
     """Execute a pipeline and return the full result.
@@ -288,7 +288,7 @@ def execute_pipeline(
         pipeline: The pipeline definition dict.
         image_bytes: Raw image bytes from the uploaded file.
         infer_fn: Callable(capability, image_bytes, options) -> dict with inference result.
-        check_license_fn: Callable(capability) -> None, raises if not licensed.
+        check_license_fn: Optional callable(capability) -> None, raises if not licensed.
         global_options: Optional per-step option overrides {step_id: {options}}.
 
     Returns:
@@ -310,12 +310,13 @@ def execute_pipeline(
             try:
                 cond_result = _eval_expression(condition, context)
             except Exception as exc:
+                logger.warning("Pipeline step %s condition evaluation failed: %s", step_id, exc, exc_info=True)
                 step_results.append({
                     "step_id": step_id,
                     "capability": capability,
                     "status": "error",
                     "time_ms": 0,
-                    "error": f"Condition evaluation error: {exc}",
+                    "error": "Condition evaluation error",
                 })
                 if step.get("on_failure", "abort") == "abort":
                     break
@@ -333,21 +334,22 @@ def execute_pipeline(
                 context[step_id] = {}
                 continue
 
-        # License check
-        try:
-            check_license_fn(capability)
-        except Exception as exc:
-            step_results.append({
-                "step_id": step_id,
-                "capability": capability,
-                "status": "error",
-                "time_ms": 0,
-                "error": str(exc),
-            })
-            if step.get("on_failure", "abort") == "abort":
-                break
-            context[step_id] = {}
-            continue
+        if check_license_fn is not None:
+            try:
+                check_license_fn(capability)
+            except Exception as exc:
+                logger.warning("Pipeline step %s license check failed: %s", step_id, exc, exc_info=True)
+                step_results.append({
+                    "step_id": step_id,
+                    "capability": capability,
+                    "status": "error",
+                    "time_ms": 0,
+                    "error": "License check failed",
+                })
+                if step.get("on_failure", "abort") == "abort":
+                    break
+                context[step_id] = {}
+                continue
 
         # Merge step options with global overrides
         opts = dict(step.get("options", {}))
@@ -380,12 +382,13 @@ def execute_pipeline(
 
         except Exception as exc:
             elapsed = round((time.perf_counter() - t0) * 1000, 2)
+            logger.error("Pipeline step %s execution failed: %s", step_id, exc, exc_info=True)
             step_results.append({
                 "step_id": step_id,
                 "capability": capability,
                 "status": "error",
                 "time_ms": elapsed,
-                "error": str(exc),
+                "error": "Step execution failed",
             })
             context[step_id] = {}
             on_failure = step.get("on_failure", "abort")

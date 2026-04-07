@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -93,35 +94,42 @@ static bool _read_file(const std::string& path, std::string& out) {
     return true;
 }
 
-// Simple JSON string extractor
-static std::string _jstr(const std::string& json, const std::string& key) {
+static bool _jint(const std::string& json, const std::string& key, int* out) {
+    if (!out) return false;
     std::string needle = "\"" + key + "\"";
     auto pos = json.find(needle);
-    if (pos == std::string::npos) return "";
+    if (pos == std::string::npos) return false;
     pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return "";
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return "";
-    auto end = json.find('"', pos + 1);
-    if (end == std::string::npos) return "";
-    return json.substr(pos + 1, end - pos - 1);
-}
+    if (pos == std::string::npos) return false;
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        ++pos;
+    }
+    if (pos >= json.size()) return false;
 
-// ---------------------------------------------------------------------------
-// License check (runtime soft check — does not re-read file every call)
-// ---------------------------------------------------------------------------
+    std::string token;
+    if (json[pos] == '"') {
+        auto end = json.find('"', pos + 1);
+        if (end == std::string::npos) return false;
+        token = json.substr(pos + 1, end - pos - 1);
+    } else {
+        auto end = pos;
+        if (json[end] == '-' || json[end] == '+') ++end;
+        while (end < json.size() && std::isdigit(static_cast<unsigned char>(json[end]))) {
+            ++end;
+        }
+        if (end == pos || ((json[pos] == '-' || json[pos] == '+') && end == pos + 1)) {
+            return false;
+        }
+        token = json.substr(pos, end - pos);
+    }
 
-static bool _check_license_capability(const std::string& license_path) {
-    std::string content;
-    if (!_read_file(license_path, content)) return false;
-    // Check capability "recapture_detect" appears in capabilities array
-    auto cap_pos = content.find("\"capabilities\"");
-    if (cap_pos == std::string::npos) return false;
-    auto arr_start = content.find('[', cap_pos);
-    auto arr_end   = content.find(']', arr_start);
-    if (arr_start == std::string::npos || arr_end == std::string::npos) return false;
-    std::string arr = content.substr(arr_start, arr_end - arr_start + 1);
-    return arr.find("\"recapture_detect\"") != std::string::npos;
+    try {
+        *out = std::stoi(token);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,11 +206,14 @@ AI_EXPORT AiHandle AiCreate(const char* model_dir, const char* /*config_json*/) 
     std::string prep_path = ctx->model_dir + "/preprocess.json";
     std::string prep_json;
     if (_read_file(prep_path, prep_json)) {
-        // Parse resize.width / resize.height
-        auto rw = _jstr(prep_json, "width");
-        auto rh = _jstr(prep_json, "height");
-        if (!rw.empty()) ctx->input_width  = std::stoi(rw);
-        if (!rh.empty()) ctx->input_height = std::stoi(rh);
+        int parsed_width = 0;
+        int parsed_height = 0;
+        if (_jint(prep_json, "width", &parsed_width)) {
+            ctx->input_width = parsed_width;
+        }
+        if (_jint(prep_json, "height", &parsed_height)) {
+            ctx->input_height = parsed_height;
+        }
     }
 
     return static_cast<AiHandle>(ctx);
@@ -211,21 +222,6 @@ AI_EXPORT AiHandle AiCreate(const char* model_dir, const char* /*config_json*/) 
 AI_EXPORT int32_t AiInit(AiHandle handle) {
     if (!handle) return AI_ERR_INVALID_PARAM;
     auto* ctx = static_cast<RecaptureContext*>(handle);
-
-    // License check
-    std::string license_path = std::string(ctx->model_dir) + "/../../../licenses/license.bin";
-    // Allow override via env
-    const char* env_lic = std::getenv("AI_LICENSE_PATH");
-    if (env_lic) license_path = env_lic;
-
-    if (!_check_license_capability(license_path)) {
-        // License file may not exist in dev/test mode — warn but proceed
-        std::fprintf(stderr,
-            "[recapture_detect] WARNING: License check failed for recapture_detect "
-            "(path=%s). Proceeding in dev mode.\n",
-            license_path.c_str());
-    }
-    ctx->license_path = license_path;
 
 #if HAS_ORT
     // Load ONNX model
@@ -286,16 +282,6 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
 AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* output) {
     if (!handle || !input || !output) return AI_ERR_INVALID_PARAM;
     auto* ctx = static_cast<RecaptureContext*>(handle);
-
-    // Periodic license check every 1000 inferences
-    uint64_t cnt = ctx->infer_count.fetch_add(1);
-    if (cnt % 1000 == 0 && cnt > 0) {
-        if (!_check_license_capability(ctx->license_path)) {
-            _set_result(output, AI_ERR_LICENSE_EXPIRED,
-                        nullptr, "License expired or invalid");
-            return AI_ERR_LICENSE_EXPIRED;
-        }
-    }
 
 #if HAS_ORT
     if (!ctx->session) {

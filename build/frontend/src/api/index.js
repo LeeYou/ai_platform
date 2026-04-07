@@ -5,6 +5,27 @@ const http = axios.create({
   timeout: 30000,
 })
 
+export function getAdminToken() {
+  return (
+    window.localStorage.getItem('ai_admin_token') ||
+    window.sessionStorage.getItem('ai_admin_token') ||
+    import.meta.env.VITE_AI_ADMIN_TOKEN ||
+    ''
+  ).trim()
+}
+
+function attachAdminHeaders(config = {}) {
+  const token = getAdminToken()
+  if (!token) return config
+  return {
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  }
+}
+
 /**
  * Extract a human-readable error message from any error shape.
  * Handles: AxiosError, FastAPI validation arrays, plain objects, strings.
@@ -44,9 +65,15 @@ http.interceptors.response.use(
   }
 )
 
+http.interceptors.request.use((config) => attachAdminHeaders(config))
+
 // Capabilities
 export function getCapabilities() {
   return http.get('/capabilities')
+}
+
+export function getCapabilityDiagnostics() {
+  return http.get('/capabilities/diagnostics')
 }
 
 // Key Pairs (proxied from license service)
@@ -91,5 +118,7 @@ export function connectBuildWs(jobId) {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   const encoded = encodeURIComponent(jobId)
-  return new WebSocket(`${proto}//${host}/ws/build/${encoded}`)
+  const token = getAdminToken()
+  const suffix = token ? `?token=${encodeURIComponent(token)}` : ''
+  return new WebSocket(`${proto}//${host}/ws/build/${encoded}${suffix}`)
 }

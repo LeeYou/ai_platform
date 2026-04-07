@@ -7,10 +7,16 @@ Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agile
 
 from __future__ import annotations
 
+import asyncio
+import ctypes
 import json
 import logging
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -28,6 +34,13 @@ CST = timezone(timedelta(hours=8))
 
 LOG_DIR = os.getenv("LOG_DIR", "/mnt/ai_platform/logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
+
+
+class _HealthCheckFilter(logging.Filter):
+    """Suppress high-frequency health-probe entries from uvicorn access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /api/v1/health" not in record.getMessage()
 
 
 def _setup_logging() -> logging.Logger:
@@ -52,6 +65,9 @@ def _setup_logging() -> logging.Logger:
     app_logger.addHandler(file_handler)
     app_logger.addHandler(console_handler)
     app_logger.propagate = False
+
+    # Silence health-probe noise from uvicorn's built-in access logger.
+    logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
 
     return app_logger
 
@@ -101,15 +117,200 @@ except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
 
+try:
+    from ab_testing import ABTestManager
+except Exception:
+    logger.error("Failed to import A/B testing module, falling back to disabled manager:\n%s", traceback.format_exc())
+
+    class ABTestManager:  # type: ignore[no-redef]
+        def __init__(self, _config_dir: str) -> None:
+            self._tests: dict[str, dict] = {}
+
+        def reload(self) -> None:
+            self._tests.clear()
+
+        def get_version_for_request(self, _capability: str, _session_id: str | None = None) -> str:
+            return "current"
+
+        def get_test_info(self, _capability: str) -> dict[str, Any]:
+            return {}
+
+        def list_active_tests(self) -> dict[str, dict]:
+            return {}
+
 # ---------------------------------------------------------------------------
 # Admin token (simple bearer auth for reload endpoint)
 # ---------------------------------------------------------------------------
 
 ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme")
+MAX_UPLOAD_BYTES = max(1, int(os.getenv("AI_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024))))
+INFER_MAX_CONCURRENCY = max(1, int(os.getenv("AI_INFER_MAX_CONCURRENCY", "16")))
+INFER_CONCURRENCY_TIMEOUT_SECONDS = max(
+    1,
+    int(os.getenv("AI_INFER_CONCURRENCY_TIMEOUT_SECONDS", "30")),
+)
+AB_TEST_CONFIG_DIR = os.getenv(
+    "AI_AB_TEST_CONFIG_DIR",
+    os.path.join(os.getenv("MOUNT_ROOT", "/mnt/ai_platform"), "ab_tests"),
+)
+_infer_request_semaphore = asyncio.Semaphore(INFER_MAX_CONCURRENCY)
+ab_manager = ABTestManager(AB_TEST_CONFIG_DIR)
+_runtime_libs_stage_dir: str | None = None
+_runtime_dependency_handles: list[ctypes.CDLL] = []
 
 # ---------------------------------------------------------------------------
 # Runtime initialization
 # ---------------------------------------------------------------------------
+
+def _cleanup_runtime_libs_stage_dir() -> None:
+    global _runtime_libs_stage_dir, _runtime_dependency_handles
+    if _runtime_libs_stage_dir and os.path.isdir(_runtime_libs_stage_dir):
+        shutil.rmtree(_runtime_libs_stage_dir, ignore_errors=True)
+    _runtime_libs_stage_dir = None
+    _runtime_dependency_handles = []
+
+
+def _is_shared_library_filename(name: str) -> bool:
+    return bool(re.search(r"\.so(?:\.\d+)*$", name))
+
+
+def _is_runtime_plugin_filename(name: str, capability: str) -> bool:
+    prefix = f"lib{capability}.so"
+    if name == prefix:
+        return True
+    if not name.startswith(prefix + "."):
+        return False
+    suffix = name[len(prefix) + 1:]
+    return bool(suffix) and all(part.isdigit() for part in suffix.split("."))
+
+
+def _select_runtime_plugin_path(capability: str, candidates: list[str]) -> str:
+    preferred_name = f"lib{capability}.so"
+    return sorted(
+        candidates,
+        key=lambda path: (
+            os.path.basename(path) != preferred_name,
+            len(os.path.basename(path)),
+            os.path.basename(path),
+        ),
+    )[0]
+
+
+def _discover_nested_runtime_libs(libs_dir: str) -> tuple[list[str], list[str]]:
+    plugin_paths: list[str] = []
+    dependency_paths: set[str] = set()
+
+    for root, _, files in os.walk(libs_dir, followlinks=True):
+        if os.path.basename(root) != "lib":
+            continue
+        capability_root = os.path.dirname(root)
+        capability = os.path.basename(capability_root)
+        if capability == "current":
+            capability = os.path.basename(os.path.dirname(capability_root))
+        shared_objects = [
+            os.path.join(root, name)
+            for name in files
+            if _is_shared_library_filename(name)
+        ]
+        if not shared_objects:
+            continue
+
+        plugin_candidates = [
+            path for path in shared_objects
+            if _is_runtime_plugin_filename(os.path.basename(path), capability)
+        ]
+        if not plugin_candidates:
+            continue
+
+        selected_plugin = _select_runtime_plugin_path(capability, plugin_candidates)
+        plugin_paths.append(selected_plugin)
+
+        for path in shared_objects:
+            basename = os.path.basename(path)
+            if path == selected_plugin or basename.startswith("libai_runtime.so"):
+                continue
+            if path not in plugin_candidates:
+                dependency_paths.add(path)
+
+    return sorted(set(plugin_paths)), sorted(dependency_paths)
+
+
+def _preload_runtime_dependencies(dependency_paths: list[str]) -> None:
+    global _runtime_dependency_handles
+    if not dependency_paths:
+        return
+
+    mode = getattr(ctypes, "RTLD_GLOBAL", 0)
+    handles: list[ctypes.CDLL] = []
+    for dependency_path in dependency_paths:
+        try:
+            handles.append(ctypes.CDLL(dependency_path, mode=mode))
+        except OSError as exc:
+            logger.warning("Failed to preload runtime dependency %s: %s", dependency_path, exc)
+    _runtime_dependency_handles = handles
+
+
+def _prepare_runtime_libs_dir(libs_dir: str) -> str:
+    """Stage nested shared libraries into a flat directory for the native loader."""
+    global _runtime_libs_stage_dir
+    if not os.path.isdir(libs_dir):
+        return libs_dir
+
+    direct_shared_objects = [
+        name for name in os.listdir(libs_dir)
+        if os.path.isfile(os.path.join(libs_dir, name)) and _is_shared_library_filename(name)
+    ]
+    if direct_shared_objects:
+        return libs_dir
+
+    plugin_paths, dependency_paths = _discover_nested_runtime_libs(libs_dir)
+    if not plugin_paths:
+        return libs_dir
+
+    _cleanup_runtime_libs_stage_dir()
+    stage_dir = tempfile.mkdtemp(prefix="ai_runtime_libs_")
+    for source_path in plugin_paths:
+        target_path = os.path.join(stage_dir, os.path.basename(source_path))
+        if os.path.lexists(target_path):
+            continue
+        try:
+            os.symlink(source_path, target_path)
+        except OSError:
+            shutil.copy2(source_path, target_path)
+
+    _preload_runtime_dependencies(dependency_paths)
+    _runtime_libs_stage_dir = stage_dir
+    logger.info(
+        "Prepared staged runtime plugin directory %s from %s with %d plugin(s) and %d preloaded dependency library(ies)",
+        stage_dir, libs_dir, len(plugin_paths), len(dependency_paths),
+    )
+    return stage_dir
+
+
+def _derive_pubkey_path_from_license(license_path: str) -> str:
+    if not license_path:
+        return ""
+    license_dir = os.path.dirname(license_path)
+    if not license_dir:
+        return ""
+    return os.path.join(license_dir, "pubkey.pem")
+
+
+def _resolve_effective_pubkey_path() -> str:
+    env_pubkey_path = os.getenv("AI_PUBKEY_PATH", "").strip()
+    if env_pubkey_path:
+        return env_pubkey_path
+
+    configured_pubkey_path = (PUBKEY_PATH or "").strip()
+    if configured_pubkey_path and os.path.exists(configured_pubkey_path):
+        return configured_pubkey_path
+
+    derived_pubkey_path = _derive_pubkey_path_from_license(LICENSE_PATH)
+    if derived_pubkey_path:
+        return derived_pubkey_path
+
+    return configured_pubkey_path
+
 
 def _init_runtime() -> bool:
     """Initialize C++ Runtime layer with SO directory, models, and license."""
@@ -120,15 +321,24 @@ def _init_runtime() -> bool:
         return False
 
     libs_dir = resolve_libs_dir()
+    loader_libs_dir = _prepare_runtime_libs_dir(libs_dir)
     models_dir = resolve_models_dir()
+    effective_pubkey_path = _resolve_effective_pubkey_path()
 
     logger.info("Initializing C++ Runtime:")
     logger.info("  Runtime SO:    %s", runtime_so)
     logger.info("  Libs dir:      %s", libs_dir)
+    if loader_libs_dir != libs_dir:
+        logger.info("  Loader dir:    %s", loader_libs_dir)
     logger.info("  Models dir:    %s", models_dir)
     logger.info("  License path:  %s", LICENSE_PATH)
+    if effective_pubkey_path:
+        logger.info("  Pubkey path:   %s", effective_pubkey_path)
 
-    success = init_runtime(runtime_so, libs_dir, models_dir, LICENSE_PATH)
+    if effective_pubkey_path:
+        os.environ["AI_PUBKEY_PATH"] = effective_pubkey_path
+
+    success = init_runtime(runtime_so, loader_libs_dir, models_dir, LICENSE_PATH)
     if not success:
         logger.error("Failed to initialize C++ Runtime — check logs above")
         return False
@@ -138,6 +348,9 @@ def _init_runtime() -> bool:
         caps = runtime.get_capabilities()
         logger.info("Runtime loaded %d capabilities: %s", len(caps), [c["name"] for c in caps])
 
+    ab_manager.reload()
+    logger.info("A/B test manager loaded %d active tests", len(ab_manager.list_active_tests()))
+
     return True
 
 
@@ -145,202 +358,29 @@ def _init_runtime() -> bool:
 # License status helper
 # ---------------------------------------------------------------------------
 
-def _verify_license_signature(license_json: str) -> bool:
-    """Verify license RSA signature using mounted public key. Returns True if valid."""
-    if not os.path.exists(PUBKEY_PATH):
-        if TRUSTED_PUBKEY_SHA256:
-            logger.error("No public key at %s but TRUSTED_PUBKEY_SHA256 is set — DENIED", PUBKEY_PATH)
-            return False
-        logger.warning("No public key at %s — skipping signature verification", PUBKEY_PATH)
-        return True  # no pubkey = skip verification (dev/test mode)
-    try:
-        with open(PUBKEY_PATH, encoding="utf-8") as f:
-            pubkey_pem = f.read()
-
-        # Verify public key fingerprint against trusted hash (anti-forgery)
-        if TRUSTED_PUBKEY_SHA256:
-            import hashlib
-            actual_fp = hashlib.sha256(pubkey_pem.encode("utf-8")).hexdigest()
-            if actual_fp != TRUSTED_PUBKEY_SHA256:
-                logger.error(
-                    "Public key fingerprint MISMATCH — possible tampering!\n"
-                    "  expected: %s\n  actual:   %s",
-                    TRUSTED_PUBKEY_SHA256, actual_fp,
-                )
-                return False
-            logger.debug("Public key fingerprint verified: %s", actual_fp[:16] + "...")
-
-        # Re-use the same signing logic as license_signer for verification
-        import base64
-        data = json.loads(license_json)
-        sig_b64 = data.get("signature")
-        if not sig_b64:
-            logger.warning("License has no signature field")
-            return False
-        # Build canonical JSON (sorted keys, no spaces, excluding signature)
-        payload = {k: v for k, v in data.items() if k != "signature"}
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                               ensure_ascii=False).encode("utf-8")
-        sig_bytes = base64.b64decode(sig_b64)
-        # Use cryptography library if available, otherwise skip
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import padding
-        from cryptography.exceptions import InvalidSignature
-        public_key = serialization.load_pem_public_key(pubkey_pem.encode("utf-8"))
-        public_key.verify(
-            sig_bytes,
-            canonical,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH,
-            ),
-            hashes.SHA256(),
-        )
-        return True
-    except ImportError:
-        if TRUSTED_PUBKEY_SHA256:
-            logger.error("cryptography library not available but TRUSTED_PUBKEY_SHA256 is set — DENIED")
-            return False
-        logger.warning("cryptography library not available — skipping signature verification")
-        return True
-    except InvalidSignature:
-        logger.error("License signature verification FAILED — signature invalid")
-        return False
-    except Exception as exc:
-        logger.error("License signature verification error: %s", exc)
-        return False
-
-
-def _compute_days_remaining(valid_until: str | None) -> int:
-    """Compute days remaining from ISO-8601 valid_until string.
-    All times are treated as CST (UTC+8)."""
-    if not valid_until:
-        return 9999  # permanent license
-    try:
-        from datetime import datetime as dt
-        import math
-        # Parse ISO-8601 (with or without Z/offset)
-        exp_str = valid_until.replace("Z", "+08:00")
-        exp = dt.fromisoformat(exp_str)
-        # If naive datetime (no timezone), treat as CST
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=CST)
-        now = dt.now(CST)
-        diff = (exp - now).total_seconds() / 86400  # Use total_seconds for precision
-        # Use floor to ensure negative fractional days are rounded down (e.g., -0.5 -> -1)
-        return math.floor(diff)
-    except Exception:
-        return 0
-
-
-def _check_valid_from(valid_from: str | None) -> tuple[bool, int]:
-    """
-    Check if license has started based on valid_from.
-    Returns (has_started, days_until_start).
-    All times are treated as CST (UTC+8).
-    """
-    if not valid_from:
-        return (True, 0)  # No valid_from means license is always active
-    try:
-        from datetime import datetime as dt
-        import math
-        # Parse ISO-8601 (with or without Z/offset)
-        start_str = valid_from.replace("Z", "+08:00")
-        start = dt.fromisoformat(start_str)
-        # If naive datetime (no timezone), treat as CST
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=CST)
-        now = dt.now(CST)
-        diff = (start - now).total_seconds() / 86400
-        # Use floor for consistent rounding (e.g., 0.5 days until start -> 0 days)
-        days_until = math.floor(diff)
-        return (days_until <= 0, max(days_until, 0))
-    except Exception:
-        return (True, 0)  # On error, assume started
-
-
-def _license_status() -> dict:
-    if not os.path.exists(LICENSE_PATH):
+def _runtime_license_status(runtime: Any | None = None) -> dict[str, Any]:
+    runtime = runtime or get_runtime()
+    if not runtime:
         return {
-            "status":         "missing",
-            "license_id":     None,
-            "valid_until":    None,
+            "status": "unavailable",
+            "license_id": None,
+            "valid_from": None,
+            "valid_until": None,
             "days_remaining": 0,
-            "capabilities":   [],
+            "capabilities": [],
         }
-    try:
-        with open(LICENSE_PATH, encoding="utf-8") as f:
-            raw = f.read()
-        data = json.loads(raw)
-
-        # Verify RSA signature against mounted public key
-        if not _verify_license_signature(raw):
-            return {
-                "status":         "signature_invalid",
-                "license_id":     data.get("license_id"),
-                "valid_until":    None,
-                "days_remaining": 0,
-                "capabilities":   [],
-            }
-
-        # Check valid_from (has license started?)
-        has_started, days_until = _check_valid_from(data.get("valid_from"))
-        if not has_started:
-            return {
-                "status":         "not_yet_valid",
-                "license_id":     data.get("license_id"),
-                "valid_until":    data.get("valid_until"),
-                "days_remaining": -days_until,  # Negative means days until start
-                "capabilities":   [],
-            }
-
-        # Compute days remaining until expiration
-        days = _compute_days_remaining(data.get("valid_until"))
-        if days <= 0:
-            status = "expired"
-            days = 0  # Don't return negative days to client
-        else:
-            status = "active"
-
-        return {
-            "status":         status,
-            "license_id":     data.get("license_id"),
-            "valid_until":    data.get("valid_until"),
-            "days_remaining": days,
-            "capabilities":   data.get("capabilities", []),
-        }
-    except Exception as exc:
-        logger.error("Failed to parse license file %s: %s", LICENSE_PATH, exc)
-        return {"status": "invalid", "license_id": None, "valid_until": None,
-                "days_remaining": 0, "capabilities": []}
-
-
-def _check_license(capability: str) -> None:
-    lic = _license_status()
-    if lic["status"] == "missing":
-        # Dev/test mode — no license file present, allow all
-        return
-    if lic["status"] == "signature_invalid":
-        raise HTTPException(status_code=403,
-                            detail={"code": 4005, "message": "License signature invalid",
-                                    "capability": capability})
-    if lic["status"] == "not_yet_valid":
-        raise HTTPException(status_code=403,
-                            detail={"code": 4003, "message": "License not yet valid",
-                                    "capability": capability})
-    if lic["status"] == "expired":
-        raise HTTPException(status_code=403,
-                            detail={"code": 4002, "message": "License expired",
-                                    "capability": capability})
-    if lic["status"] not in ("active", "valid"):
-        raise HTTPException(status_code=403,
-                            detail={"code": 4001, "message": "License invalid",
-                                    "capability": capability})
-    caps = lic.get("capabilities", [])
-    if capability not in caps and "*" not in caps:
-        raise HTTPException(status_code=403,
-                            detail={"code": 4004, "message": "Capability not licensed",
-                                    "capability": capability})
+    status = runtime.get_license_status()
+    if isinstance(status, dict):
+        return status
+    logger.warning("Runtime license status unavailable")
+    return {
+        "status": "unavailable",
+        "license_id": None,
+        "valid_from": None,
+        "valid_until": None,
+        "days_remaining": 0,
+        "capabilities": [],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +397,7 @@ async def lifespan(app: FastAPI):
     logger.info("Production AI service started — %d capabilities loaded", len(caps))
     yield
     destroy_runtime()
+    _cleanup_runtime_libs_stage_dir()
     logger.info("Production AI service stopped")
 
 
@@ -390,12 +431,17 @@ app.add_middleware(
 async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     try:
+        if request.method in {"POST", "PUT", "PATCH"}:
+            content_length = request.headers.get("content-length", "").strip()
+            if content_length.isdigit() and int(content_length) > MAX_UPLOAD_BYTES:
+                return _payload_too_large_response()
         response = await call_next(request)
         elapsed_ms = (time.perf_counter() - start) * 1000
-        logger.info(
-            "%s %s → %s (%.0fms)",
-            request.method, request.url.path, response.status_code, elapsed_ms,
-        )
+        if request.url.path != "/api/v1/health":
+            logger.info(
+                "%s %s → %s (%.0fms)",
+                request.method, request.url.path, response.status_code, elapsed_ms,
+            )
         return response
     except Exception as exc:
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -441,8 +487,14 @@ def _decode_image(data: bytes) -> np.ndarray:
     return img
 
 
-def _success(capability: str, version: str, result: dict, elapsed_ms: float) -> dict:
-    return {
+def _success(
+    capability: str,
+    version: str,
+    result: dict,
+    elapsed_ms: float,
+    ab_test: Optional[dict[str, Any]] = None,
+) -> dict:
+    payload = {
         "code":             0,
         "message":          "success",
         "capability":       capability,
@@ -451,13 +503,189 @@ def _success(capability: str, version: str, result: dict, elapsed_ms: float) -> 
         "result":           result,
         "timestamp":        datetime.now(CST).isoformat(),
     }
+    if ab_test:
+        payload["ab_test"] = ab_test
+    return payload
 
 
-def _error_response(code: int, message: str, capability: str = "") -> JSONResponse:
+def _error_response(
+    code: int,
+    message: str,
+    capability: str = "",
+    status_code: int = 400,
+) -> JSONResponse:
     return JSONResponse(
-        status_code=400,
+        status_code=status_code,
         content={"code": code, "message": message, "capability": capability},
     )
+
+
+def _runtime_license_error_response(license_status: Optional[dict[str, Any]], capability: str) -> Optional[JSONResponse]:
+    if not license_status:
+        return None
+
+    status = str(license_status.get("status", "")).strip().lower()
+    capabilities = license_status.get("capabilities", []) or []
+
+    if status in ("active", "valid"):
+        if capabilities and capability not in capabilities and "*" not in capabilities:
+            return _error_response(4004, "Capability not licensed", capability, status_code=403)
+        return None
+
+    if status == "signature_invalid":
+        return _error_response(4005, "License signature invalid", capability, status_code=403)
+    if status == "not_yet_valid":
+        return _error_response(4003, "License not yet valid", capability, status_code=403)
+    if status == "expired":
+        return _error_response(4002, "License expired", capability, status_code=403)
+    if status == "invalid":
+        return _error_response(4001, "License invalid", capability, status_code=403)
+    return None
+
+
+def _acquire_failure_response(runtime: Any, capability: str) -> JSONResponse:
+    runtime_error = _runtime_license_error_response(_runtime_license_status(runtime), capability)
+    if runtime_error:
+        return runtime_error
+    return _error_response(3001, "Instance pool timeout or capability not available", capability)
+
+
+def _validate_capability_name(capability: str) -> None:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", capability):
+        raise HTTPException(status_code=400, detail={"code": 2001, "message": "Invalid capability name"})
+
+
+def _payload_too_large_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={"code": 1003, "message": f"Request body too large (max {MAX_UPLOAD_BYTES} bytes)"},
+    )
+
+
+def _check_upload_size(raw: bytes) -> None:
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": 1003, "message": f"Image payload too large (max {MAX_UPLOAD_BYTES} bytes)"},
+        )
+
+
+@asynccontextmanager
+async def _acquire_infer_slot():
+    acquired = False
+    try:
+        await asyncio.wait_for(
+            _infer_request_semaphore.acquire(),
+            timeout=INFER_CONCURRENCY_TIMEOUT_SECONDS,
+        )
+        acquired = True
+        yield
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": 3002, "message": "Inference concurrency limit reached"},
+        ) from exc
+    finally:
+        if acquired:
+            _infer_request_semaphore.release()
+
+
+def _available_pipeline_capabilities() -> list[str]:
+    runtime = get_runtime()
+    if runtime:
+        return [cap.get("name", "") for cap in runtime.get_capabilities() if cap.get("name")]
+    return [cap.get("capability", "") for cap in list_available_capabilities() if cap.get("capability")]
+
+
+def _get_runtime_capability_version(runtime: Any, capability: str) -> str:
+    for cap_info in runtime.get_capabilities():
+        if cap_info.get("name") == capability:
+            return cap_info.get("version", "unknown")
+    return "unknown"
+
+
+def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dict:
+    _validate_capability_name(capability)
+    runtime = get_runtime()
+    if not runtime:
+        raise ValueError("Runtime not initialized")
+
+    handle = runtime.acquire(capability, timeout_ms=30000)
+    if not handle:
+        response = _acquire_failure_response(runtime, capability)
+        body = json.loads(response.body)
+        raise HTTPException(status_code=response.status_code, detail=body)
+
+    try:
+        img = _decode_image(image_bytes)
+        height, width, channels = img.shape
+        result = runtime.infer(handle, img.tobytes(), width, height, channels)
+        if result.get("error_code", 0) != AI_OK:
+            raise ValueError(result.get("error_msg", "Inference failed"))
+        return result.get("result", {})
+    finally:
+        runtime.release(handle)
+
+
+def _capability_diagnostics() -> dict:
+    runtime = get_runtime()
+    runtime_so_path = resolve_runtime_so_path()
+    libs_dir = resolve_libs_dir()
+    models_dir = resolve_models_dir()
+    effective_pubkey_path = _resolve_effective_pubkey_path()
+    discovered_caps = list_available_capabilities()
+    loaded_caps = runtime.get_capabilities() if runtime else []
+    return {
+        "runtime_initialized": bool(runtime),
+        "runtime_so_path": runtime_so_path,
+        "runtime_so_found": bool(runtime_so_path and os.path.exists(runtime_so_path)),
+        "libs_dir": libs_dir,
+        "libs_dir_exists": os.path.isdir(libs_dir),
+        "models_dir": models_dir,
+        "models_dir_exists": os.path.isdir(models_dir),
+        "license_path": LICENSE_PATH,
+        "license_exists": os.path.exists(LICENSE_PATH),
+        "pubkey_path": effective_pubkey_path,
+        "pubkey_exists": os.path.exists(effective_pubkey_path),
+        "loaded_capabilities": [cap.get("name", "") for cap in loaded_caps if cap.get("name")],
+        "loaded_capability_details": loaded_caps,
+        "discovered_model_capabilities": [
+            cap.get("capability", "") for cap in discovered_caps if cap.get("capability")
+        ],
+        "discovered_models": [
+            {
+                "capability": cap.get("capability", ""),
+                "version": cap.get("version", "unknown"),
+                "model_dir": cap.get("model_dir", ""),
+                "real_model_dir": cap.get("real_model_dir", ""),
+                "source": cap.get("source", ""),
+                "manifest": cap.get("manifest", {}),
+                "preprocess": cap.get("preprocess", {}),
+            }
+            for cap in discovered_caps
+        ],
+    }
+
+
+def _detect_gpu_available() -> bool:
+    try:
+        if os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version"):
+            return True
+    except OSError as exc:
+        logger.debug("GPU device probe failed: %s", exc)
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("nvidia-smi probe failed: %s", exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -468,17 +696,8 @@ def _error_response(code: int, message: str, capability: str = "") -> JSONRespon
 def health():
     """Health check endpoint with capabilities and license status."""
     runtime = get_runtime()
-
-    # Get license status from C++ Runtime if available
-    if runtime:
-        lic_from_runtime = runtime.get_license_status()
-        if lic_from_runtime:
-            lic = lic_from_runtime
-        else:
-            # Fallback to Python license check
-            lic = _license_status()
-    else:
-        lic = _license_status()
+    diagnostics = _capability_diagnostics()
+    lic = _runtime_license_status(runtime)
 
     # Get capabilities from C++ Runtime
     caps = []
@@ -494,26 +713,31 @@ def health():
         ]
 
     # GPU availability detection - check CUDA device files
-    gpu_available = False
-    try:
-        # Check if NVIDIA GPU device files exist (more reliable than ORT check)
-        import os
-        gpu_available = os.path.exists("/dev/nvidia0") or os.path.exists("/proc/driver/nvidia/version")
-    except Exception:
-        pass
-
     return {
         "status":        "healthy" if caps else "degraded",
         "capabilities":  caps,
         "license":       lic,
         "server_time":   datetime.now(CST).isoformat(),
-        "gpu_available": gpu_available,
+        "gpu_available": _detect_gpu_available(),
+        "runtime_initialized": diagnostics["runtime_initialized"],
+        "loaded_capability_count": len(diagnostics["loaded_capabilities"]),
+        "discovered_model_capability_count": len(diagnostics["discovered_model_capabilities"]),
     }
 
 
 @app.get("/api/v1/capabilities", tags=["system"])
 def list_capabilities():
-    """List all loaded capabilities with their versions and manifests."""
+    """List all loaded capabilities with their versions and manifests.
+
+    ARCHITECTURE NOTE:
+    Production service scans directories directly (not API calls) because:
+    1. Production runs standalone after deployment (no access to internal services)
+    2. Capabilities are discovered from: built-in directories + mounted host paths
+    3. This enables hot-reload: new capabilities added to host paths are auto-discovered
+    4. Runtime dynamically loads .so files and models from discovered directories
+
+    Internal services (train/test/license/build) use API-based communication.
+    """
     runtime = get_runtime()
     if not runtime:
         return {"capabilities": []}
@@ -543,13 +767,18 @@ def list_capabilities():
     return {"capabilities": result}
 
 
+@app.get("/api/v1/capabilities/diagnostics", tags=["system"])
+def capability_diagnostics():
+    return _capability_diagnostics()
+
+
 # ---------------------------------------------------------------------------
 # License
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v1/license/status", tags=["license"])
 def license_status():
-    return _license_status()
+    return _runtime_license_status()
 
 
 # ---------------------------------------------------------------------------
@@ -559,108 +788,76 @@ def license_status():
 @app.post("/api/v1/infer/{capability}", tags=["inference"])
 async def infer(
     capability: str,
+    request: Request,
     image: UploadFile = File(...),
     options: Optional[str] = Form(default=None),
 ):
-    """Run inference for a specific AI capability using C++ Runtime."""
-    # License check
-    _check_license(capability)
+    """Run inference for a specific AI capability using C++ Runtime instance pool."""
+    async with _acquire_infer_slot():
+        _validate_capability_name(capability)
 
-    runtime = get_runtime()
-    if not runtime:
-        raise HTTPException(
-            status_code=500,
-            detail={"code": 5001, "message": "Runtime not initialized"},
-        )
-
-    # Decode image
-    raw = await image.read()
-    img = _decode_image(raw)
-
-    # Parse options (currently unused by C++ API but can be passed in future)
-    opts = {}
-    if options:
-        try:
-            opts = json.loads(options)
-        except Exception:
-            pass
-
-    # Acquire inference instance from pool (30 second timeout)
-    t0 = time.perf_counter()
-    handle = runtime.acquire(capability, timeout_ms=30000)
-    if not handle:
-        logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
-        return _error_response(3001, "Instance pool timeout or capability not available", capability)
-
-    try:
-        # Prepare image data for C API
-        import cv2
-        height, width, channels = img.shape
-        img_bytes = img.tobytes()
-
-        # Call AiInfer via ctypes (need to add this method to AiRuntime class)
-        # For now, we'll use a workaround: create capability instance directly
-        # TODO: Implement AiInfer wrapper in AiRuntime class
-        from ai_runtime_ctypes import AiCapability, AiImage as CAiImage
-        import ctypes
-
-        # Get capability SO path
-        from resource_resolver import resolve_lib_path
-        cap_so = resolve_lib_path(capability)
-        if not cap_so:
-            runtime.release(handle)
-            return _error_response(2001, f"Capability SO not found: {capability}", capability)
-
-        # Load capability SO and call AiInfer
-        cap = AiCapability(cap_so)
-        model_dir = resolve_model_dir(capability)
-        if not model_dir:
-            runtime.release(handle)
-            return _error_response(2001, f"Model directory not found: {capability}", capability)
-
-        if not cap.create(model_dir):
-            runtime.release(handle)
-            return _error_response(2002, f"Failed to create capability instance", capability)
-
-        init_ret = cap.init()
-        if init_ret != AI_OK:
-            cap.destroy()
-            runtime.release(handle)
-            return _error_response(init_ret, f"Failed to initialize capability", capability)
-
-        # Run inference
-        result = cap.infer(img_bytes, width, height, channels)
-        cap.destroy()
-
-        if result.get("error_code", 0) != AI_OK:
-            runtime.release(handle)
-            return _error_response(
-                result.get("error_code", 5001),
-                result.get("error_msg", "Inference failed"),
-                capability
+        runtime = get_runtime()
+        if not runtime:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": 5001, "message": "Runtime not initialized"},
             )
 
-        # Success
-        elapsed = (time.perf_counter() - t0) * 1000.0
+        raw = await image.read()
+        _check_upload_size(raw)
+        img = _decode_image(raw)
 
-        # Extract version from manifest
-        manifest_path = os.path.join(model_dir, "manifest.json")
-        version = "unknown"
+        if options:
+            try:
+                json.loads(options)
+            except Exception:
+                pass
+
+        session_id = request.headers.get("X-Session-ID", "").strip() or None
+        selected_version = ab_manager.get_version_for_request(capability, session_id)
+
+        t0 = time.perf_counter()
+        handle = runtime.acquire(capability, timeout_ms=30000)
+        if not handle:
+            logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
+            return _acquire_failure_response(runtime, capability)
+
         try:
-            with open(manifest_path, encoding="utf-8") as f:
-                manifest = json.load(f)
-                version = manifest.get("model_version", "unknown")
-        except Exception:
-            pass
+            height, width, channels = img.shape
+            img_bytes = img.tobytes()
+            result = runtime.infer(handle, img_bytes, width, height, channels)
 
-        return _success(capability, version, result.get("result", {}), round(elapsed, 2))
+            if result.get("error_code", 0) != AI_OK:
+                return _error_response(
+                    result.get("error_code", 5001),
+                    result.get("error_msg", "Inference failed"),
+                    capability
+                )
 
-    except Exception as exc:
-        logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
-        return _error_response(2004, f"Inference failed: {exc}", capability)
-    finally:
-        # Always release the instance back to pool
-        runtime.release(handle)
+            elapsed = (time.perf_counter() - t0) * 1000.0
+            version = _get_runtime_capability_version(runtime, capability)
+            ab_info = ab_manager.get_test_info(capability)
+            if ab_info:
+                ab_info = {
+                    "strategy": ab_info.get("strategy", "random"),
+                    "selected_version": selected_version,
+                    "applied_version": version,
+                    "selection_matches_runtime": selected_version in ("current", version),
+                }
+
+            return _success(
+                capability,
+                version,
+                result.get("result", {}),
+                round(elapsed, 2),
+                ab_test=ab_info or None,
+            )
+
+        except Exception as exc:
+            logger.error("Inference failed for %s: %s", capability, exc, exc_info=True)
+            return _error_response(2004, "Inference failed", capability)
+        finally:
+            runtime.release(handle)
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +900,7 @@ async def reload_all(request: Request):
 async def reload_capability(capability: str, request: Request):
     """Trigger hot reload for a specific capability via C++ Runtime."""
     _verify_admin(request)
+    _validate_capability_name(capability)
     runtime = get_runtime()
     if not runtime:
         raise HTTPException(status_code=500, detail="Runtime not initialized")
@@ -722,6 +920,25 @@ async def reload_capability(capability: str, request: Request):
             break
 
     return {"reloaded": capability, "version": version}
+
+
+@app.get("/api/v1/admin/ab_tests", tags=["admin"])
+def list_ab_tests(request: Request):
+    """List active A/B tests."""
+    _verify_admin(request)
+    return {"ab_tests": ab_manager.list_active_tests()}
+
+
+@app.post("/api/v1/admin/ab_tests/reload", tags=["admin"])
+async def reload_ab_tests(request: Request):
+    """Reload A/B test configurations from disk."""
+    _verify_admin(request)
+    ab_manager.reload()
+    return {
+        "status": "reloaded",
+        "active_tests": len(ab_manager.list_active_tests()),
+        "ab_tests": ab_manager.list_active_tests(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +999,7 @@ def validate_pipeline_endpoint(pipeline_id: str):
     p = get_pipeline(pipeline_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
-    available = list(_engines.keys())
+    available = _available_pipeline_capabilities()
     errors = validate_pipeline(p, available)
     return {"pipeline_id": pipeline_id, "valid": len(errors) == 0, "errors": errors}
 
@@ -794,29 +1011,25 @@ async def run_pipeline_endpoint(
     options: Optional[str] = Form(default=None),
 ):
     """Execute a pipeline."""
-    p = get_pipeline(pipeline_id)
-    if not p:
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
-    if not p.get("enabled", True):
-        raise HTTPException(status_code=400,
-                            detail=f"Pipeline '{pipeline_id}' is disabled")
+    async with _acquire_infer_slot():
+        p = get_pipeline(pipeline_id)
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found")
+        if not p.get("enabled", True):
+            raise HTTPException(status_code=400,
+                                detail=f"Pipeline '{pipeline_id}' is disabled")
 
-    raw = await image.read()
-    global_opts: dict = {}
-    if options:
-        try:
-            global_opts = json.loads(options)
-        except Exception:
-            pass
+        raw = await image.read()
+        _check_upload_size(raw)
+        global_opts: dict = {}
+        if options:
+            try:
+                global_opts = json.loads(options)
+            except Exception:
+                pass
 
-    def _infer_for_pipeline(capability: str, image_bytes: bytes, opts: dict) -> dict:
-        if capability not in _engines:
-            raise ValueError(f"Capability '{capability}' not available")
-        img = _decode_image(image_bytes)
-        return _engines[capability].infer(img, opts)
-
-    result = execute_pipeline(p, raw, _infer_for_pipeline, _check_license, global_opts)
-    return result
+        result = execute_pipeline(p, raw, _infer_for_pipeline, None, global_opts)
+        return result
 
 
 # ---------------------------------------------------------------------------

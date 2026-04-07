@@ -51,7 +51,7 @@ class LicenseCreate(BaseModel):
     valid_until: Optional[datetime] = None
     version_constraint: str = ">=1.0.0"
     max_instances: int = 4
-    privkey_path: str  # path to PEM private key file on server
+    privkey_path: Optional[str] = None  # deprecated: private key is resolved from server-managed key store
 
 
 class LicenseResponse(BaseModel):
@@ -85,7 +85,7 @@ class LicenseResponse(BaseModel):
 
 class LicenseRenew(BaseModel):
     valid_until: datetime
-    privkey_path: str
+    privkey_path: Optional[str] = None
 
 
 class ExpiringLicenseResponse(BaseModel):
@@ -97,7 +97,7 @@ class ExpiringLicenseResponse(BaseModel):
 
 class KeyPairCreate(BaseModel):
     name: str
-    privkey_output_path: str  # where to write the private key PEM on disk
+    privkey_output_path: Optional[str] = None  # deprecated: backend now stores keys in a controlled directory
 
 
 class KeyPairResponse(BaseModel):

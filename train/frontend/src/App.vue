@@ -44,7 +44,10 @@
     <el-container>
       <el-header style="background:#fff;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;padding:0 24px;">
         <span style="font-size:16px;font-weight:500;">AI 综合能力平台 — 训练子系统</span>
-        <span style="color:#8c8c8c;font-size:13px;">北京爱知之星科技股份有限公司</span>
+        <div style="display:flex;align-items:center;gap:16px;">
+          <AdminTokenSettings />
+          <span style="color:#8c8c8c;font-size:13px;">北京爱知之星科技股份有限公司</span>
+        </div>
       </el-header>
       <el-main style="background:#f5f5f5;padding:24px;">
         <router-view />
@@ -54,6 +57,7 @@
 </template>
 
 <script setup>
+import AdminTokenSettings from './components/AdminTokenSettings.vue'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 

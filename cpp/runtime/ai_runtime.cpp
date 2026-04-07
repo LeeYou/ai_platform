@@ -8,8 +8,12 @@
 
 #include "ai_runtime_impl.h"
 
+#include <cerrno>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <limits.h>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -27,7 +31,82 @@ static bool        g_initialized = false;
 
 // Map capability_name → model_dir (for Reload)
 static std::unordered_map<std::string, std::string> g_model_dirs;
+static std::unordered_map<std::string, std::string> g_model_real_dirs;
+static std::unordered_map<std::string, std::string> g_model_versions;
 static std::mutex g_model_dirs_mutex;
+
+static std::string json_escape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"':  escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:   escaped += ch; break;
+        }
+    }
+    return escaped;
+}
+
+static bool read_file(const std::string& path, std::string* out) {
+    if (!out) return false;
+    std::ifstream input(path);
+    if (!input.is_open()) return false;
+    out->assign((std::istreambuf_iterator<char>(input)),
+                std::istreambuf_iterator<char>());
+    return true;
+}
+
+static std::string extract_json_string(const std::string& json, const std::string& key) {
+    std::string needle = "\"" + key + "\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return "";
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return "";
+    pos = json.find('"', pos + 1);
+    if (pos == std::string::npos) return "";
+    auto end = json.find('"', pos + 1);
+    if (end == std::string::npos) return "";
+    return json.substr(pos + 1, end - pos - 1);
+}
+
+static std::string read_model_version(const std::string& model_dir) {
+    std::string manifest_json;
+    if (!read_file(model_dir + "/manifest.json", &manifest_json)) {
+        return "unknown";
+    }
+    std::string version = extract_json_string(manifest_json, "model_version");
+    return version.empty() ? "unknown" : version;
+}
+
+static std::string resolve_realpath_or_self(const std::string& path) {
+    char resolved[PATH_MAX] = {};
+    if (::realpath(path.c_str(), resolved)) {
+        return resolved;
+    }
+    return path;
+}
+
+static std::string resolve_pubkey_path(const char* license_path) {
+    const char* env_pubkey = std::getenv("AI_PUBKEY_PATH");
+    if (env_pubkey && env_pubkey[0] != '\0') {
+        return env_pubkey;
+    }
+
+    if (!license_path || license_path[0] == '\0') {
+        return "";
+    }
+
+    std::string resolved = license_path;
+    auto slash = resolved.find_last_of("/\\");
+    if (slash == std::string::npos) {
+        return "";
+    }
+    return resolved.substr(0, slash + 1) + "pubkey.pem";
+}
 
 // ---------------------------------------------------------------------------
 // AiRuntimeInit
@@ -49,6 +128,10 @@ int32_t AiRuntimeInit(const char* so_dir,
     // 1. Set license path and do initial validation
     if (license_path) {
         agilestar_license_set_path(license_path);
+        std::string pubkey_path = resolve_pubkey_path(license_path);
+        if (!pubkey_path.empty()) {
+            agilestar_license_set_pubkey_path(pubkey_path.c_str());
+        }
     }
 
     // 2. Load all capability SOs
@@ -76,6 +159,8 @@ int32_t AiRuntimeInit(const char* so_dir,
 
         std::lock_guard<std::mutex> lk2(g_model_dirs_mutex);
         g_model_dirs[cap] = model_dir;
+        g_model_real_dirs[cap] = resolve_realpath_or_self(model_dir);
+        g_model_versions[cap] = read_model_version(model_dir);
     }
 
     g_initialized = true;
@@ -95,8 +180,23 @@ int32_t AiRuntimeGetCapabilities(char* buf, int32_t buf_len) {
     os << "{\"capabilities\":[";
     for (size_t i = 0; i < names.size(); ++i) {
         if (i > 0) os << ",";
-        os << "{\"name\":\"" << names[i]
-           << "\",\"status\":\"loaded\"}";
+        std::string model_dir = "";
+        std::string real_model_dir = "";
+        std::string version = "unknown";
+        {
+            std::lock_guard<std::mutex> lk(g_model_dirs_mutex);
+            auto dir_it = g_model_dirs.find(names[i]);
+            if (dir_it != g_model_dirs.end()) model_dir = dir_it->second;
+            auto real_it = g_model_real_dirs.find(names[i]);
+            if (real_it != g_model_real_dirs.end()) real_model_dir = real_it->second;
+            auto version_it = g_model_versions.find(names[i]);
+            if (version_it != g_model_versions.end()) version = version_it->second;
+        }
+        os << "{\"name\":\"" << json_escape(names[i])
+           << "\",\"status\":\"loaded\""
+           << ",\"version\":\"" << json_escape(version) << "\""
+           << ",\"model_dir\":\"" << json_escape(model_dir) << "\""
+           << ",\"real_model_dir\":\"" << json_escape(real_model_dir) << "\"}";
     }
     os << "]}";
 
@@ -148,6 +248,60 @@ void AiRuntimeRelease(AiHandle handle) {
 }
 
 // ---------------------------------------------------------------------------
+// AiRuntimeInfer / AiRuntimeFreeResult
+// ---------------------------------------------------------------------------
+
+int32_t AiRuntimeInfer(AiHandle handle, const AiImage* input, AiResult* output) {
+    if (!handle || !input || !output) {
+        return AI_ERR_INVALID_PARAM;
+    }
+
+    // Find which capability this handle belongs to
+    std::string cap_name;
+    {
+        std::lock_guard<std::mutex> lk(g_handle_cap_mutex);
+        auto it = g_handle_cap.find(handle);
+        if (it == g_handle_cap.end()) {
+            std::fprintf(stderr, "[Runtime] Invalid handle in AiRuntimeInfer\n");
+            return AI_ERR_INVALID_PARAM;
+        }
+        cap_name = it->second;
+    }
+
+    // Get capability entry and call its AiInfer function
+    const agilestar::CapabilityEntry* entry = agilestar_loader_find(cap_name.c_str());
+    if (!entry || !entry->fn_Infer) {
+        std::fprintf(stderr, "[Runtime] Capability %s not found or has no Infer function\n",
+                     cap_name.c_str());
+        return AI_ERR_CAPABILITY_MISSING;
+    }
+
+    return entry->fn_Infer(handle, input, output);
+}
+
+void AiRuntimeFreeResult(AiResult* result) {
+    if (!result) return;
+
+    // AiFreeResult is typically implemented by capability SO to free its allocated memory
+    // However, since we don't know which capability allocated this result,
+    // we use a convention: the capability SO should manage its own memory via AiFreeResult
+    // For now, we just free the common fields if they were allocated by the capability
+    if (result->json_result) {
+        // Capability SOs are expected to use malloc/free or provide their own AiFreeResult
+        // Here we can't call capability-specific free, so we rely on capabilities
+        // to expose AiFreeResult if needed, or we just clear the pointer
+        // The safer approach is to have each capability expose AiFreeResult
+        // For this wrapper, we'll just clear the fields
+        // NOTE: This assumes capability SOs manage their own memory properly
+        result->json_result = nullptr;
+        result->result_len = 0;
+    }
+    if (result->error_msg) {
+        result->error_msg = nullptr;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AiRuntimeReload
 // ---------------------------------------------------------------------------
 
@@ -164,6 +318,12 @@ int32_t AiRuntimeReload(const char* capability_name) {
 
     int32_t mv = agilestar_model_verify(model_dir.c_str(), capability_name);
     if (mv != AI_OK) return mv;
+
+    {
+        std::lock_guard<std::mutex> lk(g_model_dirs_mutex);
+        g_model_real_dirs[capability_name] = resolve_realpath_or_self(model_dir);
+        g_model_versions[capability_name] = read_model_version(model_dir);
+    }
 
     return agilestar_pool_reload(capability_name, model_dir.c_str());
 }
@@ -187,6 +347,12 @@ void AiRuntimeDestroy(void) {
     {
         std::lock_guard<std::mutex> lk2(g_handle_cap_mutex);
         g_handle_cap.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lk2(g_model_dirs_mutex);
+        g_model_dirs.clear();
+        g_model_real_dirs.clear();
+        g_model_versions.clear();
     }
     g_initialized = false;
     std::fprintf(stdout, "[Runtime] Destroyed.\n");

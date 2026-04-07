@@ -5,6 +5,28 @@
         <span style="font-size:16px;font-weight:bold;">🔨 新建编译任务</span>
       </template>
 
+      <el-alert
+        v-if="capabilityDiagnostics"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom:16px;"
+      >
+        <template #title>当前没有可编译能力，请先排查训练服务和源码目录</template>
+        <div>训练服务：{{ capabilityDiagnostics.train_service_url }}</div>
+        <div>
+          训练服务连通性：
+          {{ capabilityDiagnostics.train_service_reachable ? '正常' : (capabilityDiagnostics.train_service_error || '失败') }}
+        </div>
+        <div>训练侧能力数：{{ capabilityDiagnostics.train_capabilities.length }}</div>
+        <div>
+          源码目录：
+          {{ capabilityDiagnostics.capability_source_dir }}
+          （{{ capabilityDiagnostics.capability_source_dir_exists ? '存在' : '不存在' }}）
+        </div>
+        <div>本地源码能力数：{{ capabilityDiagnostics.source_capabilities.length }}</div>
+      </el-alert>
+
       <el-form :model="form" label-width="140px" style="max-width:700px;">
         <!-- Key Pair selection -->
         <el-form-item label="客户密钥对">
@@ -113,6 +135,7 @@
 import { ref, onMounted, nextTick } from 'vue'
 import {
   getCapabilities,
+  getCapabilityDiagnostics,
   getKeyPairs,
   triggerBuild,
   connectBuildWs,
@@ -121,6 +144,7 @@ import {
 import { ElMessage } from 'element-plus'
 
 const capabilities = ref([])
+const capabilityDiagnostics = ref(null)
 const keyPairs = ref([])
 const selectedFingerprint = ref('')
 const submitting = ref(false)
@@ -190,6 +214,23 @@ async function submitBuild() {
   }
 }
 
+async function loadCapabilityDiagnostics() {
+  try {
+    const res = await getCapabilityDiagnostics()
+    capabilityDiagnostics.value = res.data
+  } catch {
+    capabilityDiagnostics.value = {
+      train_service_url: '未知',
+      train_service_reachable: false,
+      train_service_error: '诊断接口调用失败',
+      train_capabilities: [],
+      capability_source_dir: '未知',
+      capability_source_dir_exists: false,
+      source_capabilities: [],
+    }
+  }
+}
+
 function streamLogs(jobId) {
   const ws = connectBuildWs(jobId)
   ws.onmessage = (ev) => {
@@ -220,7 +261,14 @@ function streamLogs(jobId) {
 onMounted(async () => {
   try {
     const [capRes, keyRes] = await Promise.allSettled([getCapabilities(), getKeyPairs()])
-    if (capRes.status === 'fulfilled') capabilities.value = capRes.value.data
+    if (capRes.status === 'fulfilled') {
+      capabilities.value = capRes.value.data
+      if (capabilities.value.length === 0) {
+        await loadCapabilityDiagnostics()
+      }
+    } else {
+      await loadCapabilityDiagnostics()
+    }
     if (keyRes.status === 'fulfilled') keyPairs.value = keyRes.value.data
   } catch (e) {
     ElMessage.error(extractErrorMessage(e))

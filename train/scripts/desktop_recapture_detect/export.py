@@ -95,7 +95,7 @@ def _write_labels_json(output_dir):
 def _write_manifest_json(output_dir, version):
     data = {
         "capability": "desktop_recapture_detect",
-        "version": version,
+        "model_version": version,
         "framework": "onnxruntime",
         "model_file": "model.onnx",
         "input_size": [_IMG_SIZE, _IMG_SIZE],

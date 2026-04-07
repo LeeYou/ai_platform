@@ -2,6 +2,35 @@ import axios from 'axios'
 
 const http = axios.create({ baseURL: '/api/v1' })
 
+export function getAdminToken() {
+  return (
+    window.localStorage.getItem('ai_admin_token') ||
+    window.sessionStorage.getItem('ai_admin_token') ||
+    import.meta.env.VITE_AI_ADMIN_TOKEN ||
+    ''
+  ).trim()
+}
+
+export function buildUnauthorizedTroubleshootingMessage(action = '请求') {
+  const token = getAdminToken()
+  if (token) {
+    return `${action}失败：Unauthorized。当前浏览器已配置管理员 token，请确认它与后端 AI_ADMIN_TOKEN 完全一致。`
+  }
+  return `${action}失败：Unauthorized。当前浏览器未配置管理员 token，请设置 localStorage.ai_admin_token / sessionStorage.ai_admin_token，或在构建时注入 VITE_AI_ADMIN_TOKEN。`
+}
+
+function attachAdminHeaders(config = {}) {
+  const token = getAdminToken()
+  if (!token) return config
+  return {
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  }
+}
+
 /**
  * Extract a human-readable error message from any error shape.
  */
@@ -40,7 +69,10 @@ http.interceptors.response.use(
   }
 )
 
+http.interceptors.request.use((config) => attachAdminHeaders(config))
+
 export const listModels = () => http.get('/models')
+export const getDiagnostics = () => http.get('/diagnostics')
 export const singleInfer = (formData) => http.post('/infer/single', formData, {
   headers: { 'Content-Type': 'multipart/form-data' }
 })

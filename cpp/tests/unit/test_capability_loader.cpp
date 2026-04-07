@@ -108,12 +108,16 @@ protected:
     }
 
     void write_license(const std::string& status,
+                       const std::string& valid_from,
                        const std::string& valid_until,
                        const std::string& capabilities_json) {
         std::ofstream f(tmp_license_);
         f << "{"
-          << "\"license_id\":\"LS-TEST-001\","
-          << "\"status\":\"" << status << "\","
+          << "\"license_id\":\"LS-TEST-001\",";
+        if (!status.empty()) {
+            f << "\"status\":\"" << status << "\",";
+        }
+        f << "\"valid_from\":\"" << valid_from << "\","
           << "\"valid_until\":\"" << valid_until << "\","
           << "\"capabilities\":" << capabilities_json
           << "}";
@@ -126,32 +130,51 @@ TEST_F(LicenseCheckerTest, MissingLicenseFileNotValid) {
 }
 
 TEST_F(LicenseCheckerTest, ValidLicenseWithCapabilityPasses) {
-    write_license("active", "2099-12-31T00:00:00Z",
+    write_license("active", "2020-01-01T00:00:00Z", "2099-12-31T00:00:00Z",
                   "[\"face_detect\",\"recapture_detect\"]");
     agilestar_license_set_path(tmp_license_.c_str());
     EXPECT_TRUE(agilestar_license_is_valid("recapture_detect"));
 }
 
 TEST_F(LicenseCheckerTest, ValidLicenseWithoutCapabilityFails) {
-    write_license("active", "2099-12-31T00:00:00Z", "[\"face_detect\"]");
+    write_license("active", "2020-01-01T00:00:00Z", "2099-12-31T00:00:00Z", "[\"face_detect\"]");
     agilestar_license_set_path(tmp_license_.c_str());
     EXPECT_FALSE(agilestar_license_is_valid("recapture_detect"));
 }
 
 TEST_F(LicenseCheckerTest, ExpiredStatusFails) {
-    write_license("expired", "2020-01-01T00:00:00Z",
+    write_license("expired", "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z",
                   "[\"recapture_detect\"]");
     agilestar_license_set_path(tmp_license_.c_str());
     EXPECT_FALSE(agilestar_license_is_valid("recapture_detect"));
 }
 
 TEST_F(LicenseCheckerTest, StatusJsonContainsStatus) {
-    write_license("active", "2099-12-31T00:00:00Z", "[\"recapture_detect\"]");
+    write_license("active", "2020-01-01T00:00:00Z", "2099-12-31T00:00:00Z", "[\"recapture_detect\"]");
     agilestar_license_set_path(tmp_license_.c_str());
     char buf[1024] = {};
     int32_t n = agilestar_license_get_json(buf, sizeof(buf));
     EXPECT_GT(n, 0);
     EXPECT_NE(nullptr, std::strstr(buf, "\"status\""));
+}
+
+TEST_F(LicenseCheckerTest, LicenseWithoutStatusUsesValidityWindow) {
+    write_license("", "2020-01-01T00:00:00Z", "2099-12-31T00:00:00Z",
+                  "[\"desktop_recapture_detect\"]");
+    agilestar_license_set_path(tmp_license_.c_str());
+    EXPECT_TRUE(agilestar_license_is_valid("desktop_recapture_detect"));
+}
+
+TEST_F(LicenseCheckerTest, LicenseWithoutStatusCanBeNotYetValid) {
+    write_license("", "2099-01-01T00:00:00Z", "2099-12-31T00:00:00Z",
+                  "[\"desktop_recapture_detect\"]");
+    agilestar_license_set_path(tmp_license_.c_str());
+    EXPECT_FALSE(agilestar_license_is_valid("desktop_recapture_detect"));
+
+    char buf[1024] = {};
+    int32_t n = agilestar_license_get_json(buf, sizeof(buf));
+    EXPECT_GT(n, 0);
+    EXPECT_NE(nullptr, std::strstr(buf, "\"status\":\"not_yet_valid\""));
 }
 
 // ---------------------------------------------------------------------------

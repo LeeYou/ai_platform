@@ -9,11 +9,15 @@ Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agile
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import uuid
@@ -31,9 +35,26 @@ _jobs: dict[str, dict] = {}
 CPP_SOURCE_DIR = os.getenv("CPP_SOURCE_DIR", "/app/cpp")
 BUILD_OUTPUT_DIR = os.getenv("BUILD_OUTPUT_DIR", "/workspace/libs/linux_x86_64")
 BUILD_LOG_DIR = "./data/build_logs"
+BUILD_STATE_FILE = "./data/build_jobs.json"
 LOG_DIR = os.getenv("LOG_DIR", "./data/build_logs")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LICENSE_SERVICE_URL = os.getenv("LICENSE_SERVICE_URL", "http://license:8003")
+TRAIN_SERVICE_URL = os.getenv("TRAIN_SERVICE_URL", "http://train:8001")
+MODELS_ROOT = os.getenv("MODELS_ROOT", "/workspace/models")
+ADMIN_TOKEN = os.getenv("AI_ADMIN_TOKEN", "changeme").strip()
+
+
+def _parse_allowed_origins() -> list[str]:
+    raw = os.getenv(
+        "AI_ALLOWED_ORIGINS",
+        "http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173",
+    ).strip()
+    if raw == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+ALLOWED_ORIGINS = _parse_allowed_origins()
 
 ALLOWED_BUILD_TYPES = {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
 # CMake -D args must match: -DVARNAME=VALUE (alphanumeric + underscore/dot/dash)
@@ -94,8 +115,11 @@ except Exception:
 async def lifespan(app: FastAPI):
     os.makedirs(BUILD_LOG_DIR, exist_ok=True)
     os.makedirs(BUILD_OUTPUT_DIR, exist_ok=True)
+    _load_jobs()
+    _mark_interrupted_builds_failed()
     logger.info("Build Management service started")
     yield
+    _persist_jobs()
     logger.info("Build Management service stopped")
 
 
@@ -108,7 +132,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -119,10 +143,25 @@ app.add_middleware(
 # Request logging middleware
 # ---------------------------------------------------------------------------
 
+def _extract_admin_token(request: Request) -> str:
+    auth = request.headers.get("Authorization", "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.headers.get("X-Admin-Token", "").strip()
+
+
+def _requires_admin_auth(request: Request) -> bool:
+    return request.url.path.startswith("/api/v1/") and request.method not in {"GET", "HEAD", "OPTIONS"}
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     try:
+        if _requires_admin_auth(request):
+            token = _extract_admin_token(request)
+            if not token or not hmac.compare_digest(token, ADMIN_TOKEN):
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         response = await call_next(request)
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
@@ -171,6 +210,7 @@ class BuildRequest(BaseModel):
     key_pair_id: Optional[int] = None  # binds customer key pair, auto-computes fingerprint
     trusted_pubkey_sha256: Optional[str] = None  # or pass fingerprint directly
     extra_cmake_args: Optional[list[str]] = None
+    mark_as_current: bool = True
 
 
 class BuildJob(BaseModel):
@@ -183,15 +223,221 @@ class BuildJob(BaseModel):
     finished_at: Optional[str]
     key_pair_name: Optional[str] = None
     trusted_pubkey_sha256: Optional[str] = None
+    model_version: Optional[str] = None
+    artifact_dir: Optional[str] = None
+    error_msg: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
-def _create_lib_symlinks(capability: str, job_id: str) -> None:
+def _persist_jobs() -> None:
+    os.makedirs(os.path.dirname(BUILD_STATE_FILE) or ".", exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix="build_jobs_",
+        suffix=".json",
+        dir=os.path.dirname(BUILD_STATE_FILE) or ".",
+    )
+    try:
+        import json
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(list(_jobs.values()), f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, BUILD_STATE_FILE)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _load_jobs() -> None:
+    if not os.path.exists(BUILD_STATE_FILE):
+        return
+    try:
+        import json
+        with open(BUILD_STATE_FILE, encoding="utf-8") as f:
+            jobs = json.load(f)
+        _jobs.clear()
+        for job in jobs:
+            if isinstance(job, dict) and job.get("job_id"):
+                _jobs[job["job_id"]] = job
+    except Exception as exc:
+        logger.warning("Failed to load persisted build jobs from %s: %s", BUILD_STATE_FILE, exc)
+
+
+def _mark_interrupted_builds_failed() -> None:
+    changed = False
+    finished_at = datetime.now(timezone.utc).isoformat()
+    for job in _jobs.values():
+        if job.get("status") in {"pending", "running"}:
+            job["status"] = "failed"
+            job["error_msg"] = "Service restarted before build completed"
+            job["finished_at"] = finished_at
+            changed = True
+    if changed:
+        _persist_jobs()
+
+
+def _resolve_model_version(capability: str) -> str | None:
+    if not os.path.isdir(MODELS_ROOT):
+        return None
+
+    try:
+        import json
+        versions: dict[str, str] = {}
+        for entry in os.listdir(MODELS_ROOT):
+            safe_entry = _safe_path_component(entry, "")
+            if not safe_entry or safe_entry != entry:
+                continue
+            manifest_path = os.path.join(MODELS_ROOT, entry, "current", "manifest.json")
+            if not os.path.exists(manifest_path):
+                continue
+            try:
+                with open(manifest_path, encoding="utf-8") as f:
+                    manifest = json.load(f)
+                version = str(manifest.get("model_version", "")).strip()
+                if version:
+                    versions[entry] = _safe_path_component(version, "unversioned")
+            except Exception as exc:
+                logger.warning("Failed to read model version for %s: %s", entry, exc)
+        return versions.get(capability)
+    except Exception as exc:
+        logger.warning("Failed to scan model versions from %s: %s", MODELS_ROOT, exc)
+        return None
+
+
+def _safe_path_component(value: str, fallback: str = "unknown") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)).strip("._-")
+    return cleaned or fallback
+
+
+def _artifact_dir_for_job(job: dict) -> str:
+    artifact_dir = job.get("artifact_dir")
+    if artifact_dir:
+        return artifact_dir
+    model_version = _safe_path_component(job.get("model_version") or "unversioned", "unversioned")
+    capability = _safe_path_component(job["capability"], "capability")
+    job_id = _safe_path_component(job["job_id"], "job")
+    return os.path.join(BUILD_OUTPUT_DIR, capability, model_version, job_id)
+
+
+def _run_command_output(args: list[str], cwd: str | None = None) -> str:
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        output = (completed.stdout or completed.stderr or "").strip().splitlines()
+        return output[0].strip() if output else ""
+    except Exception:
+        return ""
+
+
+def _write_build_info(job: dict, req: BuildRequest, artifact_dir: str) -> None:
+    import json
+
+    build_info = {
+        "capability": job["capability"],
+        "version": job.get("model_version") or "unversioned",
+        "target_arch": req.platform,
+        "build_type": req.build_type,
+        "gpu_enabled": "-DBUILD_GPU=ON" in (req.extra_cmake_args or []),
+        "cmake_version": _run_command_output(["cmake", "--version"]),
+        "compiler": _run_command_output(["c++", "--version"]) or _run_command_output(["g++", "--version"]),
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "built_by": os.getenv("BUILDER_IMAGE", os.getenv("HOSTNAME", "unknown")),
+        "git_commit": _run_command_output(["git", "rev-parse", "--short", "HEAD"], cwd=os.path.dirname(CPP_SOURCE_DIR)),
+        "trusted_pubkey_sha256": job.get("trusted_pubkey_sha256"),
+        "job_id": job["job_id"],
+    }
+    with open(os.path.join(artifact_dir, "build_info.json"), "w", encoding="utf-8") as f:
+        json.dump(build_info, f, ensure_ascii=False, indent=2)
+
+
+async def _get_capability_diagnostics() -> dict:
+    cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
+    source_caps = []
+    if os.path.isdir(cap_dir):
+        source_caps = sorted(
+            d for d in os.listdir(cap_dir)
+            if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
+        )
+
+    train_caps = []
+    train_service_reachable = False
+    train_service_status_code = None
+    train_service_error = None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            payload = None
+            last_response = None
+            for path in ("/api/v1/capabilities/", "/api/v1/capabilities"):
+                resp = await client.get(f"{TRAIN_SERVICE_URL}{path}", follow_redirects=True)
+                last_response = resp
+                train_service_status_code = resp.status_code
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                payload = resp.json()
+                break
+
+            if payload is None:
+                if last_response is not None:
+                    last_response.raise_for_status()
+                train_service_error = "Training service capability endpoint not found"
+            elif isinstance(payload, list):
+                train_caps = [cap.get("name", "") for cap in payload if isinstance(cap, dict) and cap.get("name")]
+                train_service_reachable = True
+            else:
+                train_service_error = f"Unexpected response shape: {type(payload).__name__}"
+    except httpx.TimeoutException:
+        train_service_error = "Training service request timed out"
+    except httpx.HTTPStatusError as exc:
+        train_service_error = f"Training service returned HTTP {exc.response.status_code}"
+    except httpx.RequestError:
+        train_service_error = "Training service unreachable"
+    except httpx.HTTPError:
+        train_service_error = "Training service request failed"
+
+    available = sorted(cap for cap in train_caps if cap in set(source_caps))
+    return {
+        "train_service_url": TRAIN_SERVICE_URL,
+        "train_service_reachable": train_service_reachable,
+        "train_service_status_code": train_service_status_code,
+        "train_service_error": train_service_error,
+        "cpp_source_dir": CPP_SOURCE_DIR,
+        "capability_source_dir": cap_dir,
+        "capability_source_dir_exists": os.path.isdir(cap_dir),
+        "source_capabilities": source_caps,
+        "train_capabilities": sorted(train_caps),
+        "available_capabilities": available,
+        "models_root": MODELS_ROOT,
+        "models_root_exists": os.path.isdir(MODELS_ROOT),
+    }
+
+
+def _update_current_symlink(job: dict) -> None:
+    capability_root = os.path.join(BUILD_OUTPUT_DIR, _safe_path_component(job["capability"], "capability"))
+    current_link = os.path.join(capability_root, "current")
+    target_dir = _artifact_dir_for_job(job)
+    relative_target = os.path.relpath(target_dir, capability_root)
+
+    os.makedirs(capability_root, exist_ok=True)
+    if os.path.lexists(current_link):
+        if os.path.isdir(current_link) and not os.path.islink(current_link):
+            logger.warning("Build %s: current path exists as directory, skip symlink update: %s", job["job_id"], current_link)
+            return
+        os.unlink(current_link)
+    os.symlink(relative_target, current_link)
+    logger.info("Build %s: updated current symlink to %s", job["job_id"], relative_target)
+
+
+def _create_lib_symlinks(artifact_dir: str, job_id: str) -> None:
     """Create standard library symlinks (libfoo.so -> libfoo.so.1 -> libfoo.so.1.0.0)."""
-    lib_dir = os.path.join(BUILD_OUTPUT_DIR, capability, "lib")
+    lib_dir = os.path.join(artifact_dir, "lib")
     if not os.path.isdir(lib_dir):
         logger.warning("Build %s: lib directory not found: %s", job_id, lib_dir)
         return
@@ -243,10 +489,14 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
     log_path = os.path.join(BUILD_LOG_DIR, f"{job_id}.log")
     job["log_path"] = log_path
     job["status"] = "running"
+    job["error_msg"] = None
+    _persist_jobs()
     logger.info("Build %s started: capability=%s platform=%s", job_id, req.capability, req.platform)
 
     build_dir = f"/tmp/build_{job_id}"
     os.makedirs(build_dir, exist_ok=True)
+    artifact_dir = _artifact_dir_for_job(job)
+    os.makedirs(artifact_dir, exist_ok=True)
 
     # Build argument lists — no shell expansion, safe from injection
     cmake_args = [
@@ -273,36 +523,51 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
     build_args = ["cmake", "--build", build_dir, "--parallel", nproc]
     install_args = [
         "cmake", "--install", build_dir,
-        "--prefix", os.path.join(BUILD_OUTPUT_DIR, req.capability),
+        "--prefix", artifact_dir,
     ]
 
-    with open(log_path, "w", encoding="utf-8") as lf:
-        for args in [cmake_args, build_args, install_args]:
-            cmd_display = " ".join(shlex.quote(a) for a in args)
-            lf.write(f"\n$ {cmd_display}\n")
-            lf.flush()
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            async for line in proc.stdout:
-                text = line.decode("utf-8", errors="replace")
-                lf.write(text)
+    try:
+        with open(log_path, "w", encoding="utf-8") as lf:
+            for args in [cmake_args, build_args, install_args]:
+                cmd_display = " ".join(shlex.quote(a) for a in args)
+                lf.write(f"\n$ {cmd_display}\n")
                 lf.flush()
-            await proc.wait()
-            if proc.returncode != 0:
-                job["status"] = "failed"
-                job["finished_at"] = datetime.now(timezone.utc).isoformat()
-                logger.error("Build %s failed at command: %s (exit code %s)", job_id, cmd_display, proc.returncode)
-                return
+                proc = await asyncio.create_subprocess_exec(
+                    *args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                async for line in proc.stdout:
+                    text = line.decode("utf-8", errors="replace")
+                    lf.write(text)
+                    lf.flush()
+                await proc.wait()
+                if proc.returncode != 0:
+                    job["status"] = "failed"
+                    job["error_msg"] = f"Build command failed: {cmd_display}"
+                    job["finished_at"] = datetime.now(timezone.utc).isoformat()
+                    _persist_jobs()
+                    logger.error("Build %s failed at command: %s (exit code %s)", job_id, cmd_display, proc.returncode)
+                    return
 
-    # Create library symlinks after successful build
-    _create_lib_symlinks(req.capability, job_id)
+        # Create library symlinks after successful build
+        _create_lib_symlinks(artifact_dir, job_id)
+        _write_build_info(job, req, artifact_dir)
+        if req.mark_as_current:
+            _update_current_symlink(job)
 
-    job["status"] = "done"
-    job["finished_at"] = datetime.now(timezone.utc).isoformat()
-    logger.info("Build %s completed successfully", job_id)
+        job["status"] = "done"
+        job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _persist_jobs()
+        logger.info("Build %s completed successfully", job_id)
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error_msg"] = str(exc)
+        job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _persist_jobs()
+        logger.error("Build %s failed during post-processing: %s", job_id, exc, exc_info=True)
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +648,9 @@ async def trigger_build(req: BuildRequest):
             )
 
     job_id = str(uuid.uuid4())
+    model_version = _resolve_model_version(req.capability) or "unversioned"
+    safe_capability = _safe_path_component(req.capability, "capability")
+    safe_job_id = _safe_path_component(job_id, "job")
     job = {
         "job_id": job_id,
         "capability": req.capability,
@@ -393,8 +661,12 @@ async def trigger_build(req: BuildRequest):
         "finished_at": None,
         "key_pair_name": key_pair_name,
         "trusted_pubkey_sha256": fingerprint or None,
+        "model_version": model_version,
+        "artifact_dir": os.path.join(BUILD_OUTPUT_DIR, safe_capability, model_version, safe_job_id),
+        "error_msg": None,
     }
     _jobs[job_id] = job
+    _persist_jobs()
     # Store fingerprint on request so _run_build can use it
     req.trusted_pubkey_sha256 = fingerprint or None
     asyncio.create_task(_run_build(job_id, req))
@@ -422,6 +694,10 @@ def get_build_logs(job_id: str):
 @app.websocket("/ws/build/{job_id}")
 async def ws_build_logs(websocket: WebSocket, job_id: str):
     """Stream build logs line-by-line via WebSocket."""
+    token = websocket.query_params.get("token", "").strip()
+    if not token or not hmac.compare_digest(token, ADMIN_TOKEN):
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
     if job_id not in _jobs:
         await websocket.send_text('{"type":"error","msg":"job not found"}')
@@ -466,22 +742,37 @@ async def ws_build_logs(websocket: WebSocket, job_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Capabilities — scan cpp/capabilities/ directory
+# Capabilities — fetch from Training Service API
 # ---------------------------------------------------------------------------
 
 @app.get("/api/v1/capabilities", tags=["capabilities"])
-def list_capabilities():
-    """Return a sorted list of available AI capability names."""
-    cap_dir = os.path.join(CPP_SOURCE_DIR, "capabilities")
-    if not os.path.isdir(cap_dir):
-        logger.warning("Capabilities directory not found: %s", cap_dir)
-        return []
-    caps = sorted(
-        d for d in os.listdir(cap_dir)
-        if os.path.isdir(os.path.join(cap_dir, d)) and not d.startswith(".")
+async def list_capabilities():
+    """Return capabilities from Training Service that have completed models.
+
+    This fetches capability data from the Training Service API (which manages
+    capability metadata in a database). Only capabilities that are registered
+    in the training system and have source code can be compiled.
+
+    For production deployment, the Production Service scans directories directly
+    since it runs standalone without access to internal APIs.
+    """
+    diagnostics = await _get_capability_diagnostics()
+    if not diagnostics["train_service_reachable"]:
+        logger.error(
+            "Failed to fetch capabilities from training service: %s",
+            diagnostics["train_service_error"] or "unknown error",
+        )
+    logger.info(
+        "Returning %d buildable capabilities (from training API + source): %s",
+        len(diagnostics["available_capabilities"]),
+        diagnostics["available_capabilities"],
     )
-    logger.info("Found %d capabilities in %s", len(caps), cap_dir)
-    return caps
+    return diagnostics["available_capabilities"]
+
+
+@app.get("/api/v1/capabilities/diagnostics", tags=["capabilities"])
+async def capability_diagnostics():
+    return await _get_capability_diagnostics()
 
 
 # ---------------------------------------------------------------------------
@@ -523,9 +814,7 @@ def list_artifacts(job_id: str):
     """List output files produced by a build."""
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Build job not found")
-    job = _jobs[job_id]
-    cap = job["capability"]
-    artifact_dir = os.path.join(BUILD_OUTPUT_DIR, cap)
+    artifact_dir = _artifact_dir_for_job(_jobs[job_id])
     if not os.path.isdir(artifact_dir):
         return []
     result = []
@@ -545,8 +834,7 @@ def download_artifact(job_id: str, filename: str):
     """Download a specific build artifact."""
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Build job not found")
-    cap = _jobs[job_id]["capability"]
-    artifact_dir = os.path.realpath(os.path.join(BUILD_OUTPUT_DIR, cap))
+    artifact_dir = os.path.realpath(_artifact_dir_for_job(_jobs[job_id]))
     filepath = os.path.realpath(os.path.join(artifact_dir, filename))
     # Prevent path traversal
     if not filepath.startswith(artifact_dir + os.sep) and filepath != artifact_dir:
@@ -567,7 +855,8 @@ def download_package(job_id: str):
 
     job = _jobs[job_id]
     cap = job["capability"]
-    artifact_dir = os.path.realpath(os.path.join(BUILD_OUTPUT_DIR, cap))
+    model_version = job.get("model_version") or "unversioned"
+    artifact_dir = os.path.realpath(_artifact_dir_for_job(job))
 
     if not os.path.isdir(artifact_dir):
         raise HTTPException(status_code=404, detail="No artifacts found for this build")
@@ -577,9 +866,9 @@ def download_package(job_id: str):
     try:
         os.close(temp_fd)
         with tarfile.open(temp_path, "w:gz") as tar:
-            tar.add(artifact_dir, arcname=cap)
+            tar.add(artifact_dir, arcname=os.path.join(cap, model_version, job_id))
 
-        package_name = f"{cap}_{job_id[:8]}.tar.gz"
+        package_name = f"{cap}_{model_version}_{job_id[:8]}.tar.gz"
         return FileResponse(
             temp_path,
             filename=package_name,

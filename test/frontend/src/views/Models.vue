@@ -1,5 +1,21 @@
 <template>
   <div>
+    <el-alert
+      v-if="diagnostics"
+      type="warning"
+      :closable="false"
+      show-icon
+      style="margin-bottom:16px;"
+    >
+      <template #title>模型目录排查提示</template>
+      <div>MODELS_ROOT：{{ diagnostics.models.models_root }}</div>
+      <div>目录存在：{{ diagnostics.models.models_root_exists ? '是' : '否' }}</div>
+      <div>已发现模型数：{{ diagnostics.models.model_count }}</div>
+      <div v-if="diagnostics.auth.using_default_admin_token" style="margin-top:4px;">
+        当前测试后端仍在使用默认 AI_ADMIN_TOKEN=changeme，联调前建议改成显式值。
+      </div>
+    </el-alert>
+
     <el-card shadow="never" header="可用模型列表">
       <el-table :data="models" v-loading="loading" style="width:100%">
         <el-table-column prop="capability" label="能力标识" width="160" />
@@ -28,10 +44,12 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listModels } from '../api/index.js'
+import { ElMessage } from 'element-plus'
+import { listModels, getDiagnostics, extractErrorMessage } from '../api/index.js'
 
 const loading = ref(false)
 const models = ref([])
+const diagnostics = ref(null)
 const router = useRouter()
 const fmtTime = (t) => t ? new Date(t).toLocaleString('zh-CN') : '-'
 
@@ -40,6 +58,17 @@ const goBatch  = (row) => router.push({ path: '/batch',  query: { capability: ro
 
 onMounted(async () => {
   loading.value = true
-  try { const r = await listModels(); models.value = r.data } finally { loading.value = false }
+  try {
+    const r = await listModels()
+    models.value = r.data
+    if (models.value.length === 0) {
+      const diagRes = await getDiagnostics()
+      diagnostics.value = diagRes.data
+    }
+  } catch (e) {
+    ElMessage.error('模型列表加载失败：' + extractErrorMessage(e))
+  } finally {
+    loading.value = false
+  }
 })
 </script>

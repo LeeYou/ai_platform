@@ -24,9 +24,11 @@
 
         <el-form-item label="上传图片">
           <el-upload
+            ref="uploadRef"
             :auto-upload="false"
             :limit="1"
             :on-change="onFileChange"
+            :on-exceed="onFileExceed"
             :on-remove="onFileRemove"
             accept="image/*"
           >
@@ -103,7 +105,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getPipelines, runPipeline, extractErrorMessage } from '../api/index.js'
-import { ElMessage } from 'element-plus'
+import { ElMessage, genFileId } from 'element-plus'
 
 const route = useRoute()
 const pipelines = ref([])
@@ -115,13 +117,34 @@ const resultOk = ref(false)
 const resultText = ref('')
 const totalTime = ref(null)
 const stepResults = ref([])
+const uploadRef = ref(null)
+
+function resetResult() {
+  result.value = null
+  resultOk.value = false
+  resultText.value = ''
+  totalTime.value = null
+  stepResults.value = []
+}
 
 function onFileChange(file) {
   imageFile.value = file.raw
+  resetResult()
+}
+
+function onFileExceed(files) {
+  const file = files[files.length - 1]
+  if (!file) return
+  uploadRef.value?.clearFiles()
+  file.uid = genFileId()
+  uploadRef.value?.handleStart(file)
+  imageFile.value = file.raw
+  resetResult()
 }
 
 function onFileRemove() {
   imageFile.value = null
+  resetResult()
 }
 
 async function doRun() {
@@ -134,8 +157,7 @@ async function doRun() {
   formData.append('image', imageFile.value)
 
   running.value = true
-  result.value = null
-  stepResults.value = []
+  resetResult()
   const startTime = Date.now()
 
   try {

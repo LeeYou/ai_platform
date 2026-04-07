@@ -9,6 +9,7 @@ import json
 import os
 import time
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -53,6 +54,11 @@ class OrtSession:
         return self._session.run(None, {self._input_name: tensor})
 
 
+@lru_cache(maxsize=32)
+def _get_cached_ort_session(model_path: str) -> OrtSession:
+    return OrtSession(model_path)
+
+
 class BaseInferencer(ABC):
     """Abstract base class for all AI capability inferencers."""
 
@@ -61,7 +67,7 @@ class BaseInferencer(ABC):
         self.manifest = _load_manifest(model_dir)
         self.preprocess_cfg = _load_preprocess(model_dir)
         model_path = os.path.join(model_dir, "model.onnx")
-        self._session = OrtSession(model_path) if os.path.exists(model_path) else None
+        self._session = _get_cached_ort_session(model_path) if os.path.exists(model_path) else None
 
     @property
     def capability(self) -> str:

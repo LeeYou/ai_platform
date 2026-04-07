@@ -7,6 +7,10 @@
       <NavMenu />
     </el-aside>
     <el-container>
+      <el-header style="background:#fff;border-bottom:1px solid #ebeef5;display:flex;align-items:center;justify-content:space-between;padding:0 20px;">
+        <span style="font-size:16px;font-weight:500;">AI 综合能力平台 — 编译子系统</span>
+        <AdminTokenSettings />
+      </el-header>
       <el-main style="background:#f0f2f5;padding:20px;">
         <router-view />
       </el-main>
@@ -15,6 +19,7 @@
 </template>
 
 <script setup>
+import AdminTokenSettings from './components/AdminTokenSettings.vue'
 import NavMenu from './components/NavMenu.vue'
 </script>
 

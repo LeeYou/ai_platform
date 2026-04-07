@@ -14,8 +14,6 @@
 #   5. /data/ai_platform/libs/<arch>/<capability>/current/ 已放置 SO/DLL
 # =============================================================================
 
-version: "3.9"
-
 x-logging: &default-logging
   driver: "json-file"
   options:

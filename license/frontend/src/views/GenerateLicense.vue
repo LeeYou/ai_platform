@@ -65,12 +65,9 @@
 
       <!-- Step 2: Machine Binding & Review -->
       <div v-if="step === 2">
-        <el-form :model="form" ref="bindFormRef" label-width="130px" style="max-width:600px;">
+        <el-form :model="form" label-width="130px" style="max-width:600px;">
           <el-form-item label="机器指纹">
             <el-input v-model="form.machine_fingerprint" placeholder="可选，留空表示不绑定机器" />
-          </el-form-item>
-          <el-form-item label="私钥文件路径" prop="privkey_path" :rules="[{required:true,message:'请输入私钥文件路径'}]">
-            <el-input v-model="form.privkey_path" placeholder="/path/to/private_key.pem" />
           </el-form-item>
         </el-form>
 
@@ -103,7 +100,6 @@ const customerOptions = ref([])
 const keyPairOptions = ref([])
 const capabilityOptions = ref([])
 const configFormRef = ref()
-const bindFormRef = ref()
 
 const form = ref({
   customer_id: '',
@@ -116,7 +112,6 @@ const form = ref({
   max_instances: 1,
   version_constraint: '',
   machine_fingerprint: '',
-  privkey_path: '',
 })
 
 const customerName = computed(() => {
@@ -141,7 +136,6 @@ async function nextStep() {
 }
 
 async function handleSubmit() {
-  await bindFormRef.value.validate()
   submitting.value = true
   try {
     const payload = {
@@ -154,7 +148,6 @@ async function handleSubmit() {
       max_instances: form.value.max_instances,
       version_constraint: form.value.version_constraint || null,
       machine_fingerprint: form.value.machine_fingerprint || null,
-      privkey_path: form.value.privkey_path,
     }
     const res = await createLicense(payload)
     const licenseId = res.data?.license_id ?? res.data?.id
@@ -175,7 +168,7 @@ async function handleSubmit() {
     form.value = {
       customer_id: '', key_pair_id: null, license_type: 'commercial', allCapabilities: false,
       capabilities: [], valid_from: '', valid_until: '', max_instances: 1,
-      version_constraint: '', machine_fingerprint: '', privkey_path: '',
+      version_constraint: '', machine_fingerprint: '',
     }
   } catch (e) {
     ElMessage.error('生成授权失败：' + extractErrorMessage(e))
