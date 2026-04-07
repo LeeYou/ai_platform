@@ -15,8 +15,8 @@
 #include <atomic>
 #include <algorithm>
 #include <cerrno>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -984,7 +984,7 @@ private:
                     next->max_instances = parsed_max_instances;
                 } else {
                     std::fprintf(stderr,
-                                 "[LicenseChecker] Invalid max_instances value '%s'; defaulting to %d.\n",
+                                 "[LicenseChecker] Invalid max_instances value '%s' (expected positive int32); defaulting to %d.\n",
                                  max_instances_it->second.c_str(),
                                  next->max_instances);
                 }

@@ -263,7 +263,7 @@ AiHandle AiRuntimeAcquire(const char* capability_name, int32_t timeout_ms) {
     }
 
     if (!agilestar_loader_find(capability_name)) {
-        set_last_error(build_error_json(3001, "Instance pool timeout or capability not available", 400));
+        set_last_error(build_error_json(3001, "Capability not found or not loaded", 400));
         return nullptr;
     }
 
