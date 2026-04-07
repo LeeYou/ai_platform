@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -307,9 +308,10 @@ static bool _parse_int32_value(const std::string& raw, int32_t* out) {
     if (!out) return false;
     std::string trimmed = _trim_copy(raw);
     if (trimmed.empty() || trimmed == "null") return false;
+    errno = 0;
     char* end = nullptr;
     const long value = std::strtol(trimmed.c_str(), &end, 10);
-    if (!end || *end != '\0' || value < INT32_MIN || value > INT32_MAX) {
+    if (errno == ERANGE || !end || *end != '\0' || value < INT32_MIN || value > INT32_MAX) {
         return false;
     }
     *out = static_cast<int32_t>(value);
@@ -980,6 +982,11 @@ private:
                 int32_t parsed_max_instances = 4;
                 if (_parse_int32_value(max_instances_it->second, &parsed_max_instances) && parsed_max_instances > 0) {
                     next->max_instances = parsed_max_instances;
+                } else {
+                    std::fprintf(stderr,
+                                 "[LicenseChecker] Invalid max_instances value '%s'; defaulting to %d.\n",
+                                 max_instances_it->second.c_str(),
+                                 next->max_instances);
                 }
             }
             next->raw_json = json;
