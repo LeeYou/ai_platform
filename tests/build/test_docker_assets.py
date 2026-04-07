@@ -21,8 +21,11 @@ class BuildDockerAssetsTests(unittest.TestCase):
 
         self.assertIn("FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04", content)
         self.assertIn("ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64-gpu", content)
+        self.assertIn("libnvinfer-dev", content)
+        self.assertIn("libnvonnxparsers-dev", content)
         self.assertIn("ARG GITHUB_HTTPS_PROXY=", content)
         self.assertIn("CUDA_HOME=/usr/local/cuda", content)
+        self.assertIn("NvInfer.h", content)
         self.assertIn("libonnxruntime_providers_cuda.so", content)
         self.assertIn("BUILDER_TOOLCHAIN_PROFILE=cuda11.8-cudnn8", content)
 

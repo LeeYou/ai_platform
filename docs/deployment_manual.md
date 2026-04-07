@@ -219,7 +219,7 @@ ls -la /data/ai_platform/
 
 ## 4. 开发环境部署
 
-开发环境（研发环境）包含以下 5 个服务：
+开发环境（研发环境）默认包含以下 5 个服务，另可按需启用 1 个 GPU builder：
 
 | 服务     | 容器名            | 端口  | 用途              |
 |----------|-------------------|-------|-------------------|
@@ -228,6 +228,12 @@ ls -la /data/ai_platform/
 | test     | `ai-test`          | 8002  | 模型测试           |
 | build    | `ai-builder`       | 8004  | SDK 编译构建       |
 | redis    | `ai-redis`         | 6379（仅本地） | 训练任务消息队列 |
+
+可选 GPU builder（仅在宿主机已配置 NVIDIA Container Toolkit 时启用）：
+
+| 服务      | 容器名            | 端口  | 用途 |
+|-----------|-------------------|-------|------|
+| build-gpu | `ai-builder-gpu`  | 8007  | 需要 CUDA Toolkit / TensorRT 的编译任务 |
 
 ### 4.1 拉取镜像
 
@@ -248,6 +254,12 @@ cd deploy
 docker compose up -d
 ```
 
+如需启用 GPU builder：
+
+```bash
+docker compose --profile gpu-build up -d --build build-gpu
+```
+
 ### 4.3 查看启动状态
 
 ```bash
@@ -265,6 +277,12 @@ ai-builder        Up (healthy)        0.0.0.0:8004->8004/tcp
 ai-redis          Up (healthy)        127.0.0.1:6379->6379/tcp
 ```
 
+如果启用了 GPU builder，还会看到：
+
+```text
+ai-builder-gpu    Up (healthy)        0.0.0.0:8007->8004/tcp
+```
+
 ### 4.4 查看服务日志
 
 ```bash
@@ -278,7 +296,33 @@ docker compose logs -f train
 docker compose logs --tail 100 train
 ```
 
-### 4.5 停止服务
+### 4.5 GPU builder 启动前核查
+
+```bash
+# 1. 宿主机驱动
+nvidia-smi
+
+# 2. Docker GPU runtime
+docker run --rm --gpus all \
+  nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 \
+  nvidia-smi
+
+# 3. 启动 GPU builder
+docker compose --profile gpu-build up -d --build build-gpu
+
+# 4. 查看 builder 诊断
+curl http://localhost:8007/api/v1/builder/diagnostics
+```
+
+### 4.6 编译期 GPU 开关说明
+
+- 运行时 GPU 优先/CPU 回退能力：**无需**传 `-DBUILD_GPU=ON`
+- 只有在能力源码确实需要编译期依赖时才开启：
+  - `-DENABLE_TENSORRT=ON`
+  - `-DENABLE_CUDA_KERNELS=ON`
+- Build Web 页面已提供独立“编译期 GPU 开关”，会根据当前 builder 诊断自动禁用不可用选项
+
+### 4.7 停止服务
 
 ```bash
 # 停止所有服务（保留数据卷）
@@ -288,13 +332,13 @@ docker compose down
 docker compose down -v
 ```
 
-### 4.6 重启单个服务
+### 4.8 重启单个服务
 
 ```bash
 docker compose restart train
 ```
 
-### 4.7 更新镜像并重启
+### 4.9 更新镜像并重启
 
 ```bash
 docker compose pull

@@ -18,11 +18,11 @@
 | 属性 | 值 |
 |------|-----|
 | 镜像名 | `agilestar/ai-builder-linux-x86:latest`（CPU/ORT） / `agilestar/ai-builder-linux-x86-gpu:latest`（CUDA devel） |
-| 基础镜像 | `ubuntu:22.04` |
+| 基础镜像 | CPU Builder：`ubuntu:22.04` / GPU Builder：`nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04` |
 | 编译器 | GCC 12 / G++ 12 |
 | CMake 版本 | ≥3.26 |
-| 推理框架 | ONNXRuntime 1.16（预装），TensorRT 8.6（可选） |
-| CUDA 工具链 | CUDA Toolkit 12.1（用于 GPU 推理 SO） |
+| 推理框架 | ONNXRuntime 1.18.1（CPU/GPU 镜像分别预装），TensorRT dev headers/libs（GPU builder） |
+| CUDA 工具链 | CUDA Toolkit 11.8（仅 GPU builder） |
 
 ### 2.2 Linux aarch64 编译容器
 
@@ -184,6 +184,8 @@ option(BUILD_ALL_CAPS       "构建所有能力插件" ON)
 | GPU Builder | `agilestar/ai-builder-linux-x86-gpu:latest` | 需要 CUDA Toolkit / nvcc 的编译；与 prod 对齐 CUDA 11.8 + cuDNN 8 + ONNXRuntime GPU |
 
 > 宿主机必须先完成 `nvidia-container-toolkit` 配置，并通过 `docker run --rm --gpus all nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 nvidia-smi` 验证容器 GPU 链路。
+>
+> GPU builder 除了 CUDA Toolkit / ONNXRuntime GPU 外，还会预装 TensorRT 开发头文件与库（如 `NvInfer.h`、`libnvinfer.so`），用于满足 `ENABLE_TENSORRT=ON` 的编译期依赖。
 
 **实现示例**（所有能力插件已实现）：
 
@@ -217,10 +219,22 @@ if (status != nullptr) {
 | 功能 | 说明 |
 |------|------|
 | 能力与平台选择 | 下拉选择目标能力和目标架构（linux_x86_64 / linux_aarch64 / windows_x86_64 / windows_x86） |
-| 编译选项 | GPU 支持开关、JNI 接口开关、Release/Debug 模式 |
+| 编译选项 | 编译期 GPU 开关（`ENABLE_TENSORRT` / `ENABLE_CUDA_KERNELS`）、JNI 接口开关、Release/Debug 模式 |
 | 一键编译 | 触发容器内 cmake build，实时推送编译日志（WebSocket） |
 | 产物管理 | 查看历史编译版本列表，下载产物，标记正式版本 |
 | 版本归档 | 自动归档到 `/workspace/output/<arch>/<capability>/<version>/` |
+
+### 6.1 Web UI 与 Builder 诊断联动
+
+- “新建编译任务”页面会调用 `/api/v1/builder/diagnostics`
+- 前端显式展示当前 builder 的：
+  - `builder_toolchain_profile`
+  - `onnxruntime_package`
+  - `cuda_toolkit_available`
+  - `tensorrt_available`
+  - `supports_compile_time_gpu_features`
+- `ENABLE_TENSORRT` / `ENABLE_CUDA_KERNELS` 使用独立复选开关管理
+- 前端会自动把这些开关合并进 `extra_cmake_args`，并过滤手工输入里重复的 GPU 开关
 
 ---
 

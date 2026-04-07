@@ -76,6 +76,10 @@ export function getCapabilityDiagnostics() {
   return http.get('/capabilities/diagnostics')
 }
 
+export function getBuilderDiagnostics() {
+  return http.get('/builder/diagnostics')
+}
+
 // Key Pairs (proxied from license service)
 export function getKeyPairs() {
   return http.get('/key-pairs')
