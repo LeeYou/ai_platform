@@ -74,9 +74,19 @@ class LicenseCreate(BaseModel):
             raise ValueError("application_name cannot be empty")
         return normalized
 
-    @field_validator("minimum_os_version", "system_architecture", "machine_fingerprint", mode="before")
+    @field_validator("minimum_os_version", "system_architecture", mode="before")
     @classmethod
-    def normalize_optional_strings(cls, value):
+    def normalize_environment_strings(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @field_validator("machine_fingerprint", mode="before")
+    @classmethod
+    def normalize_machine_fingerprint(cls, value):
         if value is None:
             return None
         if isinstance(value, str):
