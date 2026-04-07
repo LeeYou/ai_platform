@@ -35,6 +35,10 @@
 
 #include <sys/stat.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
@@ -144,7 +148,11 @@ static std::string _detect_current_operating_system() {
 #elif defined(_WIN32)
     return "windows";
 #elif defined(__APPLE__)
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
     return "ios";
+#else
+    return "macos";
+#endif
 #elif defined(__linux__)
     return "linux";
 #else
