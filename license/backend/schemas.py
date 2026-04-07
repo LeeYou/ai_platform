@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel, field_validator
 
 
@@ -46,12 +47,52 @@ class LicenseCreate(BaseModel):
     key_pair_id: int  # which key pair to sign with (one customer = one key pair)
     license_type: str  # trial / commercial / permanent
     capabilities: list[str]
+    operating_system: str
+    application_name: str
     machine_fingerprint: Optional[str] = None
+    minimum_os_version: Optional[str] = None
+    system_architecture: Optional[str] = None
     valid_from: datetime
     valid_until: Optional[datetime] = None
     version_constraint: str = ">=1.0.0"
     max_instances: int = 4
     privkey_path: Optional[str] = None  # deprecated: private key is resolved from server-managed key store
+
+    @field_validator("operating_system")
+    @classmethod
+    def validate_operating_system(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in {"windows", "linux", "android", "ios"}:
+            raise ValueError("operating_system must be one of: windows, linux, android, ios")
+        return normalized
+
+    @field_validator("application_name")
+    @classmethod
+    def validate_application_name(cls, value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise ValueError("application_name cannot be empty")
+        return normalized
+
+    @field_validator("minimum_os_version", "system_architecture", "machine_fingerprint", mode="before")
+    @classmethod
+    def normalize_optional_strings(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @field_validator("version_constraint", mode="before")
+    @classmethod
+    def normalize_version_constraint(cls, value):
+        if value is None:
+            return ">=1.0.0"
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or ">=1.0.0"
+        return value
 
 
 class LicenseResponse(BaseModel):
@@ -62,6 +103,10 @@ class LicenseResponse(BaseModel):
     key_pair_name: Optional[str] = None
     license_type: str
     capabilities: list[str]
+    operating_system: Optional[str] = None
+    minimum_os_version: Optional[str] = None
+    system_architecture: Optional[str] = None
+    application_name: Optional[str] = None
     machine_fingerprint: Optional[str]
     valid_from: datetime
     valid_until: Optional[datetime]

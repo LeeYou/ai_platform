@@ -101,6 +101,131 @@ static std::string _trim_copy(const std::string& value) {
     return value.substr(begin, end - begin + 1);
 }
 
+static std::string _to_lower_copy(const std::string& value) {
+    std::string normalized = value;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return normalized;
+}
+
+static std::string _normalize_architecture(const std::string& value) {
+    const std::string normalized = _to_lower_copy(_trim_copy(value));
+    if (normalized == "amd64" || normalized == "x64") return "x86_64";
+    if (normalized == "aarch64") return "arm64";
+    if (normalized == "armhf") return "armv7";
+    return normalized;
+}
+
+static std::string _read_linux_version_id() {
+    std::string os_release;
+    if (!_read_file("/etc/os-release", os_release)) return "";
+
+    std::istringstream input(os_release);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.rfind("VERSION_ID=", 0) != 0) continue;
+        std::string value = _trim_copy(line.substr(std::strlen("VERSION_ID=")));
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+            value = value.substr(1, value.size() - 2);
+        }
+        return _trim_copy(value);
+    }
+    return "";
+}
+
+static std::string _detect_current_operating_system() {
+    const char* override_os = std::getenv("AI_OPERATING_SYSTEM");
+    if (override_os && override_os[0] != '\0') {
+        return _to_lower_copy(_trim_copy(override_os));
+    }
+#if defined(__ANDROID__)
+    return "android";
+#elif defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "ios";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "";
+#endif
+}
+
+static std::string _detect_current_architecture() {
+    const char* override_arch = std::getenv("AI_SYSTEM_ARCH");
+    if (override_arch && override_arch[0] != '\0') {
+        return _normalize_architecture(override_arch);
+    }
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__)
+    return "arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "armv7";
+#else
+    return "";
+#endif
+}
+
+static std::string _detect_current_os_version() {
+    const char* override_version = std::getenv("AI_OS_VERSION");
+    if (override_version && override_version[0] != '\0') {
+        return _trim_copy(override_version);
+    }
+#if defined(__linux__) && !defined(__ANDROID__)
+    return _read_linux_version_id();
+#else
+    return "";
+#endif
+}
+
+static std::vector<int> _extract_version_segments(const std::string& value) {
+    std::vector<int> segments;
+    std::string current;
+    const std::string trimmed = _trim_copy(value);
+    for (char ch : trimmed) {
+        if (std::isdigit(static_cast<unsigned char>(ch))) {
+            current.push_back(ch);
+            continue;
+        }
+        if (!current.empty()) {
+            segments.push_back(std::atoi(current.c_str()));
+            current.clear();
+        }
+    }
+    if (!current.empty()) {
+        segments.push_back(std::atoi(current.c_str()));
+    }
+    return segments;
+}
+
+static bool _minimum_platform_version_satisfied(const std::string& current_version,
+                                                const std::string& minimum_required) {
+    const std::string required = _trim_copy(minimum_required);
+    if (required.empty()) return true;
+
+    const std::string current = _trim_copy(current_version);
+    if (current.empty()) return false;
+
+    const std::vector<int> current_segments = _extract_version_segments(current);
+    const std::vector<int> required_segments = _extract_version_segments(required);
+    if (current_segments.empty() || required_segments.empty()) {
+        return current == required;
+    }
+
+    const size_t len = std::max(current_segments.size(), required_segments.size());
+    for (size_t i = 0; i < len; ++i) {
+        const int lhs = i < current_segments.size() ? current_segments[i] : 0;
+        const int rhs = i < required_segments.size() ? required_segments[i] : 0;
+        if (lhs < rhs) return false;
+        if (lhs > rhs) return true;
+    }
+    return true;
+}
+
 static std::string _json_string(const std::string& json, const std::string& key) {
     const std::string needle = "\"" + key + "\"";
     auto pos = json.find(needle);
@@ -579,10 +704,17 @@ struct LicenseStatus {
     bool        missing = false;
     bool        signature_invalid = false;
     bool        machine_mismatch = false;
+    bool        operating_system_mismatch = false;
+    bool        os_version_mismatch = false;
+    bool        architecture_mismatch = false;
     std::string status = "invalid";
     std::string license_id;
     std::string valid_from;
     std::string valid_until;
+    std::string operating_system;
+    std::string minimum_os_version;
+    std::string system_architecture;
+    std::string application_name;
     std::string machine_fingerprint;
     std::string version_constraint;
     int32_t     days_remaining = 0;
@@ -595,6 +727,62 @@ struct LicenseStatus {
     std::string last_error;
     std::chrono::steady_clock::time_point refreshed_monotonic{};
 };
+
+static std::string _environment_mismatch_reason(LicenseStatus& status) {
+    status.operating_system_mismatch = false;
+    status.os_version_mismatch = false;
+    status.architecture_mismatch = false;
+
+    const std::string required_os = _to_lower_copy(_trim_copy(status.operating_system));
+    if (!required_os.empty()) {
+        const std::string current_os = _detect_current_operating_system();
+        if (current_os.empty() || current_os != required_os) {
+            status.operating_system_mismatch = true;
+            return "Operating system not licensed";
+        }
+    }
+
+    const std::string required_arch = _normalize_architecture(status.system_architecture);
+    if (!required_arch.empty()) {
+        const std::string current_arch = _detect_current_architecture();
+        if (current_arch.empty() || current_arch != required_arch) {
+            status.architecture_mismatch = true;
+            return "System architecture not licensed";
+        }
+    }
+
+    if (!_minimum_platform_version_satisfied(_detect_current_os_version(), status.minimum_os_version)) {
+        status.os_version_mismatch = true;
+        return "Operating system version below license minimum";
+    }
+
+    return "";
+}
+
+static void _apply_environment_constraints(LicenseStatus& status) {
+    status.machine_mismatch = false;
+    const char* machine_fingerprint = std::getenv("AI_MACHINE_FINGERPRINT");
+    if (machine_fingerprint && machine_fingerprint[0] != '\0' &&
+        !status.machine_fingerprint.empty() &&
+        status.machine_fingerprint != machine_fingerprint) {
+        status.machine_mismatch = true;
+        status.last_error = "Machine fingerprint mismatch";
+        return;
+    }
+
+    const std::string mismatch_reason = _environment_mismatch_reason(status);
+    if (!mismatch_reason.empty()) {
+        status.last_error = mismatch_reason;
+        return;
+    }
+
+    if (status.last_error == "Machine fingerprint mismatch" ||
+        status.last_error == "Operating system not licensed" ||
+        status.last_error == "System architecture not licensed" ||
+        status.last_error == "Operating system version below license minimum") {
+        status.last_error.clear();
+    }
+}
 
 class LicenseCache {
 public:
@@ -651,7 +839,8 @@ public:
     bool is_capability_licensed(const std::string& cap_name, const std::string& cap_version) {
         const LicenseStatus status = get();
         if (!status.valid || status.expired || status.not_yet_valid || status.signature_invalid ||
-            status.missing || status.machine_mismatch) {
+            status.missing || status.machine_mismatch || status.operating_system_mismatch ||
+            status.os_version_mismatch || status.architecture_mismatch) {
             return false;
         }
         for (const auto& licensed : status.capabilities) {
@@ -696,8 +885,35 @@ public:
         } else {
             os << "\"" << _json_escape(status.version_constraint) << "\"";
         }
+        os << ",\"operating_system\":";
+        if (status.operating_system.empty()) {
+            os << "null";
+        } else {
+            os << "\"" << _json_escape(status.operating_system) << "\"";
+        }
+        os << ",\"minimum_os_version\":";
+        if (status.minimum_os_version.empty()) {
+            os << "null";
+        } else {
+            os << "\"" << _json_escape(status.minimum_os_version) << "\"";
+        }
+        os << ",\"system_architecture\":";
+        if (status.system_architecture.empty()) {
+            os << "null";
+        } else {
+            os << "\"" << _json_escape(status.system_architecture) << "\"";
+        }
+        os << ",\"application_name\":";
+        if (status.application_name.empty()) {
+            os << "null";
+        } else {
+            os << "\"" << _json_escape(status.application_name) << "\"";
+        }
         os << ",\"max_instances\":" << status.max_instances
            << ",\"machine_mismatch\":" << (status.machine_mismatch ? "true" : "false")
+           << ",\"operating_system_mismatch\":" << (status.operating_system_mismatch ? "true" : "false")
+           << ",\"os_version_mismatch\":" << (status.os_version_mismatch ? "true" : "false")
+           << ",\"architecture_mismatch\":" << (status.architecture_mismatch ? "true" : "false")
            << ",\"days_remaining\":" << status.days_remaining
            << ",\"source_mtime\":" << status.source_mtime
            << ",\"refreshed_at_ms\":" << status.refreshed_at_ms
@@ -732,6 +948,15 @@ public:
         } else if (status.machine_mismatch) {
             code = AI_ERR_LICENSE_MISMATCH;
             message = "Machine fingerprint mismatch";
+        } else if (status.operating_system_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "Operating system not licensed";
+        } else if (status.os_version_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "Operating system version below license minimum";
+        } else if (status.architecture_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "System architecture not licensed";
         } else {
             bool capability_licensed = false;
             for (const auto& licensed : status.capabilities) {
@@ -808,6 +1033,10 @@ private:
 
         if (status.machine_mismatch) {
             status.status = "machine_mismatch";
+            return;
+        }
+        if (status.operating_system_mismatch || status.os_version_mismatch || status.architecture_mismatch) {
+            status.status = "environment_mismatch";
             return;
         }
 
@@ -974,6 +1203,10 @@ private:
             next->license_id = _json_string(json, "license_id");
             next->valid_from = _json_string(json, "valid_from");
             next->valid_until = _json_string(json, "valid_until");
+            next->operating_system = _json_string(json, "operating_system");
+            next->minimum_os_version = _json_string(json, "minimum_os_version");
+            next->system_architecture = _json_string(json, "system_architecture");
+            next->application_name = _json_string(json, "application_name");
             next->machine_fingerprint = _json_string(json, "machine_fingerprint");
             next->version_constraint = _json_string(json, "version_constraint");
             next->max_instances = 4;
@@ -994,6 +1227,9 @@ private:
             next->signature_invalid = false;
             next->missing = false;
             next->machine_mismatch = false;
+            next->operating_system_mismatch = false;
+            next->os_version_mismatch = false;
+            next->architecture_mismatch = false;
             next->last_error.clear();
 
             const auto capabilities_it = parsed.values.find("capabilities");
@@ -1068,15 +1304,12 @@ private:
             }
 #endif
 
-            const char* machine_fingerprint = std::getenv("AI_MACHINE_FINGERPRINT");
-            if (machine_fingerprint && machine_fingerprint[0] != '\0' &&
-                !next->machine_fingerprint.empty() &&
-                next->machine_fingerprint != machine_fingerprint) {
-                next->machine_mismatch = true;
-            }
+            _apply_environment_constraints(*next);
 
             update_temporal_status(*next);
-            next->last_error.clear();
+            if (next->status == "valid") {
+                next->last_error.clear();
+            }
             next->last_success_at_ms = next->refreshed_at_ms;
 
             {
@@ -1085,9 +1318,12 @@ private:
                 parsed_license_mtime_ = license_mtime;
             }
         } else {
+            _apply_environment_constraints(*next);
             update_temporal_status(*next);
             next->source_mtime = license_mtime;
-            next->last_error.clear();
+            if (next->status == "valid") {
+                next->last_error.clear();
+            }
         }
 
         std::fprintf(stdout,

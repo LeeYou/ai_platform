@@ -184,6 +184,7 @@ std::string serialize_payload(const LicenseData& ld)
     std::ostringstream out;
     out << "{\n";
     emit_array  (out, "capabilities",        ld.capabilities,        false);
+    emit_string (out, "application_name",    ld.application_name);
     emit_string (out, "customer_id",         ld.customer_id);
     emit_string (out, "customer_name",       ld.customer_name);
     emit_string (out, "issued_at",           ld.issued_at);
@@ -192,6 +193,9 @@ std::string serialize_payload(const LicenseData& ld)
     emit_string (out, "license_type",        ld.license_type);
     emit_string (out, "machine_fingerprint", ld.machine_fingerprint);
     emit_int    (out, "max_instances",       ld.max_instances);
+    emit_string (out, "minimum_os_version",  ld.minimum_os_version);
+    emit_string (out, "operating_system",    ld.operating_system);
+    emit_string (out, "system_architecture", ld.system_architecture);
     emit_string (out, "valid_from",          ld.valid_from);
     emit_string (out, "valid_until",         ld.valid_until);
     emit_string (out, "version_constraint",  ld.version_constraint);
@@ -204,6 +208,7 @@ std::string serialize_full(const LicenseData& ld)
     std::ostringstream out;
     out << "{\n";
     emit_array  (out, "capabilities",       ld.capabilities,        false);
+    emit_string (out, "application_name",   ld.application_name);
     emit_string (out, "customer_id",        ld.customer_id);
     emit_string (out, "customer_name",      ld.customer_name);
     emit_string (out, "issued_at",          ld.issued_at);
@@ -212,7 +217,10 @@ std::string serialize_full(const LicenseData& ld)
     emit_string (out, "license_type",       ld.license_type);
     emit_string (out, "machine_fingerprint",ld.machine_fingerprint);
     emit_int    (out, "max_instances",      ld.max_instances);
+    emit_string (out, "minimum_os_version", ld.minimum_os_version);
+    emit_string (out, "operating_system",   ld.operating_system);
     emit_string (out, "signature",          ld.signature);
+    emit_string (out, "system_architecture",ld.system_architecture);
     emit_string (out, "valid_from",         ld.valid_from);
     emit_string (out, "valid_until",        ld.valid_until);
     emit_string (out, "version_constraint", ld.version_constraint);
@@ -250,15 +258,24 @@ bool parse_license_json(const std::string& json, LicenseData& ld)
         } else if (key == "max_instances") {
             ld.max_instances = parse_int(json, pos, ok);
         } else {
-            // All other values are strings
-            if (pos >= json.size() || json[pos] != '"') { ok = false; break; }
-            const std::string val = parse_string(json, pos, ok);
-            if (!ok) break;
+            std::string val;
+            if (pos < json.size() && json.compare(pos, 4, "null") == 0) {
+                val.clear();
+                pos += 4;
+            } else {
+                if (pos >= json.size() || json[pos] != '"') { ok = false; break; }
+                val = parse_string(json, pos, ok);
+                if (!ok) break;
+            }
 
             if      (key == "license_id")          ld.license_id          = val;
             else if (key == "customer_id")         ld.customer_id         = val;
             else if (key == "customer_name")       ld.customer_name       = val;
             else if (key == "license_type")        ld.license_type        = val;
+            else if (key == "operating_system")    ld.operating_system    = val;
+            else if (key == "minimum_os_version")  ld.minimum_os_version  = val;
+            else if (key == "system_architecture") ld.system_architecture = val;
+            else if (key == "application_name")    ld.application_name    = val;
             else if (key == "machine_fingerprint") ld.machine_fingerprint = val;
             else if (key == "valid_from")          ld.valid_from          = val;
             else if (key == "valid_until")         ld.valid_until         = val;

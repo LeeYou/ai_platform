@@ -112,6 +112,20 @@ def _run_migrations(eng) -> None:
             conn.commit()
             logger.info("Migration complete: key_pair_id added")
 
+        additional_columns = {
+            "operating_system": "ALTER TABLE license_records ADD COLUMN operating_system VARCHAR(32)",
+            "minimum_os_version": "ALTER TABLE license_records ADD COLUMN minimum_os_version VARCHAR(64)",
+            "system_architecture": "ALTER TABLE license_records ADD COLUMN system_architecture VARCHAR(64)",
+            "application_name": "ALTER TABLE license_records ADD COLUMN application_name VARCHAR(255)",
+        }
+        for column_name, statement in additional_columns.items():
+            if column_name in cols:
+                continue
+            logger.info("Migrating: adding %s column to license_records", column_name)
+            conn.execute(sqlalchemy.text(statement))
+            conn.commit()
+            logger.info("Migration complete: %s added", column_name)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

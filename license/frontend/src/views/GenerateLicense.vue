@@ -31,6 +31,17 @@
               <el-option label="永久版 (permanent)" value="permanent" />
             </el-select>
           </el-form-item>
+          <el-form-item label="操作系统" prop="operating_system" :rules="[{required:true,message:'请选择操作系统'}]">
+            <el-select v-model="form.operating_system" placeholder="请选择操作系统" style="width:100%;">
+              <el-option label="Windows" value="windows" />
+              <el-option label="Linux" value="linux" />
+              <el-option label="Android" value="android" />
+              <el-option label="iOS" value="ios" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="应用名称" prop="application_name" :rules="[{required:true,message:'请输入应用名称'}]">
+            <el-input v-model="form.application_name" placeholder="仅用于标识授权对应的应用" />
+          </el-form-item>
           <el-form-item label="签名密钥对" prop="key_pair_id" :rules="[{required:true,message:'请选择签名密钥对'}]">
             <el-select v-model="form.key_pair_id" filterable placeholder="选择该客户的密钥对" style="width:100%;">
               <el-option v-for="k in keyPairOptions" :key="k.id" :label="k.name" :value="k.id" />
@@ -58,6 +69,17 @@
           <el-form-item label="版本约束">
             <el-input v-model="form.version_constraint" placeholder="如 >=1.0.0,<2.0.0（可选）" />
           </el-form-item>
+          <el-form-item label="最低系统版本">
+            <el-input v-model="form.minimum_os_version" placeholder="可选，不填表示不限制，如 22.04 / 10.0.19045" />
+          </el-form-item>
+          <el-form-item label="系统架构">
+            <el-select v-model="form.system_architecture" clearable placeholder="可选，不填表示不限制" style="width:100%;">
+              <el-option label="x86_64" value="x86_64" />
+              <el-option label="arm64" value="arm64" />
+              <el-option label="x86" value="x86" />
+              <el-option label="armv7" value="armv7" />
+            </el-select>
+          </el-form-item>
         </el-form>
         <el-button @click="step--" style="margin-right:8px;">上一步</el-button>
         <el-button type="primary" @click="nextStep">下一步</el-button>
@@ -75,10 +97,14 @@
           <el-descriptions-item label="客户">{{ customerName }}</el-descriptions-item>
           <el-descriptions-item label="签名密钥">{{ keyPairName }}</el-descriptions-item>
           <el-descriptions-item label="类型">{{ form.license_type }}</el-descriptions-item>
+          <el-descriptions-item label="操作系统">{{ form.operating_system || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="应用名称">{{ form.application_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="功能">{{ form.allCapabilities ? '*（全部）' : form.capabilities.join(', ') }}</el-descriptions-item>
           <el-descriptions-item label="生效日期">{{ form.valid_from }}</el-descriptions-item>
           <el-descriptions-item label="到期日期">{{ form.license_type === 'permanent' ? '永久' : form.valid_until }}</el-descriptions-item>
           <el-descriptions-item label="最大实例">{{ form.max_instances }}</el-descriptions-item>
+          <el-descriptions-item label="最低系统版本">{{ form.minimum_os_version || '不限制' }}</el-descriptions-item>
+          <el-descriptions-item label="系统架构">{{ form.system_architecture || '不限制' }}</el-descriptions-item>
           <el-descriptions-item label="机器指纹">{{ form.machine_fingerprint || '不绑定' }}</el-descriptions-item>
         </el-descriptions>
 
@@ -101,18 +127,22 @@ const keyPairOptions = ref([])
 const capabilityOptions = ref([])
 const configFormRef = ref()
 
-const form = ref({
-  customer_id: '',
-  key_pair_id: null,
-  license_type: 'commercial',
-  allCapabilities: false,
-  capabilities: [],
-  valid_from: '',
-  valid_until: '',
-  max_instances: 1,
-  version_constraint: '',
-  machine_fingerprint: '',
-})
+  const form = ref({
+    customer_id: '',
+    key_pair_id: null,
+    license_type: 'commercial',
+    operating_system: '',
+    application_name: '',
+    allCapabilities: false,
+    capabilities: [],
+    valid_from: '',
+    valid_until: '',
+    max_instances: 1,
+    version_constraint: '',
+    minimum_os_version: '',
+    system_architecture: '',
+    machine_fingerprint: '',
+  })
 
 const customerName = computed(() => {
   const c = customerOptions.value.find(x => x.customer_id === form.value.customer_id)
@@ -142,11 +172,15 @@ async function handleSubmit() {
       customer_id: form.value.customer_id,
       key_pair_id: form.value.key_pair_id,
       license_type: form.value.license_type,
+      operating_system: form.value.operating_system,
+      application_name: form.value.application_name,
       capabilities: form.value.allCapabilities ? ['*'] : form.value.capabilities,
       valid_from: form.value.valid_from,
       valid_until: form.value.license_type === 'permanent' ? null : form.value.valid_until,
       max_instances: form.value.max_instances,
       version_constraint: form.value.version_constraint || null,
+      minimum_os_version: form.value.minimum_os_version || null,
+      system_architecture: form.value.system_architecture || null,
       machine_fingerprint: form.value.machine_fingerprint || null,
     }
     const res = await createLicense(payload)
@@ -166,9 +200,9 @@ async function handleSubmit() {
     // reset
     step.value = 0
     form.value = {
-      customer_id: '', key_pair_id: null, license_type: 'commercial', allCapabilities: false,
+      customer_id: '', key_pair_id: null, license_type: 'commercial', operating_system: '', application_name: '', allCapabilities: false,
       capabilities: [], valid_from: '', valid_until: '', max_instances: 1,
-      version_constraint: '', machine_fingerprint: '',
+      version_constraint: '', minimum_os_version: '', system_architecture: '', machine_fingerprint: '',
     }
   } catch (e) {
     ElMessage.error('生成授权失败：' + extractErrorMessage(e))

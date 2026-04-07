@@ -398,6 +398,23 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["status"], "not_yet_valid")
         self.assertLess(body["days_remaining"], 0)
 
+    def test_license_status_endpoint_preserves_environment_constraints(self):
+        self.fake_runtime.get_license_status = lambda: {
+            "status": "environment_mismatch",
+            "operating_system": "linux",
+            "minimum_os_version": "22.04",
+            "system_architecture": "x86_64",
+            "application_name": "ai-platform-prod",
+            "operating_system_mismatch": True,
+        }
+        body = prod_main.license_status()
+        self.assertEqual(body["status"], "environment_mismatch")
+        self.assertEqual(body["operating_system"], "linux")
+        self.assertEqual(body["minimum_os_version"], "22.04")
+        self.assertEqual(body["system_architecture"], "x86_64")
+        self.assertEqual(body["application_name"], "ai-platform-prod")
+        self.assertTrue(body["operating_system_mismatch"])
+
     def test_license_status_endpoint_reports_runtime_unavailable_when_missing(self):
         prod_main.get_runtime = lambda: None
         body = prod_main.license_status()

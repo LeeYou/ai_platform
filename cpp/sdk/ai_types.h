@@ -64,7 +64,7 @@ typedef enum {
     AI_ERR_LICENSE_EXPIRED        = 4002,  /* License 已过期 */
     AI_ERR_LICENSE_NOT_YET_VALID  = 4003,  /* License 尚未生效 */
     AI_ERR_CAP_NOT_LICENSED       = 4004,  /* 当前能力或版本未在 License 授权范围内 */
-    AI_ERR_LICENSE_MISMATCH       = 4005,  /* 机器指纹不匹配 */
+    AI_ERR_LICENSE_MISMATCH       = 4005,  /* 运行环境不匹配（机器指纹/OS/架构等） */
     AI_ERR_LICENSE_SIGNATURE_INVALID = 4006,  /* License 签名验证失败 */
 
     /* 5xxx：内部错误 */

@@ -18,6 +18,10 @@ struct LicenseData {
     std::string customer_name;
     std::string license_type;         // "trial" | "commercial" | "permanent"
     std::vector<std::string> capabilities; // ["face_detect", ...] or ["*"]
+    std::string operating_system;     // "windows" | "linux" | "android" | "ios"
+    std::string minimum_os_version;   // minimum supported OS version, "" = unrestricted
+    std::string system_architecture;  // "x86_64" | "arm64" | ... , "" = unrestricted
+    std::string application_name;     // identifier only
     std::string machine_fingerprint;  // "sha256:..." or ""
     std::string valid_from;           // ISO8601 UTC
     std::string valid_until;          // ISO8601 UTC or "" (empty = no expiry)
@@ -37,6 +41,7 @@ enum class VerifyResult {
     EXPIRED,
     NOT_YET_VALID,
     FINGERPRINT_MISMATCH,
+    ENVIRONMENT_MISMATCH,
     CAPABILITY_NOT_LICENSED,
     PARSE_ERROR
 };
@@ -65,7 +70,8 @@ bool generate_license(LicenseData&       license_data,
                       const std::string& output_path);
 
 /// Reads a license file, verifies its RSA-SHA256 signature against pubkey_path,
-/// and optionally checks expiry, machine fingerprint, and required capability.
+/// and optionally checks expiry, machine fingerprint, current OS/arch/version,
+/// and required capability.
 /// Returns VerifyResult::OK on full success.
 VerifyResult verify_license(const std::string& license_path,
                              const std::string& pubkey_path,

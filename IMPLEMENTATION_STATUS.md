@@ -7,6 +7,37 @@
 
 ## ✅ 已完成实现
 
+### 0. 授权字段扩展（操作系统 / 最低系统版本 / 系统架构 / 应用名称）
+
+**状态：已完成实现并完成验证**
+
+#### 实现内容
+
+- ✅ License 管理后端新增授权字段并完成 SQLite 迁移兼容
+- ✅ License 管理前端支持新增字段录入、摘要确认和列表展示
+- ✅ `license_core` / `license_tool` 支持新增字段解析与环境约束校验
+- ✅ C++ Runtime 新增操作系统、最低系统版本、系统架构校验，并将状态透传到 Web 层
+- ✅ 设计文档、开发计划文档、阶段小结已同步更新
+
+#### 关键原则
+
+- 新签发授权必须写入 `operating_system` 与 `application_name`
+- `minimum_os_version`、`system_architecture` 未填写时表示不限制
+- 历史授权缺失新增字段时继续兼容读取，按“不限制”处理
+- `application_name` 仅用于标识，不参与 Runtime 准入判定
+
+#### 验证结果
+
+- 授权后端新增回归测试通过
+- 生产服务授权状态回归测试通过
+- 授权前端构建通过
+- C++ Runtime / 能力插件目标编译通过
+
+#### 关联文档
+
+- `docs/design/license_service.md`
+- `docs/license_authorization_extension_plan.md`
+
 ### 1. C++ SO 推理库 GPU 优先支持
 
 **状态：完全实现并测试通过**
