@@ -347,6 +347,7 @@ def _init_runtime() -> bool:
     if runtime:
         caps = runtime.get_capabilities()
         logger.info("Runtime loaded %d capabilities: %s", len(caps), [c["name"] for c in caps])
+        _log_runtime_capability_hints(runtime)
 
     ab_manager.reload()
     logger.info("A/B test manager loaded %d active tests", len(ab_manager.list_active_tests()))
@@ -487,6 +488,67 @@ def _decode_image(data: bytes) -> np.ndarray:
     return img
 
 
+def _load_capability_preprocess(capability: str) -> dict[str, Any]:
+    model_dir = resolve_model_dir(capability)
+    if not model_dir:
+        return {}
+    preprocess_path = os.path.join(model_dir, "preprocess.json")
+    try:
+        with open(preprocess_path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _resize_image_for_capability(capability: str, img: np.ndarray) -> tuple[np.ndarray, dict[str, int] | None]:
+    resize_cfg = _load_capability_preprocess(capability).get("resize", {})
+    width = int(resize_cfg.get("width") or 0)
+    height = int(resize_cfg.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return img, None
+    if img.shape[1] == width and img.shape[0] == height:
+        return img, {"width": width, "height": height}
+
+    import cv2  # type: ignore
+
+    resized = cv2.resize(img, (width, height), interpolation=cv2.INTER_LINEAR)
+    return resized, {"width": width, "height": height}
+
+
+def _load_capability_build_info(capability: str) -> dict[str, Any]:
+    from resource_resolver import resolve_lib_path
+
+    lib_path = resolve_lib_path(capability)
+    if not lib_path:
+        return {}
+
+    lib_dir = os.path.dirname(lib_path)
+    capability_root = os.path.dirname(lib_dir)
+    candidates = [
+        os.path.join(capability_root, "build_info.json"),
+        os.path.join(os.path.dirname(capability_root), "build_info.json"),
+    ]
+    for candidate in candidates:
+        try:
+            with open(candidate, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data["_path"] = candidate
+                return data
+        except Exception:
+            continue
+    return {}
+
+
+def _summarize_capability_runtime(capability: str) -> dict[str, Any]:
+    build_info = _load_capability_build_info(capability)
+    runtime_gpu_expected = build_info.get("onnxruntime_package") == "gpu"
+    return {
+        "build_info": build_info,
+        "runtime_gpu_expected": runtime_gpu_expected if build_info else None,
+    }
+
+
 def _success(
     capability: str,
     version: str,
@@ -600,6 +662,7 @@ def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dic
 
     try:
         img = _decode_image(image_bytes)
+        img, _ = _resize_image_for_capability(capability, img)
         height, width, channels = img.shape
         result = runtime.infer(handle, img.tobytes(), width, height, channels)
         if result.get("error_code", 0) != AI_OK:
@@ -630,7 +693,13 @@ def _capability_diagnostics() -> dict:
         "pubkey_path": effective_pubkey_path,
         "pubkey_exists": os.path.exists(effective_pubkey_path),
         "loaded_capabilities": [cap.get("name", "") for cap in loaded_caps if cap.get("name")],
-        "loaded_capability_details": loaded_caps,
+        "loaded_capability_details": [
+            {
+                **cap,
+                **_summarize_capability_runtime(cap.get("name", "")),
+            }
+            for cap in loaded_caps
+        ],
         "discovered_model_capabilities": [
             cap.get("capability", "") for cap in discovered_caps if cap.get("capability")
         ],
@@ -668,6 +737,37 @@ def _detect_gpu_available() -> bool:
     except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired, OSError) as exc:
         logger.debug("nvidia-smi probe failed: %s", exc)
         return False
+
+
+def _log_runtime_capability_hints(runtime: Any) -> None:
+    gpu_available = _detect_gpu_available()
+    for cap_info in runtime.get_capabilities():
+        capability = cap_info.get("name", "")
+        if not capability:
+            continue
+        summary = _summarize_capability_runtime(capability)
+        build_info = summary["build_info"]
+        if build_info:
+            logger.info(
+                "Capability %s build info: builder=%s toolchain=%s onnxruntime=%s metadata=%s",
+                capability,
+                build_info.get("builder_image", "unknown"),
+                build_info.get("builder_toolchain_profile", "unknown"),
+                build_info.get("onnxruntime_package", "unknown"),
+                build_info.get("_path", ""),
+            )
+        else:
+            logger.warning(
+                "Capability %s build_info.json not found beside installed libraries; GPU-vs-CPU artifact source is unknown",
+                capability,
+            )
+        if gpu_available and build_info and build_info.get("onnxruntime_package") != "gpu":
+            logger.error(
+                "Capability %s is running on a GPU host but installed artifact metadata says onnxruntime_package=%s; "
+                "rebuild/reinstall this capability from the GPU builder to avoid slow CPU execution",
+                capability,
+                build_info.get("onnxruntime_package"),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -788,6 +888,8 @@ async def infer(
         raw = await image.read()
         _check_upload_size(raw)
         img = _decode_image(raw)
+        original_height, original_width = img.shape[:2]
+        img, resized_to = _resize_image_for_capability(capability, img)
 
         if options:
             try:
@@ -818,6 +920,12 @@ async def infer(
 
             elapsed = (time.perf_counter() - t0) * 1000.0
             version = _get_runtime_capability_version(runtime, capability)
+            if resized_to:
+                result.setdefault("result", {})["input_size"] = {
+                    "width": original_width,
+                    "height": original_height,
+                }
+                result["result"]["preprocessed_size"] = resized_to
             ab_info = ab_manager.get_test_info(capability)
             if ab_info:
                 ab_info = {

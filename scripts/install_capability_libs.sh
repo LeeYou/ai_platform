@@ -30,6 +30,7 @@ if [ ! -f "${ARTIFACT_TAR_GZ}" ]; then
 fi
 
 TARGET_DIR="${HOST_ROOT}/libs/${ARCH}/${CAPABILITY}/current/lib"
+TARGET_ROOT="$(dirname "${TARGET_DIR}")"
 
 if [ ! -d "${TARGET_DIR}" ]; then
     echo "[install_capability_libs] Target directory does not exist: ${TARGET_DIR}" >&2
@@ -56,6 +57,7 @@ find_matching_dir() {
 
 SOURCE_DIR="$(find_matching_dir "lib${CAPABILITY}.so*")"
 RUNTIME_DIR="$(find_matching_dir "libai_runtime.so*")"
+SOURCE_ROOT="$(dirname "${SOURCE_DIR}")"
 
 if [ -z "${SOURCE_DIR}" ]; then
     echo "[install_capability_libs] Could not find lib${CAPABILITY}.so* in artifact: ${ARTIFACT_TAR_GZ}" >&2
@@ -76,6 +78,9 @@ fi
 
 mkdir -p "${BACKUP_DIR}"
 cp -a "${TARGET_DIR}/." "${BACKUP_DIR}/"
+if [ -f "${TARGET_ROOT}/build_info.json" ]; then
+    cp -a "${TARGET_ROOT}/build_info.json" "${BACKUP_DIR}/build_info.json"
+fi
 
 shopt -s nullglob
 SOURCE_FILES=(
@@ -91,9 +96,17 @@ fi
 rm -f "${TARGET_DIR}"/libai_runtime.so* "${TARGET_DIR}"/lib"${CAPABILITY}".so*
 cp -a "${SOURCE_DIR}"/libai_runtime.so* "${TARGET_DIR}/"
 cp -a "${SOURCE_DIR}"/lib"${CAPABILITY}".so* "${TARGET_DIR}/"
+if [ -f "${SOURCE_ROOT}/build_info.json" ]; then
+    cp -a "${SOURCE_ROOT}/build_info.json" "${TARGET_ROOT}/build_info.json"
+else
+    rm -f "${TARGET_ROOT}/build_info.json"
+fi
 shopt -u nullglob
 
 echo "[install_capability_libs] Installed capability libs to: ${TARGET_DIR}"
+if [ -f "${TARGET_ROOT}/build_info.json" ]; then
+    echo "[install_capability_libs] Installed build metadata to: ${TARGET_ROOT}/build_info.json"
+fi
 echo "[install_capability_libs] Backup saved at: ${BACKUP_DIR}"
 echo "[install_capability_libs] Next step: restart prod and confirm:"
 echo "  [ModelLoader] Manifest OK: ${CAPABILITY} v<version> in ..."

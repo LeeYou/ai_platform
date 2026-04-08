@@ -115,6 +115,10 @@ class ProdMainTests(unittest.TestCase):
             json.dumps({"capability": "face_detect", "model_version": "v1.2.3"}),
             encoding="utf-8",
         )
+        (self.model_dir / "preprocess.json").write_text(
+            json.dumps({"resize": {"width": 2, "height": 2}}),
+            encoding="utf-8",
+        )
         self.pipeline_dir = Path(self.tempdir.name) / "pipelines"
         self.pipeline_dir.mkdir(parents=True, exist_ok=True)
 
@@ -131,6 +135,7 @@ class ProdMainTests(unittest.TestCase):
         self.original_resolve_runtime_so_path = prod_main.resolve_runtime_so_path
         self.original_list_available_capabilities = prod_main.list_available_capabilities
         self.original_resource_resolve_model_dir = resource_resolver.resolve_model_dir
+        self.original_resource_resolve_lib_path = resource_resolver.resolve_lib_path
         self.original_exists = prod_main.os.path.exists
         self.original_license_path = prod_main.LICENSE_PATH
         self.original_pubkey_path = prod_main.PUBKEY_PATH
@@ -142,13 +147,19 @@ class ProdMainTests(unittest.TestCase):
         self.original_subprocess_run = prod_main.subprocess.run
         self.original_ctypes_cdll = prod_main.ctypes.CDLL
         self.original_ai_pubkey_env = os.environ.get("AI_PUBKEY_PATH")
-        self.libs_dir = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect" / "lib"
+        self.capability_lib_root = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect"
+        self.libs_dir = self.capability_lib_root / "lib"
         self.libs_dir.mkdir(parents=True, exist_ok=True)
+        (self.capability_lib_root / "build_info.json").write_text(
+            json.dumps({"onnxruntime_package": "gpu", "builder_toolchain_profile": "cuda11.8-cudnn8"}),
+            encoding="utf-8",
+        )
         (self.libs_dir / "libface_detect.so").write_bytes(b"fake")
         (self.libs_dir / "libai_runtime.so").write_bytes(b"fake")
         (self.libs_dir / "libonnxruntime.so.1.18.1").write_bytes(b"fake")
 
         resource_resolver.resolve_model_dir = lambda capability: str(self.model_dir)
+        resource_resolver.resolve_lib_path = lambda capability: str(self.libs_dir / "libface_detect.so")
         prod_main.resolve_model_dir = lambda capability: str(self.model_dir)
         prod_main.resolve_models_dir = lambda: str(Path(self.tempdir.name) / "models")
         prod_main.resolve_libs_dir = lambda: str(Path(self.tempdir.name) / "libs")
@@ -161,7 +172,7 @@ class ProdMainTests(unittest.TestCase):
                 "real_model_dir": str(self.model_dir.resolve()),
                 "source": "mount",
                 "manifest": {"capability": "face_detect", "model_version": "v1.2.3"},
-                "preprocess": {},
+                "preprocess": {"resize": {"width": 2, "height": 2}},
             }
         ]
         prod_main._init_runtime = lambda: True
@@ -185,6 +196,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main.resolve_runtime_so_path = self.original_resolve_runtime_so_path
         prod_main.list_available_capabilities = self.original_list_available_capabilities
         resource_resolver.resolve_model_dir = self.original_resource_resolve_model_dir
+        resource_resolver.resolve_lib_path = self.original_resource_resolve_lib_path
         prod_main.os.path.exists = self.original_exists
         prod_main.LICENSE_PATH = self.original_license_path
         prod_main.PUBKEY_PATH = self.original_pubkey_path
@@ -526,7 +538,7 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["ab_test"]["applied_version"], "v1.2.3")
         self.assertFalse(body["ab_test"]["selection_matches_runtime"])
 
-    def test_infer_endpoint_routes_raw_decoded_image_without_python_resize(self):
+    def test_infer_endpoint_resizes_to_capability_input_before_runtime(self):
         recorded = {}
 
         class _RecordingRuntime(_FakeRuntime):
@@ -539,15 +551,26 @@ class ProdMainTests(unittest.TestCase):
 
         self.fake_runtime = _RecordingRuntime()
         prod_main.get_runtime = lambda: self.fake_runtime
-        prod_main._decode_image = lambda data: _RecordedImage(width=5, height=4)
+        prod_main._decode_image = lambda data: prod_main.np.zeros((4, 5, 3), dtype=prod_main.np.uint8)
+        (self.model_dir / "preprocess.json").write_text(
+            json.dumps({"resize": {"width": 3, "height": 2}}),
+            encoding="utf-8",
+        )
 
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
-        asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
 
-        self.assertEqual(recorded["width"], 5)
-        self.assertEqual(recorded["height"], 4)
+        self.assertEqual(recorded["width"], 3)
+        self.assertEqual(recorded["height"], 2)
         self.assertEqual(recorded["channels"], 3)
-        self.assertEqual(recorded["payload_len"], 5 * 4 * 3)
+        self.assertEqual(recorded["payload_len"], 3 * 2 * 3)
+        self.assertEqual(body["result"]["preprocessed_size"], {"width": 3, "height": 2})
+
+    def test_capability_diagnostics_include_build_metadata(self):
+        body = prod_main.capability_diagnostics()
+        details = body["loaded_capability_details"][0]
+        self.assertEqual(details["build_info"]["onnxruntime_package"], "gpu")
+        self.assertTrue(details["runtime_gpu_expected"])
 
     def test_admin_ab_tests_endpoint_requires_token_and_returns_data(self):
         body = prod_main.list_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer test-token"}))

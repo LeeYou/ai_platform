@@ -22,6 +22,10 @@ class InstallCapabilityLibsTests(unittest.TestCase):
 
             artifact_root = temp_path / "artifact_src" / "desktop_recapture_detect" / "1.0.0" / "job-1" / "lib"
             artifact_root.mkdir(parents=True, exist_ok=True)
+            (artifact_root.parent / "build_info.json").write_text(
+                '{"onnxruntime_package":"gpu","builder_toolchain_profile":"cuda11.8-cudnn8"}',
+                encoding="utf-8",
+            )
             (artifact_root / "libai_runtime.so").write_text("new-runtime", encoding="utf-8")
             (artifact_root / "libdesktop_recapture_detect.so").write_text("new-capability", encoding="utf-8")
             artifact_tar = temp_path / "artifact.tar.gz"
@@ -39,6 +43,10 @@ class InstallCapabilityLibsTests(unittest.TestCase):
             self.assertEqual(
                 (target_dir / "libdesktop_recapture_detect.so").read_text(encoding="utf-8"),
                 "new-capability",
+            )
+            self.assertIn(
+                '"onnxruntime_package":"gpu"',
+                (target_dir.parent / "build_info.json").read_text(encoding="utf-8"),
             )
 
             backup_root = host_root / "backup"

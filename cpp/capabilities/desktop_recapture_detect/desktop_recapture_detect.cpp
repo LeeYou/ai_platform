@@ -57,6 +57,7 @@ struct DesktopRecaptureContext {
     float mean[3]      = {0.485f, 0.456f, 0.406f};
     float std_dev[3]   = {0.229f, 0.224f, 0.225f};
     int   target_color_format = 1;  // 0=BGR, 1=RGB
+    std::string execution_provider = "cpu";
 
     // Inference counter (for periodic license checks)
     std::atomic<uint64_t> infer_count{0};
@@ -425,9 +426,11 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
         cuda_options.arena_extend_strategy = 0;
         cuda_options.do_copy_in_default_stream = 1;
         ctx->session_opts.AppendExecutionProvider_CUDA(cuda_options);
+        ctx->execution_provider = "cuda";
         std::fprintf(stdout, "[desktop_recapture_detect] GPU mode enabled (CUDA ExecutionProvider)\n");
     } catch (const Ort::Exception& e) {
         // CUDA unavailable, will use CPU automatically
+        ctx->execution_provider = "cpu";
         std::fprintf(stderr, "[desktop_recapture_detect] CUDA unavailable (%s), using CPU\n", e.what());
     }
 
@@ -461,7 +464,8 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
     for (auto& s : ctx->input_names_storage)  ctx->input_names.push_back(s.c_str());
     for (auto& s : ctx->output_names_storage) ctx->output_names.push_back(s.c_str());
 
-    std::fprintf(stdout, "[desktop_recapture_detect] Model loaded: %s\n", model_path.c_str());
+    std::fprintf(stdout, "[desktop_recapture_detect] Model loaded: %s (provider=%s)\n",
+                 model_path.c_str(), ctx->execution_provider.c_str());
 
     // Warm-up: run multiple dummy inferences so that CUDA JIT kernel compilation,
     // cuDNN algorithm selection, and GPU memory arena allocation all happen at
@@ -576,18 +580,21 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
     // Diagnostic log: helps operators verify model output and detect bias issues
     // (e.g. model always outputting positive logits regardless of input).
     std::fprintf(stdout,
-        "[desktop_recapture_detect] logit=%.4f prob_fake=%.4f is_fake=%s\n",
+        "[desktop_recapture_detect] provider=%s logit=%.4f prob_fake=%.4f is_fake=%s\n",
+        ctx->execution_provider.c_str(),
         static_cast<double>(logit),
         static_cast<double>(prob_fake),
         is_fake ? "true" : "false");
     char json_buf[256];
     std::snprintf(json_buf, sizeof(json_buf),
         "{\"is_fake\":%s,\"label\":\"%s\","
-        "\"score_real\":%.4f,\"score_fake\":%.4f}",
+        "\"score_real\":%.4f,\"score_fake\":%.4f,"
+        "\"execution_provider\":\"%s\"}",
         is_fake ? "true" : "false",
         is_fake ? "fake" : "real",
         static_cast<double>(prob_real),
-        static_cast<double>(prob_fake));
+        static_cast<double>(prob_fake),
+        ctx->execution_provider.c_str());
 
     _set_result(output, AI_OK, json_buf);
     return AI_OK;
