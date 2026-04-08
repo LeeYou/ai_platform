@@ -126,6 +126,7 @@ class LicenseResponse(BaseModel):
     issued_at: datetime
     created_at: datetime
     download_url: Optional[str] = None
+    days_remaining: Optional[int] = None
 
     model_config = {"from_attributes": True}
 

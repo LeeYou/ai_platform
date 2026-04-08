@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -142,6 +143,40 @@ class LicenseAuthorizationExtensionTests(unittest.TestCase):
         self.assertEqual(signed["system_architecture"], "x86_64")
         self.assertEqual(signed["application_name"], "ai-platform-prod")
         self.assertIn("signature", signed)
+
+    def test_license_responses_include_days_remaining(self):
+        customer_id, key_id, headers = self._create_customer_and_key()
+        cst = timezone(timedelta(hours=8))
+        valid_from = datetime.now(cst) - timedelta(days=1)
+        valid_until = datetime.now(cst) + timedelta(days=10)
+
+        create_res = self.client.post(
+            "/api/v1/licenses",
+            json={
+                "customer_id": customer_id,
+                "key_pair_id": key_id,
+                "license_type": "commercial",
+                "capabilities": ["face_detect"],
+                "operating_system": "linux",
+                "application_name": "ai-platform-prod",
+                "valid_from": valid_from.isoformat(),
+                "valid_until": valid_until.isoformat(),
+                "version_constraint": ">=1.0.0",
+                "max_instances": 2,
+            },
+            headers=headers,
+        )
+        self.assertEqual(create_res.status_code, 201, create_res.text)
+        license_id = create_res.json()["license_id"]
+
+        list_res = self.client.get("/api/v1/licenses", headers=headers)
+        self.assertEqual(list_res.status_code, 200, list_res.text)
+        listed = next(item for item in list_res.json() if item["license_id"] == license_id)
+        self.assertEqual(listed["days_remaining"], 10)
+
+        detail_res = self.client.get(f"/api/v1/licenses/{license_id}", headers=headers)
+        self.assertEqual(detail_res.status_code, 200, detail_res.text)
+        self.assertEqual(detail_res.json()["days_remaining"], 10)
 
     def test_create_license_rejects_invalid_operating_system(self):
         customer_id, key_id, headers = self._create_customer_and_key()

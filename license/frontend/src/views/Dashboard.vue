@@ -93,9 +93,11 @@ async function loadData() {
     ])
     stats.value.totalCustomers = customersRes.data?.total ?? 0
     stats.value.activeLicenses = licensesRes.data?.total ?? 0
-    stats.value.expiring30 = expiring30Res.data?.total ?? (expiring30Res.data?.items?.length ?? 0)
-    stats.value.expiring7 = expiring7Res.data?.total ?? (expiring7Res.data?.items?.length ?? 0)
-    expiringList.value = expiring30Res.data?.items ?? expiring30Res.data ?? []
+    const expiring30Items = expiring30Res.data?.items ?? expiring30Res.data?.licenses ?? expiring30Res.data ?? []
+    const expiring7Items = expiring7Res.data?.items ?? expiring7Res.data?.licenses ?? expiring7Res.data ?? []
+    stats.value.expiring30 = expiring30Res.data?.total ?? expiring30Items.length
+    stats.value.expiring7 = expiring7Res.data?.total ?? expiring7Items.length
+    expiringList.value = expiring30Items
   } catch (e) {
     ElMessage.error('加载数据失败：' + extractErrorMessage(e))
   } finally {

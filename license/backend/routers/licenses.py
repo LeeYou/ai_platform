@@ -72,6 +72,8 @@ def _load_private_key_or_raise(key_pair) -> str:
 def _license_to_response(record, request_base_url: str = "") -> schemas.LicenseResponse:
     data = schemas.LicenseResponse.model_validate(record)
     data.download_url = f"{request_base_url}/api/v1/licenses/{record.license_id}/download"
+    if data.valid_until:
+        data.days_remaining = (data.valid_until.astimezone(CST).date() - datetime.now(CST).date()).days
     # Populate key_pair_name from relationship
     if record.key_pair:
         data.key_pair_name = record.key_pair.name
