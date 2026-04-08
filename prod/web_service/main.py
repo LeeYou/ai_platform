@@ -492,7 +492,10 @@ def _load_capability_preprocess(capability: str) -> dict[str, Any]:
     model_dir = resolve_model_dir(capability)
     if not model_dir:
         return {}
-    preprocess_path = os.path.join(model_dir, "preprocess.json")
+    model_dir_real = os.path.realpath(model_dir)
+    preprocess_path = os.path.realpath(os.path.join(model_dir_real, "preprocess.json"))
+    if preprocess_path != os.path.join(model_dir_real, "preprocess.json"):
+        return {}
     try:
         with open(preprocess_path, encoding="utf-8") as f:
             return json.load(f)
