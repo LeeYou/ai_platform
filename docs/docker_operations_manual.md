@@ -1780,8 +1780,14 @@ sudo cp license.bin /data/ai_platform/licenses/
 # 5. 放置模型包
 cp -r models/* /data/ai_platform/models/
 
-# 6. 放置客户专属 SO 插件
-cp -r libs/* /data/ai_platform/libs/linux_x86_64/
+# 6. 放置客户专属 SO 插件（推荐使用交付包内脚本）
+bash tools/install_capability_libs.sh \
+  <desktop_recapture_detect-build-artifact.tar.gz> \
+  desktop_recapture_detect
+
+#    如需手工覆盖，至少替换：
+#      /data/ai_platform/libs/linux_x86_64/desktop_recapture_detect/current/lib/libai_runtime.so
+#      /data/ai_platform/libs/linux_x86_64/desktop_recapture_detect/current/lib/libdesktop_recapture_detect.so
 
 # 7. 启动服务
 docker run -d \
@@ -1800,6 +1806,12 @@ docker run -d \
 curl http://localhost:8080/api/v1/health
 curl http://localhost:8080/api/v1/license/status
 ```
+
+> `manifest.json` 由模型导出脚本自动生成。当前导出逻辑默认写入 `model_version`；
+> 线上旧模型包若仍是 `version` 字段，也已由 build / prod / C++ runtime 兼容读取，
+> **不应该要求客户手工改 manifest**。如果日志仍显示
+> `[ModelLoader] Manifest OK: desktop_recapture_detect v in ...`，应优先排查宿主机挂载的
+> `libai_runtime.so` / `libdesktop_recapture_detect.so` 是否还是旧版本。
 
 ### 11.4 授权密钥对管理（一客户一密钥对 + 公钥指纹硬编码）
 

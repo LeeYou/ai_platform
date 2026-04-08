@@ -108,6 +108,13 @@ elif [ -d "${REPO_ROOT}/license/tools" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 6.1 Deployment helper scripts
+# ---------------------------------------------------------------------------
+echo ""
+echo "---- Copying deployment helper scripts ----"
+cp "${REPO_ROOT}/scripts/install_capability_libs.sh" "${OUTPUT_DIR}/tools/" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # 7. Create delivery manifest
 # ---------------------------------------------------------------------------
 echo ""
@@ -125,21 +132,22 @@ AI 能力平台 — 生产交付清单
   sdk_windows_x86_64/    — C/C++ SDK 头文件（Windows x86_64）
   sdk_jni/               — JNI 头文件（Java/Android 集成）
   docs/                  — API文档、部署手册、运维手册
-  tools/                 — 授权管理工具
+  tools/                 — 授权管理工具 / SO 安装辅助脚本
   mount_template/        — 宿主机挂载目录模板
 
 部署说明：
   1. 导入 Docker 镜像：
-       docker load < docker/agilestar-ai-prod-linux-x86_64-v${VERSION}.tar.gz
+        docker load < docker/agilestar-ai-prod-linux-x86_64-v${VERSION}.tar.gz
   2. 按 mount_template/ 创建宿主机目录结构：
        bash mount_template/init_host_dirs.sh
   3. 放置 pubkey.pem + license.bin 到 /data/ai_platform/licenses/
   4. 放置模型包到 /data/ai_platform/models/<capability>/current/
-  5. 放置 SO/DLL 到 /data/ai_platform/libs/<arch>/<capability>/
+  5. 如需替换客户专属 SO，优先使用：
+       bash tools/install_capability_libs.sh <artifact.tar.gz> <capability>
   6. 启动服务：
-       cd deploy && docker compose -f docker-compose.prod.yml up -d
+        cd deploy && docker compose -f docker-compose.prod.yml up -d
 
-详见 docs/deployment_manual.md
+  详见 docs/deployment_manual.md
 EOF
 
 echo "  Written: ${OUTPUT_DIR}/DELIVERY_MANIFEST.txt"
