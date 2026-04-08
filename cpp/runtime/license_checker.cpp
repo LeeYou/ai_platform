@@ -29,11 +29,12 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <sys/stat.h>
+
+#include <nlohmann/json.hpp>
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -82,20 +83,22 @@ static std::string _derive_pubkey_path(const std::string& license_path) {
     return license_path.substr(0, slash + 1) + "pubkey.pem";
 }
 
-static std::string _json_escape(const std::string& value) {
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (char ch : value) {
-        switch (ch) {
-            case '\\': escaped += "\\\\"; break;
-            case '"':  escaped += "\\\""; break;
-            case '\n': escaped += "\\n"; break;
-            case '\r': escaped += "\\r"; break;
-            case '\t': escaped += "\\t"; break;
-            default:   escaped += ch; break;
+static std::string _html_unescape(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    size_t pos = 0;
+    while (pos < value.size()) {
+        if (value[pos] == '&') {
+            if (value.compare(pos, 5, "&amp;") == 0)  { out += '&';  pos += 5; continue; }
+            if (value.compare(pos, 4, "&lt;") == 0)   { out += '<';  pos += 4; continue; }
+            if (value.compare(pos, 4, "&gt;") == 0)   { out += '>';  pos += 4; continue; }
+            if (value.compare(pos, 6, "&quot;") == 0) { out += '"';  pos += 6; continue; }
+            if (value.compare(pos, 6, "&#039;") == 0) { out += '\''; pos += 6; continue; }
+            if (value.compare(pos, 6, "&apos;") == 0) { out += '\''; pos += 6; continue; }
         }
+        out += value[pos++];
     }
-    return escaped;
+    return out;
 }
 
 static std::string _trim_copy(const std::string& value) {
@@ -232,23 +235,6 @@ static bool _minimum_platform_version_satisfied(const std::string& current_versi
         if (lhs > rhs) return true;
     }
     return true;
-}
-
-static std::string _json_string(const std::string& json, const std::string& key) {
-    const std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return "";
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return "";
-    ++pos;  // skip ':'
-    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
-    // Treat JSON null as absent (return empty string)
-    if (pos + 4 <= json.size() && json.compare(pos, 4, "null") == 0) return "";
-    // Value must be a quoted string
-    if (pos >= json.size() || json[pos] != '"') return "";
-    auto end = json.find('"', pos + 1);
-    if (end == std::string::npos) return "";
-    return json.substr(pos + 1, end - pos - 1);
 }
 
 struct ParsedTimestamp {
@@ -403,7 +389,7 @@ static int _compare_semver(const SemVer& lhs, const SemVer& rhs) {
 }
 
 static bool _version_satisfies_constraint(const std::string& version, const std::string& constraint) {
-    std::string trimmed_constraint = _trim_copy(constraint);
+    std::string trimmed_constraint = _trim_copy(_html_unescape(constraint));
     if (trimmed_constraint.empty() || trimmed_constraint == "null") return true;
 
     const SemVer parsed_version = _parse_semver(version);
@@ -439,149 +425,6 @@ static bool _version_satisfies_constraint(const std::string& version, const std:
         pos = end + 1;
     }
     return true;
-}
-
-static bool _parse_int32_value(const std::string& raw, int32_t* out) {
-    if (!out) return false;
-    std::string trimmed = _trim_copy(raw);
-    if (trimmed.empty() || trimmed == "null") return false;
-    errno = 0;
-    char* end = nullptr;
-    const long value = std::strtol(trimmed.c_str(), &end, 10);
-    if (errno == ERANGE || !end || *end != '\0' || value < INT32_MIN || value > INT32_MAX) {
-        return false;
-    }
-    *out = static_cast<int32_t>(value);
-    return true;
-}
-
-struct ParsedJsonObject {
-    std::unordered_map<std::string, std::string> values;
-};
-
-static bool _skip_ws(const std::string& json, size_t& pos) {
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
-        ++pos;
-    }
-    return pos < json.size();
-}
-
-static bool _parse_json_string_token(const std::string& json, size_t& pos, std::string& out) {
-    if (!_skip_ws(json, pos) || json[pos] != '"') return false;
-    ++pos;
-    out.clear();
-    while (pos < json.size()) {
-        const char ch = json[pos++];
-        if (ch == '"') return true;
-        if (ch == '\\') {
-            if (pos >= json.size()) return false;
-            const char esc = json[pos++];
-            switch (esc) {
-                case '"': out.push_back('"'); break;
-                case '\\': out.push_back('\\'); break;
-                case '/': out.push_back('/'); break;
-                case 'b': out.push_back('\b'); break;
-                case 'f': out.push_back('\f'); break;
-                case 'n': out.push_back('\n'); break;
-                case 'r': out.push_back('\r'); break;
-                case 't': out.push_back('\t'); break;
-                default: return false;
-            }
-            continue;
-        }
-        out.push_back(ch);
-    }
-    return false;
-}
-
-static bool _find_json_value_end(const std::string& json, size_t start, size_t& end) {
-    size_t pos = start;
-    if (!_skip_ws(json, pos)) return false;
-    start = pos;
-
-    if (json[pos] == '"') {
-        ++pos;
-        while (pos < json.size()) {
-            if (json[pos] == '\\') {
-                pos += 2;
-                continue;
-            }
-            if (json[pos] == '"') {
-                end = pos + 1;
-                return true;
-            }
-            ++pos;
-        }
-        return false;
-    }
-
-    if (json[pos] == '{' || json[pos] == '[') {
-        const char open = json[pos];
-        const char close = (open == '{') ? '}' : ']';
-        int depth = 0;
-        bool in_string = false;
-        for (; pos < json.size(); ++pos) {
-            const char ch = json[pos];
-            if (in_string) {
-                if (ch == '\\') {
-                    ++pos;
-                    continue;
-                }
-                if (ch == '"') in_string = false;
-                continue;
-            }
-            if (ch == '"') {
-                in_string = true;
-                continue;
-            }
-            if (ch == open) {
-                ++depth;
-                continue;
-            }
-            if (ch == close) {
-                --depth;
-                if (depth == 0) {
-                    end = pos + 1;
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    while (pos < json.size() && json[pos] != ',' && json[pos] != '}') {
-        ++pos;
-    }
-    end = pos;
-    return true;
-}
-
-static bool _parse_top_level_json_object(const std::string& json, ParsedJsonObject& parsed) {
-    parsed.values.clear();
-    size_t pos = 0;
-    if (!_skip_ws(json, pos) || json[pos] != '{') return false;
-    ++pos;
-
-    while (true) {
-        if (!_skip_ws(json, pos)) return false;
-        if (json[pos] == '}') return true;
-
-        std::string key;
-        if (!_parse_json_string_token(json, pos, key)) return false;
-        if (!_skip_ws(json, pos) || json[pos] != ':') return false;
-        ++pos;
-
-        size_t value_start = pos;
-        size_t value_end = pos;
-        if (!_find_json_value_end(json, value_start, value_end)) return false;
-        parsed.values[key] = _trim_copy(json.substr(value_start, value_end - value_start));
-        pos = value_end;
-
-        if (!_skip_ws(json, pos)) return false;
-        if (json[pos] == '}') return true;
-        if (json[pos] != ',') return false;
-        ++pos;
-    }
 }
 
 #if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
@@ -886,80 +729,29 @@ public:
 
     std::string to_json() {
         const LicenseStatus status = get();
-        std::ostringstream os;
-        os << "{"
-           << "\"status\":\"" << _json_escape(status.status) << "\""
-           << ",\"license_id\":";
-        if (status.license_id.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.license_id) << "\"";
-        }
-        os << ",\"valid_from\":";
-        if (status.valid_from.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.valid_from) << "\"";
-        }
-        os << ",\"valid_until\":";
-        if (status.valid_until.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.valid_until) << "\"";
-        }
-        os << ",\"version_constraint\":";
-        if (status.version_constraint.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.version_constraint) << "\"";
-        }
-        os << ",\"operating_system\":";
-        if (status.operating_system.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.operating_system) << "\"";
-        }
-        os << ",\"minimum_os_version\":";
-        if (status.minimum_os_version.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.minimum_os_version) << "\"";
-        }
-        os << ",\"detected_os_version\":";
-        if (status.detected_os_version.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.detected_os_version) << "\"";
-        }
-        os << ",\"system_architecture\":";
-        if (status.system_architecture.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.system_architecture) << "\"";
-        }
-        os << ",\"application_name\":";
-        if (status.application_name.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.application_name) << "\"";
-        }
-        os << ",\"max_instances\":" << status.max_instances
-           << ",\"machine_mismatch\":" << (status.machine_mismatch ? "true" : "false")
-           << ",\"operating_system_mismatch\":" << (status.operating_system_mismatch ? "true" : "false")
-           << ",\"os_version_mismatch\":" << (status.os_version_mismatch ? "true" : "false")
-           << ",\"architecture_mismatch\":" << (status.architecture_mismatch ? "true" : "false")
-           << ",\"days_remaining\":" << status.days_remaining
-           << ",\"source_mtime\":" << status.source_mtime
-           << ",\"refreshed_at_ms\":" << status.refreshed_at_ms
-           << ",\"last_success_at_ms\":" << status.last_success_at_ms
-           << ",\"last_error\":\"" << _json_escape(status.last_error) << "\""
-           << ",\"capabilities\":[";
-        for (size_t i = 0; i < status.capabilities.size(); ++i) {
-            if (i > 0) os << ",";
-            os << "\"" << _json_escape(status.capabilities[i]) << "\"";
-        }
-        os << "]}";
-        return os.str();
+        nlohmann::json j;
+        j["status"]          = status.status;
+        j["license_id"]      = status.license_id.empty()          ? nlohmann::json(nullptr) : nlohmann::json(status.license_id);
+        j["valid_from"]      = status.valid_from.empty()          ? nlohmann::json(nullptr) : nlohmann::json(status.valid_from);
+        j["valid_until"]     = status.valid_until.empty()         ? nlohmann::json(nullptr) : nlohmann::json(status.valid_until);
+        j["version_constraint"]  = status.version_constraint.empty()  ? nlohmann::json(nullptr) : nlohmann::json(status.version_constraint);
+        j["operating_system"]    = status.operating_system.empty()    ? nlohmann::json(nullptr) : nlohmann::json(status.operating_system);
+        j["minimum_os_version"]  = status.minimum_os_version.empty()  ? nlohmann::json(nullptr) : nlohmann::json(status.minimum_os_version);
+        j["detected_os_version"] = status.detected_os_version.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.detected_os_version);
+        j["system_architecture"] = status.system_architecture.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.system_architecture);
+        j["application_name"]    = status.application_name.empty()    ? nlohmann::json(nullptr) : nlohmann::json(status.application_name);
+        j["max_instances"]               = status.max_instances;
+        j["machine_mismatch"]            = status.machine_mismatch;
+        j["operating_system_mismatch"]   = status.operating_system_mismatch;
+        j["os_version_mismatch"]         = status.os_version_mismatch;
+        j["architecture_mismatch"]       = status.architecture_mismatch;
+        j["days_remaining"]              = status.days_remaining;
+        j["source_mtime"]                = status.source_mtime;
+        j["refreshed_at_ms"]             = status.refreshed_at_ms;
+        j["last_success_at_ms"]          = status.last_success_at_ms;
+        j["last_error"]                  = status.last_error;
+        j["capabilities"]                = status.capabilities;
+        return j.dump();
     }
 
     std::string failure_json(const std::string& cap_name, const std::string& cap_version) {
@@ -1009,13 +801,11 @@ public:
         }
 
         if (code == 0) return "";
-        std::ostringstream os;
-        os << "{"
-           << "\"code\":" << code
-           << ",\"message\":\"" << _json_escape(message) << "\""
-           << ",\"status_code\":403"
-           << "}";
-        return os.str();
+        nlohmann::json j;
+        j["code"]        = code;
+        j["message"]     = message;
+        j["status_code"] = 403;
+        return j.dump();
     }
 
 private:
@@ -1221,9 +1011,11 @@ private:
                 return next;
             }
 
-            const std::string json = content.substr(start);
-            ParsedJsonObject parsed;
-            if (!_parse_top_level_json_object(json, parsed)) {
+            const std::string json_str = content.substr(start);
+            nlohmann::json parsed;
+            try {
+                parsed = nlohmann::json::parse(json_str);
+            } catch (const nlohmann::json::exception&) {
                 *next = LicenseStatus{};
                 next->status = "invalid";
                 next->last_error = "failed to parse license json";
@@ -1233,30 +1025,38 @@ private:
                 return next;
             }
 
+            const auto get_str = [&](const char* key) -> std::string {
+                auto it = parsed.find(key);
+                if (it == parsed.end() || it->is_null()) return "";
+                if (it->is_string()) return it->get<std::string>();
+                return "";
+            };
+
             next->capabilities.clear();
-            next->license_id = _json_string(json, "license_id");
-            next->valid_from = _json_string(json, "valid_from");
-            next->valid_until = _json_string(json, "valid_until");
-            next->operating_system = _json_string(json, "operating_system");
-            next->minimum_os_version = _json_string(json, "minimum_os_version");
-            next->system_architecture = _json_string(json, "system_architecture");
-            next->application_name = _json_string(json, "application_name");
-            next->machine_fingerprint = _json_string(json, "machine_fingerprint");
-            next->version_constraint = _json_string(json, "version_constraint");
-            next->max_instances = 4;
-            auto max_instances_it = parsed.values.find("max_instances");
-            if (max_instances_it != parsed.values.end()) {
-                int32_t parsed_max_instances = 4;
-                if (_parse_int32_value(max_instances_it->second, &parsed_max_instances) && parsed_max_instances > 0) {
-                    next->max_instances = parsed_max_instances;
+            next->license_id           = get_str("license_id");
+            next->valid_from           = get_str("valid_from");
+            next->valid_until          = get_str("valid_until");
+            next->operating_system     = get_str("operating_system");
+            next->minimum_os_version   = get_str("minimum_os_version");
+            next->system_architecture  = get_str("system_architecture");
+            next->application_name     = get_str("application_name");
+            next->machine_fingerprint  = get_str("machine_fingerprint");
+            next->version_constraint   = get_str("version_constraint");
+            next->max_instances        = 4;
+
+            auto max_it = parsed.find("max_instances");
+            if (max_it != parsed.end() && max_it->is_number_integer()) {
+                const int32_t v = max_it->get<int32_t>();
+                if (v > 0) {
+                    next->max_instances = v;
                 } else {
                     std::fprintf(stderr,
-                                 "[LicenseChecker] Invalid max_instances value '%s' (expected positive int32); defaulting to %d.\n",
-                                 max_instances_it->second.c_str(),
-                                 next->max_instances);
+                                 "[LicenseChecker] Invalid max_instances value %d (expected positive int32); defaulting to %d.\n",
+                                 v, next->max_instances);
                 }
             }
-            next->raw_json = json;
+
+            next->raw_json = json_str;
             next->source_mtime = license_mtime;
             next->signature_invalid = false;
             next->missing = false;
@@ -1266,17 +1066,12 @@ private:
             next->architecture_mismatch = false;
             next->last_error.clear();
 
-            const auto capabilities_it = parsed.values.find("capabilities");
-            if (capabilities_it != parsed.values.end()) {
-                const std::string& arr = capabilities_it->second;
-                size_t p = 0;
-                while (p < arr.size()) {
-                    auto q1 = arr.find('"', p);
-                    if (q1 == std::string::npos) break;
-                    auto q2 = arr.find('"', q1 + 1);
-                    if (q2 == std::string::npos) break;
-                    next->capabilities.push_back(arr.substr(q1 + 1, q2 - q1 - 1));
-                    p = q2 + 1;
+            auto caps_it = parsed.find("capabilities");
+            if (caps_it != parsed.end() && caps_it->is_array()) {
+                for (const auto& cap : *caps_it) {
+                    if (cap.is_string()) {
+                        next->capabilities.push_back(cap.get<std::string>());
+                    }
                 }
             }
 
@@ -1292,8 +1087,8 @@ private:
                 return next;
             }
 
-            auto signature_it = parsed.values.find("signature");
-            if (signature_it == parsed.values.end()) {
+            auto sig_it = parsed.find("signature");
+            if (sig_it == parsed.end() || !sig_it->is_string()) {
                 next->signature_invalid = true;
                 next->status = "signature_invalid";
                 next->last_error = "signature missing";
@@ -1303,27 +1098,15 @@ private:
                 return next;
             }
 
-            std::vector<std::string> keys;
-            keys.reserve(parsed.values.size());
-            for (const auto& item : parsed.values) {
-                if (item.first != "signature") keys.push_back(item.first);
-            }
-            std::sort(keys.begin(), keys.end());
+            // Rebuild canonical JSON (sorted keys, compact, non-ASCII as-is, no signature field)
+            // to match what the Python signer computes:
+            //   json.dumps(payload, sort_keys=True, separators=(",",":"), ensure_ascii=False)
+            nlohmann::json canonical_obj = parsed;
+            canonical_obj.erase("signature");
+            const std::string canonical = canonical_obj.dump(-1, ' ', false);
+            const std::string signature_b64 = sig_it->get<std::string>();
 
-            std::ostringstream canonical;
-            canonical << "{";
-            for (size_t i = 0; i < keys.size(); ++i) {
-                if (i > 0) canonical << ",";
-                canonical << "\"" << _json_escape(keys[i]) << "\":" << parsed.values[keys[i]];
-            }
-            canonical << "}";
-
-            std::string signature_b64 = signature_it->second;
-            if (signature_b64.size() >= 2 && signature_b64.front() == '"' && signature_b64.back() == '"') {
-                signature_b64 = signature_b64.substr(1, signature_b64.size() - 2);
-            }
-
-            if (!_verify_signature(canonical.str(), signature_b64, pubkey_pem)) {
+            if (!_verify_signature(canonical, signature_b64, pubkey_pem)) {
                 next->signature_invalid = true;
                 next->status = "signature_invalid";
                 next->last_error = "signature verification failed";

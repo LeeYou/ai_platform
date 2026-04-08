@@ -70,6 +70,16 @@ endif()
 include(FindONNXRuntime)
 
 # ---------------------------------------------------------------------------
+# 第三方依赖：nlohmann/json（header-only，已捆绑于 third_party/nlohmann/json.hpp）
+# ---------------------------------------------------------------------------
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    add_library(nlohmann_json INTERFACE)
+    add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
+    target_include_directories(nlohmann_json INTERFACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+endif()
+
+# ---------------------------------------------------------------------------
 # 子工程
 # ---------------------------------------------------------------------------
 

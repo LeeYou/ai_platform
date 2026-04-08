@@ -1,3 +1,4 @@
+import html
 from datetime import datetime
 from typing import Optional
 
@@ -100,7 +101,7 @@ class LicenseCreate(BaseModel):
         if value is None:
             return ">=1.0.0"
         if isinstance(value, str):
-            normalized = value.strip()
+            normalized = html.unescape(value).strip()
             return normalized or ">=1.0.0"
         return value
 

@@ -35,6 +35,11 @@ set_target_properties(ai_runtime PROPERTIES
     VISIBILITY_INLINES_HIDDEN ON
 )
 
+target_link_libraries(ai_runtime
+    PRIVATE
+        nlohmann_json::nlohmann_json
+)
+
 # Linux：-ldl 用于 dlopen/dlsym/dlclose
 if(UNIX AND NOT APPLE)
     target_link_libraries(ai_runtime PRIVATE dl)
