@@ -538,7 +538,7 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["ab_test"]["applied_version"], "v1.2.3")
         self.assertFalse(body["ab_test"]["selection_matches_runtime"])
 
-    def test_infer_endpoint_resizes_to_capability_input_before_runtime(self):
+    def test_infer_endpoint_preserves_original_image_shape_for_runtime(self):
         recorded = {}
 
         class _RecordingRuntime(_FakeRuntime):
@@ -552,19 +552,15 @@ class ProdMainTests(unittest.TestCase):
         self.fake_runtime = _RecordingRuntime()
         prod_main.get_runtime = lambda: self.fake_runtime
         prod_main._decode_image = lambda data: prod_main.np.zeros((4, 5, 3), dtype=prod_main.np.uint8)
-        (self.model_dir / "preprocess.json").write_text(
-            json.dumps({"resize": {"width": 3, "height": 2}}),
-            encoding="utf-8",
-        )
 
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         body = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
 
-        self.assertEqual(recorded["width"], 3)
-        self.assertEqual(recorded["height"], 2)
+        self.assertEqual(recorded["width"], 5)
+        self.assertEqual(recorded["height"], 4)
         self.assertEqual(recorded["channels"], 3)
-        self.assertEqual(recorded["payload_len"], 3 * 2 * 3)
-        self.assertEqual(body["result"]["preprocessed_size"], {"width": 3, "height": 2})
+        self.assertEqual(recorded["payload_len"], 5 * 4 * 3)
+        self.assertNotIn("preprocessed_size", body["result"])
 
     def test_capability_diagnostics_include_build_metadata(self):
         body = prod_main.capability_diagnostics()

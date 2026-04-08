@@ -488,36 +488,6 @@ def _decode_image(data: bytes) -> np.ndarray:
     return img
 
 
-def _load_capability_preprocess(capability: str) -> dict[str, Any]:
-    model_dir = resolve_model_dir(capability)
-    if not model_dir:
-        return {}
-    model_dir_real = os.path.realpath(model_dir)
-    preprocess_path = os.path.realpath(os.path.join(model_dir_real, "preprocess.json"))
-    if preprocess_path != os.path.join(model_dir_real, "preprocess.json"):
-        return {}
-    try:
-        with open(preprocess_path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _resize_image_for_capability(capability: str, img: np.ndarray) -> tuple[np.ndarray, dict[str, int] | None]:
-    resize_cfg = _load_capability_preprocess(capability).get("resize", {})
-    width = int(resize_cfg.get("width") or 0)
-    height = int(resize_cfg.get("height") or 0)
-    if width <= 0 or height <= 0:
-        return img, None
-    if img.shape[1] == width and img.shape[0] == height:
-        return img, {"width": width, "height": height}
-
-    import cv2  # type: ignore
-
-    resized = cv2.resize(img, (width, height), interpolation=cv2.INTER_LINEAR)
-    return resized, {"width": width, "height": height}
-
-
 def _load_capability_build_info(capability: str) -> dict[str, Any]:
     from resource_resolver import resolve_lib_path
 
@@ -665,7 +635,6 @@ def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dic
 
     try:
         img = _decode_image(image_bytes)
-        img, _ = _resize_image_for_capability(capability, img)
         height, width, channels = img.shape
         result = runtime.infer(handle, img.tobytes(), width, height, channels)
         if result.get("error_code", 0) != AI_OK:
@@ -891,8 +860,6 @@ async def infer(
         raw = await image.read()
         _check_upload_size(raw)
         img = _decode_image(raw)
-        original_height, original_width = img.shape[:2]
-        img, resized_to = _resize_image_for_capability(capability, img)
 
         if options:
             try:
@@ -923,12 +890,6 @@ async def infer(
 
             elapsed = (time.perf_counter() - t0) * 1000.0
             version = _get_runtime_capability_version(runtime, capability)
-            if resized_to:
-                result.setdefault("result", {})["input_size"] = {
-                    "width": original_width,
-                    "height": original_height,
-                }
-                result["result"]["preprocessed_size"] = resized_to
             ab_info = ab_manager.get_test_info(capability)
             if ab_info:
                 ab_info = {
