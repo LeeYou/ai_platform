@@ -29,6 +29,10 @@
 #include <string>
 #include <vector>
 
+#ifdef ENABLE_TENSORRT
+#  include <sys/stat.h>
+#endif
+
 // ---------------------------------------------------------------------------
 // ONNXRuntime C++ API (optional: compiled without ORT in skeleton mode)
 // ---------------------------------------------------------------------------
@@ -483,9 +487,8 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
         if (trt_available) {
             try {
                 std::string trt_cache = ctx->model_dir + "/trt_cache";
-                // Ensure cache directory exists
-                std::string mkdir_cmd = "mkdir -p " + trt_cache;
-                (void)std::system(mkdir_cmd.c_str());  // best-effort
+                // Ensure cache directory exists using POSIX mkdir (755 perms).
+                ::mkdir(trt_cache.c_str(), 0755);
 
                 OrtTensorRTProviderOptions trt_opts{};
                 trt_opts.device_id                   = 0;
