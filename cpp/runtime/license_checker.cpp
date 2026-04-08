@@ -240,8 +240,12 @@ static std::string _json_string(const std::string& json, const std::string& key)
     if (pos == std::string::npos) return "";
     pos = json.find(':', pos + needle.size());
     if (pos == std::string::npos) return "";
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return "";
+    ++pos;  // skip ':'
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+    // Treat JSON null as absent (return empty string)
+    if (pos + 4 <= json.size() && json.compare(pos, 4, "null") == 0) return "";
+    // Value must be a quoted string
+    if (pos >= json.size() || json[pos] != '"') return "";
     auto end = json.find('"', pos + 1);
     if (end == std::string::npos) return "";
     return json.substr(pos + 1, end - pos - 1);
