@@ -870,7 +870,6 @@ async def infer(
         session_id = request.headers.get("X-Session-ID", "").strip() or None
         selected_version = ab_manager.get_version_for_request(capability, session_id)
 
-        t0 = time.perf_counter()
         handle = runtime.acquire(capability, timeout_ms=30000)
         if not handle:
             logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
@@ -879,7 +878,9 @@ async def infer(
         try:
             height, width, channels = img.shape
             img_bytes = img.tobytes()
+            t0 = time.perf_counter()
             result = runtime.infer(handle, img_bytes, width, height, channels)
+            elapsed = (time.perf_counter() - t0) * 1000.0
 
             if result.get("error_code", 0) != AI_OK:
                 return _error_response(
@@ -888,7 +889,6 @@ async def infer(
                     capability
                 )
 
-            elapsed = (time.perf_counter() - t0) * 1000.0
             version = _get_runtime_capability_version(runtime, capability)
             ab_info = ab_manager.get_test_info(capability)
             if ab_info:
