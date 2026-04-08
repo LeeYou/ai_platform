@@ -7,15 +7,21 @@ from sqlalchemy.orm import Session
 import crud
 import schemas
 from database import get_db
-from key_store import write_private_key
+from key_store import has_private_key, write_private_key
 from license_signer import generate_key_pair
 
 router = APIRouter(prefix="/api/v1/keys", tags=["keys"])
 
 
+def _key_pair_to_response(key_pair) -> schemas.KeyPairResponse:
+    data = schemas.KeyPairResponse.model_validate(key_pair)
+    data.private_key_available = has_private_key(key_pair)
+    return data
+
+
 @router.get("", response_model=list[schemas.KeyPairResponse])
 def list_keys(db: Session = Depends(get_db)):
-    return crud.get_key_pairs(db)
+    return [_key_pair_to_response(key_pair) for key_pair in crud.get_key_pairs(db)]
 
 
 @router.post("", response_model=schemas.KeyPairResponse, status_code=201)
@@ -28,7 +34,7 @@ def create_key(data: schemas.KeyPairCreate, db: Session = Depends(get_db)):
         db.delete(key_pair)
         db.commit()
         raise HTTPException(status_code=500, detail=f"Failed to persist private key: {exc}") from exc
-    return key_pair
+    return _key_pair_to_response(key_pair)
 
 
 @router.get("/{key_id}/public", response_class=PlainTextResponse)

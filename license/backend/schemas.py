@@ -161,6 +161,7 @@ class KeyPairResponse(BaseModel):
     public_key_pem: str
     created_at: datetime
     is_active: bool
+    private_key_available: bool = True
 
     model_config = {"from_attributes": True}
 

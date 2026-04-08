@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 import crud
 import schemas
 from database import get_db
-from key_store import read_private_key
+from key_store import has_private_key, read_private_key
 from license_signer import sign_license, verify_license as verify_sig
 
 # CST timezone (UTC+8) - Standard timezone for all license operations
@@ -20,6 +20,10 @@ CST = timezone(timedelta(hours=8))
 LICENSES_DIR = os.environ.get("LICENSES_DIR", "./data/licenses")
 
 router = APIRouter(prefix="/api/v1/licenses", tags=["licenses"])
+MISSING_PRIVATE_KEY_DETAIL = (
+    "Key pair '{name}' is unavailable because its server-side private key file is missing. "
+    "Please create/select a new key pair and retry."
+)
 
 
 def _verify_key_match(privkey_pem: str, pubkey_pem: str) -> None:
@@ -48,6 +52,21 @@ def _save_license_file(license_id: str, content: str) -> str:
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
     return filepath
+
+
+def _load_private_key_or_raise(key_pair) -> str:
+    if not has_private_key(key_pair):
+        raise HTTPException(
+            status_code=400,
+            detail=MISSING_PRIVATE_KEY_DETAIL.format(name=key_pair.name),
+        )
+    try:
+        return read_private_key(key_pair)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=MISSING_PRIVATE_KEY_DETAIL.format(name=key_pair.name),
+        ) from exc
 
 
 def _license_to_response(record, request_base_url: str = "") -> schemas.LicenseResponse:
@@ -98,10 +117,7 @@ def create_license(data: schemas.LicenseCreate, db: Session = Depends(get_db)):
     if not key_pair.is_active:
         raise HTTPException(status_code=400, detail=f"Key pair '{key_pair.name}' is inactive")
 
-    try:
-        privkey_pem = read_private_key(key_pair)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail=f"Private key file not found for key pair {key_pair.id}") from exc
+    privkey_pem = _load_private_key_or_raise(key_pair)
     # Verify private key matches the selected key pair's public key
     _verify_key_match(privkey_pem, key_pair.public_key_pem)
 
@@ -172,10 +188,7 @@ def renew_license(license_id: str, data: schemas.LicenseRenew, db: Session = Dep
     key_pair = record.key_pair or (crud.get_key_pair(db, record.key_pair_id) if record.key_pair_id else None)
     if not key_pair:
         raise HTTPException(status_code=400, detail="License has no associated key pair")
-    try:
-        privkey_pem = read_private_key(key_pair)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail=f"Private key file not found for key pair {key_pair.id}") from exc
+    privkey_pem = _load_private_key_or_raise(key_pair)
     _verify_key_match(privkey_pem, key_pair.public_key_pem)
     issued_at = datetime.now(CST)
 

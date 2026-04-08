@@ -32,6 +32,10 @@ def write_private_key(key_pair, private_key_pem: str) -> str:
     return str(path)
 
 
+def has_private_key(key_pair) -> bool:
+    return private_key_path_for(key_pair).is_file()
+
+
 def read_private_key(key_pair) -> str:
     path = private_key_path_for(key_pair)
     return path.read_text(encoding="utf-8")

@@ -28,6 +28,13 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="私钥状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="row.private_key_available === false ? 'danger' : 'success'" size="small">
+              {{ row.private_key_available === false ? '缺失' : '正常' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain @click="handleDownloadPubKey(row)">下载公钥</el-button>

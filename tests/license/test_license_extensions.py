@@ -97,6 +97,15 @@ class LicenseAuthorizationExtensionTests(unittest.TestCase):
         self.assertEqual(key_res.status_code, 201, key_res.text)
         return customer_id, key_res.json()["id"], headers
 
+    def _remove_private_key_file(self, key_id: int):
+        key_store = importlib.import_module("key_store")
+        crud = importlib.import_module("crud")
+        database = importlib.import_module("database")
+        with database.SessionLocal() as db:
+            key_pair = crud.get_key_pair(db, key_id)
+            path = key_store.private_key_path_for(key_pair)
+        path.unlink()
+
     def test_create_license_persists_and_signs_new_fields(self):
         customer_id, key_id, headers = self._create_customer_and_key()
         response = self.client.post(
@@ -155,6 +164,42 @@ class LicenseAuthorizationExtensionTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422, response.text)
         self.assertIn("operating_system", response.text)
+        self.assertIn("must be one of: windows, linux, android, ios", response.text)
+
+    def test_list_keys_marks_missing_private_key_as_unavailable(self):
+        _, key_id, headers = self._create_customer_and_key()
+        self._remove_private_key_file(key_id)
+
+        response = self.client.get("/api/v1/keys", headers=headers)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        key_data = next(item for item in response.json() if item["id"] == key_id)
+        self.assertFalse(key_data["private_key_available"])
+
+    def test_create_license_rejects_missing_private_key_with_actionable_message(self):
+        customer_id, key_id, headers = self._create_customer_and_key()
+        self._remove_private_key_file(key_id)
+
+        response = self.client.post(
+            "/api/v1/licenses",
+            json={
+                "customer_id": customer_id,
+                "key_pair_id": key_id,
+                "license_type": "commercial",
+                "capabilities": ["face_detect"],
+                "operating_system": "linux",
+                "application_name": "ai-platform-prod",
+                "valid_from": "2026-04-01T00:00:00+08:00",
+                "valid_until": "2026-12-31T00:00:00+08:00",
+                "version_constraint": ">=1.0.0",
+                "max_instances": 2,
+            },
+            headers=headers,
+        )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("private key file is missing", response.text)
+        self.assertIn("create/select a new key pair", response.text)
 
     def test_run_migrations_adds_new_license_columns(self):
         legacy_db = self.temp_path / "legacy_license.db"

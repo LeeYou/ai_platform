@@ -49,6 +49,9 @@
             <div style="color:#909399;font-size:12px;margin-top:4px;">
               一客户一密钥对：请选择该客户专属的密钥对
             </div>
+            <div v-if="unavailableKeyPairCount" style="color:#E6A23C;font-size:12px;margin-top:4px;">
+              {{ unavailableKeyPairCount }} 个启用中的密钥对因私钥缺失已自动隐藏，请先在“密钥管理”中补充可用密钥对。
+            </div>
           </el-form-item>
           <el-form-item label="功能能力">
             <el-checkbox v-model="form.allCapabilities" @change="toggleAll" label="全部功能 (*)" />
@@ -126,6 +129,7 @@ const customerOptions = ref([])
 const keyPairOptions = ref([])
 const capabilityOptions = ref([])
 const configFormRef = ref()
+const unavailableKeyPairCount = ref(0)
 
   const form = ref({
     customer_id: '',
@@ -156,6 +160,10 @@ const keyPairName = computed(() => {
 
 function toggleAll(val) {
   if (val) form.value.capabilities = []
+}
+
+function isPrivateKeyUnavailable(keyPair) {
+  return keyPair?.private_key_available === false
 }
 
 async function nextStep() {
@@ -221,9 +229,15 @@ async function loadCustomers() {
 async function loadKeyPairs() {
   try {
     const res = await getKeys()
-    // Only show active key pairs
     const all = res.data?.items ?? res.data ?? []
-    keyPairOptions.value = all.filter(k => k.is_active)
+    unavailableKeyPairCount.value = all.filter(k => k.is_active && isPrivateKeyUnavailable(k)).length
+    keyPairOptions.value = all.filter(k => k.is_active && !isPrivateKeyUnavailable(k))
+    if (!keyPairOptions.value.some(k => k.id === form.value.key_pair_id)) {
+      form.value.key_pair_id = null
+    }
+    if (unavailableKeyPairCount.value > 0) {
+      ElMessage.warning(`有 ${unavailableKeyPairCount.value} 个启用中的密钥对因私钥缺失不可用于生成授权，请重新生成或改选其他密钥对`)
+    }
   } catch {}
 }
 
