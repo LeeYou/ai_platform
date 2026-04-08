@@ -67,6 +67,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - AI_LICENSE_DB=/app/data/license.db
+      - PRIVATE_KEYS_DIR=/app/data/private_keys
       - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
