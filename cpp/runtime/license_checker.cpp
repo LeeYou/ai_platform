@@ -725,6 +725,7 @@ struct LicenseStatus {
     std::string application_name;
     std::string machine_fingerprint;
     std::string version_constraint;
+    std::string detected_os_version;
     int32_t     days_remaining = 0;
     int32_t     max_instances = 4;
     std::vector<std::string> capabilities;
@@ -740,12 +741,17 @@ static std::string _environment_mismatch_reason(LicenseStatus& status) {
     status.operating_system_mismatch = false;
     status.os_version_mismatch = false;
     status.architecture_mismatch = false;
+    status.detected_os_version.clear();
 
     const std::string required_os = _to_lower_copy(_trim_copy(status.operating_system));
     if (!required_os.empty()) {
         const std::string current_os = _detect_current_operating_system();
         if (current_os.empty() || current_os != required_os) {
             status.operating_system_mismatch = true;
+            std::fprintf(stderr,
+                         "[LicenseChecker] OS check failed: detected=\"%s\", required=\"%s\"\n",
+                         current_os.empty() ? "(undetectable)" : current_os.c_str(),
+                         required_os.c_str());
             return "Operating system not licensed";
         }
     }
@@ -755,12 +761,22 @@ static std::string _environment_mismatch_reason(LicenseStatus& status) {
         const std::string current_arch = _detect_current_architecture();
         if (current_arch.empty() || current_arch != required_arch) {
             status.architecture_mismatch = true;
+            std::fprintf(stderr,
+                         "[LicenseChecker] Architecture check failed: detected=\"%s\", required=\"%s\"\n",
+                         current_arch.empty() ? "(undetectable)" : current_arch.c_str(),
+                         required_arch.c_str());
             return "System architecture not licensed";
         }
     }
 
-    if (!_minimum_platform_version_satisfied(_detect_current_os_version(), status.minimum_os_version)) {
+    const std::string current_version = _detect_current_os_version();
+    status.detected_os_version = current_version;
+    if (!_minimum_platform_version_satisfied(current_version, status.minimum_os_version)) {
         status.os_version_mismatch = true;
+        std::fprintf(stderr,
+                     "[LicenseChecker] OS version check failed: detected=\"%s\", minimum_required=\"%s\"\n",
+                     current_version.empty() ? "(undetectable)" : current_version.c_str(),
+                     status.minimum_os_version.c_str());
         return "Operating system version below license minimum";
     }
 
@@ -904,6 +920,12 @@ public:
             os << "null";
         } else {
             os << "\"" << _json_escape(status.minimum_os_version) << "\"";
+        }
+        os << ",\"detected_os_version\":";
+        if (status.detected_os_version.empty()) {
+            os << "null";
+        } else {
+            os << "\"" << _json_escape(status.detected_os_version) << "\"";
         }
         os << ",\"system_architecture\":";
         if (status.system_architecture.empty()) {

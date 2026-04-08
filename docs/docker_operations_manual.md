@@ -2292,11 +2292,18 @@ curl http://localhost:8080/api/v1/capabilities
 # 错误码 4004：机器指纹不匹配
 # → 重新为当前服务器生成 License
 
-# 错误码 4005：License 签名无效（含公钥指纹不匹配）
+# 错误码 4005：运行环境不匹配（机器指纹/操作系统/系统版本/架构）
+# → 调用 /api/v1/license/status 查看 detected_os_version 与 minimum_os_version 的差异
+# → 常见原因：License 中 minimum_os_version 高于生产容器实际系统版本；
+#             可通过 docker exec ai-prod cat /etc/os-release 确认容器内 VERSION_ID
+# → 若系统版本确实不满足，重新签发 minimum_os_version 与运行环境匹配的 License
+# → 或在 docker-compose.prod.yml 环境变量中设置 AI_OS_VERSION=<实际版本> 强制覆盖检测值
+curl http://localhost:8080/api/v1/license/status
+
+# 错误码 4006：License 签名无效（含公钥指纹不匹配）
 # → 检查 pubkey.pem 是否为该客户专属公钥
 # → 检查生产镜像/SO 是否为该客户专属版本（含正确的 TRUSTED_PUBKEY_SHA256）
 # → 如果更换过密钥对，须重新编译 SO 和重建镜像（参见 11.3 标准流程）
-curl http://localhost:8080/api/v1/license/status
 
 # 错误码 5002：模型加载失败
 # → 检查模型文件是否存在且完整
