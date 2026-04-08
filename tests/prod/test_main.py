@@ -357,6 +357,28 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["capabilities"][0]["version"], "v1.2.3")
         self.assertEqual(body["capabilities"][0]["manifest"]["model_version"], "v1.2.3")
 
+    def test_list_available_capabilities_accepts_legacy_manifest_version_field(self):
+        mount_root = Path(self.tempdir.name) / "mount_root"
+        model_dir = mount_root / "models" / "desktop_recapture_detect" / "current"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "manifest.json").write_text(
+            json.dumps({"capability": "desktop_recapture_detect", "version": "v1.2.3"}),
+            encoding="utf-8",
+        )
+
+        original_mount_root = resource_resolver.MOUNT_ROOT
+        original_builtin_root = resource_resolver.BUILTIN_ROOT
+        try:
+            resource_resolver.MOUNT_ROOT = str(mount_root)
+            resource_resolver.BUILTIN_ROOT = str(Path(self.tempdir.name) / "builtin_root")
+            body = resource_resolver.list_available_capabilities()
+        finally:
+            resource_resolver.MOUNT_ROOT = original_mount_root
+            resource_resolver.BUILTIN_ROOT = original_builtin_root
+
+        self.assertEqual(body[0]["version"], "v1.2.3")
+        self.assertEqual(body[0]["manifest"]["version"], "v1.2.3")
+
     def test_capabilities_endpoint_returns_empty_without_runtime(self):
         prod_main.get_runtime = lambda: None
         body = prod_main.list_capabilities()

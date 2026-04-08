@@ -75,12 +75,18 @@ static std::string extract_json_string(const std::string& json, const std::strin
     return json.substr(pos + 1, end - pos - 1);
 }
 
+static std::string extract_manifest_version(const std::string& manifest_json) {
+    std::string version = extract_json_string(manifest_json, "model_version");
+    if (!version.empty()) return version;
+    return extract_json_string(manifest_json, "version");
+}
+
 static std::string read_model_version(const std::string& model_dir) {
     std::string manifest_json;
     if (!read_file(model_dir + "/manifest.json", &manifest_json)) {
         return "unknown";
     }
-    std::string version = extract_json_string(manifest_json, "model_version");
+    std::string version = extract_manifest_version(manifest_json);
     return version.empty() ? "unknown" : version;
 }
 

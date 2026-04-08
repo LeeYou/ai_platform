@@ -312,7 +312,7 @@ def _resolve_model_version(capability: str) -> str | None:
             try:
                 with open(manifest_path, encoding="utf-8") as f:
                     manifest = json.load(f)
-                version = str(manifest.get("model_version", "")).strip()
+                version = str(manifest.get("model_version") or manifest.get("version") or "").strip()
                 if version:
                     versions[entry] = _safe_path_component(version, "unversioned")
             except Exception as exc:

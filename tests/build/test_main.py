@@ -164,6 +164,22 @@ class DesktopRecaptureExportTests(unittest.TestCase):
         self.assertEqual(payload["model_version"], "v9.9.9")
         self.assertNotIn("version", payload)
 
+    def test_resolve_model_version_accepts_legacy_version_field(self):
+        original_models_root = build_main.MODELS_ROOT
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                build_main.MODELS_ROOT = temp_dir
+                model_dir = Path(temp_dir) / "desktop_recapture_detect" / "current"
+                model_dir.mkdir(parents=True, exist_ok=True)
+                (model_dir / "manifest.json").write_text(
+                    json.dumps({"capability": "desktop_recapture_detect", "version": "v1.2.3"}),
+                    encoding="utf-8",
+                )
+
+                self.assertEqual(build_main._resolve_model_version("desktop_recapture_detect"), "v1.2.3")
+        finally:
+            build_main.MODELS_ROOT = original_models_root
+
 
 class BuildGpuProfileTests(unittest.TestCase):
     def setUp(self):

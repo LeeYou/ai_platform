@@ -28,6 +28,11 @@ PUBKEY_PATH = os.getenv("AI_PUBKEY_PATH",
 TRUSTED_PUBKEY_SHA256 = os.getenv("TRUSTED_PUBKEY_SHA256", "")
 
 
+def _manifest_version(manifest: dict) -> str:
+    version = manifest.get("model_version") or manifest.get("version") or "unknown"
+    return str(version).strip() or "unknown"
+
+
 def resolve_model_dir(capability: str) -> str | None:
     """Return model 'current' dir — mount takes priority over built-in."""
     for base in (MOUNT_ROOT, BUILTIN_ROOT):
@@ -177,7 +182,7 @@ def list_available_capabilities() -> list[dict]:
             seen.add(cap)
             results.append({
                 "capability":    cap,
-                "version":       manifest.get("model_version", "unknown"),
+                "version":       _manifest_version(manifest),
                 "model_dir":     model_dir,
                 "real_model_dir": real_model_dir,
                 "source":        "mount" if base == MOUNT_ROOT else "builtin",

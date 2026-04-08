@@ -227,7 +227,9 @@ static void _load_manifest_config(DesktopRecaptureContext* ctx) {
     std::string manifest_json;
     if (!_read_file(ctx->model_dir + "/manifest.json", manifest_json)) return;
     std::string parsed_version;
-    if (_jstr(manifest_json, "model_version", &parsed_version) && !parsed_version.empty()) {
+    if ((_jstr(manifest_json, "model_version", &parsed_version) ||
+         _jstr(manifest_json, "version", &parsed_version)) &&
+        !parsed_version.empty()) {
         ctx->model_version = parsed_version;
     }
 }
