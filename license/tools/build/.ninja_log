@@ -1,8 +1,0 @@
-# ninja log v7
-1	1991	1775699386600838743	license_core/CMakeFiles/ai_license_core.dir/rsa_utils.cpp.o	cdd3ebb6aadb6f4e
-0	2096	1775699386599838744	license_core/CMakeFiles/ai_license_core.dir/fingerprint.cpp.o	f6b0b84a62d37596
-3	2128	1775699386603903189	license_tool/CMakeFiles/license_tool.dir/main.cpp.o	ef02979f66390fd9
-1	2198	1775699386602256806	license_core/CMakeFiles/ai_license_core.dir/license_core.cpp.o	768090258ea3daf0
-1	4980	1775699386601839409	license_core/CMakeFiles/ai_license_core.dir/license_io.cpp.o	420a633addc0a77b
-4980	9901	1775699391579806084	lib/libai_license_core.a	38b82e50cdd57370
-9901	9980	1775699396500762808	bin/license_tool	45b958a38a8695a7
