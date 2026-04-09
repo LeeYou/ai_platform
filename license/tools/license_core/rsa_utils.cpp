@@ -176,8 +176,17 @@ std::string rsa_sign(const std::string& privkey_pem, const std::string& data)
     MdCtxPtr md_ctx(EVP_MD_CTX_new());
     if (!md_ctx) return "";
 
-    if (EVP_DigestSignInit(md_ctx.get(), nullptr, EVP_sha256(),
+    EVP_PKEY_CTX* pkey_ctx = nullptr;
+    if (EVP_DigestSignInit(md_ctx.get(), &pkey_ctx, EVP_sha256(),
                            nullptr, key.get()) != 1) {
+        return "";
+    }
+    // RSA-PSS with SHA-256 MGF1 and maximum salt length — must match
+    // Python: padding.PSS(mgf=MGF1(SHA256()), salt_length=PSS.MAX_LENGTH)
+    // and the runtime verifier in license_checker.cpp.
+    if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING) != 1 ||
+        EVP_PKEY_CTX_set_rsa_mgf1_md(pkey_ctx, EVP_sha256()) != 1 ||
+        EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, RSA_PSS_SALTLEN_MAX_SIGN) != 1) {
         return "";
     }
     if (EVP_DigestSignUpdate(md_ctx.get(), data.data(), data.size()) != 1) {
@@ -207,8 +216,16 @@ bool rsa_verify(const std::string& pubkey_pem,
     MdCtxPtr md_ctx(EVP_MD_CTX_new());
     if (!md_ctx) return false;
 
-    if (EVP_DigestVerifyInit(md_ctx.get(), nullptr, EVP_sha256(),
+    EVP_PKEY_CTX* pkey_ctx = nullptr;
+    if (EVP_DigestVerifyInit(md_ctx.get(), &pkey_ctx, EVP_sha256(),
                              nullptr, key.get()) != 1) {
+        return false;
+    }
+    // RSA-PSS with SHA-256 MGF1 and auto salt length — accepts signatures
+    // produced with any valid PSS salt length (including PSS.MAX_LENGTH from Python).
+    if (EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PSS_PADDING) != 1 ||
+        EVP_PKEY_CTX_set_rsa_mgf1_md(pkey_ctx, EVP_sha256()) != 1 ||
+        EVP_PKEY_CTX_set_rsa_pss_saltlen(pkey_ctx, RSA_PSS_SALTLEN_AUTO) != 1) {
         return false;
     }
     if (EVP_DigestVerifyUpdate(md_ctx.get(), data.data(), data.size()) != 1) {

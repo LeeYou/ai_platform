@@ -133,12 +133,12 @@ def create_license(data: schemas.LicenseCreate, db: Session = Depends(get_db)):
         "license_type": data.license_type,
         "capabilities": data.capabilities,
         "operating_system": data.operating_system,
-        "minimum_os_version": data.minimum_os_version,
-        "system_architecture": data.system_architecture,
+        "minimum_os_version": data.minimum_os_version or "",
+        "system_architecture": data.system_architecture or "",
         "application_name": data.application_name,
-        "machine_fingerprint": data.machine_fingerprint,
+        "machine_fingerprint": data.machine_fingerprint or "",
         "valid_from": data.valid_from.isoformat(),
-        "valid_until": data.valid_until.isoformat() if data.valid_until else None,
+        "valid_until": data.valid_until.isoformat() if data.valid_until else "",
         "version_constraint": data.version_constraint,
         "max_instances": data.max_instances,
         "issuer": os.environ.get("LICENSE_ISSUER", "agilestar.cn"),
@@ -198,6 +198,10 @@ def renew_license(license_id: str, data: schemas.LicenseRenew, db: Session = Dep
     old_data.pop("signature", None)
     old_data["valid_until"] = data.valid_until.isoformat()
     old_data["issued_at"] = issued_at.isoformat()
+    # Normalize legacy null fields to "" for consistent canonical JSON.
+    for _str_field in ("minimum_os_version", "system_architecture", "machine_fingerprint"):
+        if old_data.get(_str_field) is None:
+            old_data[_str_field] = ""
 
     signed_json = sign_license(old_data, privkey_pem)
     _verify_signed_license(signed_json, key_pair.public_key_pem)
