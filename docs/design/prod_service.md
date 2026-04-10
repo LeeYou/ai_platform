@@ -1,7 +1,7 @@
 # 生产交付子系统设计
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.0 | 2026-03-27**
+**文档版本：v1.1 | 2026-04-10**
 
 ---
 
@@ -16,7 +16,7 @@
 | 属性 | 值 |
 |------|-----|
 | 镜像名 | `agilestar/ai-prod:latest` |
-| 基础镜像 | `ubuntu:22.04`（含 ONNXRuntime，TensorRT 可选） |
+| 基础镜像 | `nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04` |
 | 服务端口 | 8080（REST HTTP API） |
 | 主服务 | Python FastAPI（HTTP 层）+ C Runtime（推理层） |
 | GPU 策略 | 启动时检测 CUDA 可用性，自动选择 GPU/CPU 后端 |

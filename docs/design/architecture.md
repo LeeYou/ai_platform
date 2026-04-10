@@ -1,7 +1,7 @@
 # 系统整体架构设计
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v2.1 | 2026-03-30**
+**文档版本：v2.2 | 2026-04-10**
 
 ---
 
@@ -212,13 +212,13 @@
 | 前端框架 | Vue3 + Element Plus | ≥3.3 |
 | 容器编排 | Docker Compose | ≥2.20 |
 | 多架构构建 | docker buildx | QEMU 模拟或原生构建 |
-| 授权签名 | RSA-2048 + SHA256 | OpenSSL ≥3.0 |
+| 授权签名 | RSA-2048-PSS + SHA-256 | OpenSSL ≥3.0 |
 | 模型格式 | ONNX | opset ≥14 |
 | C++ 构建 | CMake | ≥3.26 |
 | C++ 编译器（Linux） | GCC | ≥12 |
 | C++ 编译器（Windows） | MSVC | ≥2022 |
 | 源码编码 | UTF-8 | 全平台统一 |
-| 基础训练镜像 | nvidia/cuda | 12.x-cudnn8-devel-ubuntu22.04 |
+| 基础训练镜像 | nvidia/cuda | 11.8.0-cudnn8-devel-ubuntu22.04 |
 
 ---
 

@@ -1,7 +1,7 @@
 # 生产服务 Web 管理前端设计
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.0 | 2026-03-29**
+**文档版本：v1.1 | 2026-04-10**
 
 ---
 
@@ -26,15 +26,15 @@
 
 ### 1.2 架构方式
 
-生产容器采用 nginx + FastAPI 组合部署（通过 supervisord 管理）：
+生产容器采用两阶段构建（Node.js 编译前端 + CUDA Runtime 运行后端），单 uvicorn 进程同时提供 API 和前端静态文件：
 
 ```
-nginx (port 80)
-  ├── / → 前端静态文件 (/app/frontend/dist/)
-  └── /api/ → 反向代理到 FastAPI (localhost:8080)
+uvicorn (port 8080)
+  ├── /api/  → FastAPI 路由（推理、健康检查、Pipeline、管理接口）
+  └── /      → FastAPI StaticFiles（前端静态文件 /app/prod/frontend/dist/）
 ```
 
-Docker Compose 中宿主机端口映射：`8080 → 容器 80`
+Docker Compose 中宿主机端口映射：`8080 → 容器 8080`
 
 ---
 
@@ -157,7 +157,6 @@ prod/frontend/
 ├── package.json
 ├── vite.config.js
 ├── index.html
-├── nginx.conf           # nginx 配置
 ├── public/
 └── src/
     ├── main.js
@@ -184,11 +183,10 @@ prod/frontend/
 
 ### 5.1 Dockerfile 更新
 
-生产容器 Dockerfile 需要增加：
+生产容器 Dockerfile 采用两阶段构建：
 
-1. Node.js 构建阶段：编译前端 Vue 项目
-2. nginx 安装和配置
-3. supervisord 管理 nginx + FastAPI 两个进程
+1. Stage 1（node:18-slim）：编译前端 Vue 项目，生成 `/app/prod/frontend/dist/`
+2. Stage 2（nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04）：Python 运行时 + uvicorn，通过 FastAPI StaticFiles 托管前端产物
 
 ### 5.2 docker-compose.prod.yml 更新
 

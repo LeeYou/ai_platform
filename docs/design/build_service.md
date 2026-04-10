@@ -1,7 +1,7 @@
 # 编译子系统设计
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.0 | 2026-03-27**
+**文档版本：v1.1 | 2026-04-10**
 
 ---
 
@@ -37,7 +37,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| 镜像名 | `agilestar/ai-builder-win:latest` |
+| 镜像名 | `agilestar/ai-builder-windows:latest` |
 | 基础镜像 | `mcr.microsoft.com/windows/servercore`（CI 环境） |
 | 编译器 | MSVC 2022 (cl.exe) |
 | 构建工具 | CMake + MSBuild |
