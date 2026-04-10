@@ -104,6 +104,11 @@ export function getExpiringLicenses(days = 30) {
   return http.get('/licenses/expiring', { params: { days } })
 }
 
+// Dashboard
+export function getDashboardStats() {
+  return http.get('/dashboard')
+}
+
 // Keys
 export function getKeys() {
   return http.get('/keys')

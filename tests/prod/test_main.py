@@ -31,6 +31,9 @@ class _FakeRuntime:
     def get_license_status(self):
         return {"status": "active", "capabilities": ["face_detect"]}
 
+    def get_last_error(self):
+        return None
+
     def acquire(self, capability, timeout_ms=30000):
         return object()
 
@@ -112,6 +115,10 @@ class ProdMainTests(unittest.TestCase):
             json.dumps({"capability": "face_detect", "model_version": "v1.2.3"}),
             encoding="utf-8",
         )
+        (self.model_dir / "preprocess.json").write_text(
+            json.dumps({"resize": {"width": 2, "height": 2}}),
+            encoding="utf-8",
+        )
         self.pipeline_dir = Path(self.tempdir.name) / "pipelines"
         self.pipeline_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,6 +135,7 @@ class ProdMainTests(unittest.TestCase):
         self.original_resolve_runtime_so_path = prod_main.resolve_runtime_so_path
         self.original_list_available_capabilities = prod_main.list_available_capabilities
         self.original_resource_resolve_model_dir = resource_resolver.resolve_model_dir
+        self.original_resource_resolve_lib_path = resource_resolver.resolve_lib_path
         self.original_exists = prod_main.os.path.exists
         self.original_license_path = prod_main.LICENSE_PATH
         self.original_pubkey_path = prod_main.PUBKEY_PATH
@@ -139,13 +147,19 @@ class ProdMainTests(unittest.TestCase):
         self.original_subprocess_run = prod_main.subprocess.run
         self.original_ctypes_cdll = prod_main.ctypes.CDLL
         self.original_ai_pubkey_env = os.environ.get("AI_PUBKEY_PATH")
-        self.libs_dir = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect" / "lib"
+        self.capability_lib_root = Path(self.tempdir.name) / "libs" / "linux_x86_64" / "face_detect"
+        self.libs_dir = self.capability_lib_root / "lib"
         self.libs_dir.mkdir(parents=True, exist_ok=True)
+        (self.capability_lib_root / "build_info.json").write_text(
+            json.dumps({"onnxruntime_package": "gpu", "builder_toolchain_profile": "cuda11.8-cudnn8"}),
+            encoding="utf-8",
+        )
         (self.libs_dir / "libface_detect.so").write_bytes(b"fake")
         (self.libs_dir / "libai_runtime.so").write_bytes(b"fake")
         (self.libs_dir / "libonnxruntime.so.1.18.1").write_bytes(b"fake")
 
         resource_resolver.resolve_model_dir = lambda capability: str(self.model_dir)
+        resource_resolver.resolve_lib_path = lambda capability: str(self.libs_dir / "libface_detect.so")
         prod_main.resolve_model_dir = lambda capability: str(self.model_dir)
         prod_main.resolve_models_dir = lambda: str(Path(self.tempdir.name) / "models")
         prod_main.resolve_libs_dir = lambda: str(Path(self.tempdir.name) / "libs")
@@ -158,7 +172,7 @@ class ProdMainTests(unittest.TestCase):
                 "real_model_dir": str(self.model_dir.resolve()),
                 "source": "mount",
                 "manifest": {"capability": "face_detect", "model_version": "v1.2.3"},
-                "preprocess": {},
+                "preprocess": {"resize": {"width": 2, "height": 2}},
             }
         ]
         prod_main._init_runtime = lambda: True
@@ -182,6 +196,7 @@ class ProdMainTests(unittest.TestCase):
         prod_main.resolve_runtime_so_path = self.original_resolve_runtime_so_path
         prod_main.list_available_capabilities = self.original_list_available_capabilities
         resource_resolver.resolve_model_dir = self.original_resource_resolve_model_dir
+        resource_resolver.resolve_lib_path = self.original_resource_resolve_lib_path
         prod_main.os.path.exists = self.original_exists
         prod_main.LICENSE_PATH = self.original_license_path
         prod_main.PUBKEY_PATH = self.original_pubkey_path
@@ -354,6 +369,28 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["capabilities"][0]["version"], "v1.2.3")
         self.assertEqual(body["capabilities"][0]["manifest"]["model_version"], "v1.2.3")
 
+    def test_list_available_capabilities_accepts_legacy_manifest_version_field(self):
+        mount_root = Path(self.tempdir.name) / "mount_root"
+        model_dir = mount_root / "models" / "desktop_recapture_detect" / "current"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "manifest.json").write_text(
+            json.dumps({"capability": "desktop_recapture_detect", "version": "v1.2.3"}),
+            encoding="utf-8",
+        )
+
+        original_mount_root = resource_resolver.MOUNT_ROOT
+        original_builtin_root = resource_resolver.BUILTIN_ROOT
+        try:
+            resource_resolver.MOUNT_ROOT = str(mount_root)
+            resource_resolver.BUILTIN_ROOT = str(Path(self.tempdir.name) / "builtin_root")
+            body = resource_resolver.list_available_capabilities()
+        finally:
+            resource_resolver.MOUNT_ROOT = original_mount_root
+            resource_resolver.BUILTIN_ROOT = original_builtin_root
+
+        self.assertEqual(body[0]["version"], "v1.2.3")
+        self.assertEqual(body[0]["manifest"]["version"], "v1.2.3")
+
     def test_capabilities_endpoint_returns_empty_without_runtime(self):
         prod_main.get_runtime = lambda: None
         body = prod_main.list_capabilities()
@@ -395,6 +432,23 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["status"], "not_yet_valid")
         self.assertLess(body["days_remaining"], 0)
 
+    def test_license_status_endpoint_preserves_environment_constraints(self):
+        self.fake_runtime.get_license_status = lambda: {
+            "status": "environment_mismatch",
+            "operating_system": "linux",
+            "minimum_os_version": "22.04",
+            "system_architecture": "x86_64",
+            "application_name": "ai-platform-prod",
+            "operating_system_mismatch": True,
+        }
+        body = prod_main.license_status()
+        self.assertEqual(body["status"], "environment_mismatch")
+        self.assertEqual(body["operating_system"], "linux")
+        self.assertEqual(body["minimum_os_version"], "22.04")
+        self.assertEqual(body["system_architecture"], "x86_64")
+        self.assertEqual(body["application_name"], "ai-platform-prod")
+        self.assertTrue(body["operating_system_mismatch"])
+
     def test_license_status_endpoint_reports_runtime_unavailable_when_missing(self):
         prod_main.get_runtime = lambda: None
         body = prod_main.license_status()
@@ -418,7 +472,7 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_invalid_license_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "invalid"}
+        self.fake_runtime.get_last_error = lambda: {"code": 4001, "message": "License invalid", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
@@ -427,7 +481,7 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_expired_license_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "expired"}
+        self.fake_runtime.get_last_error = lambda: {"code": 4002, "message": "License expired", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
@@ -436,7 +490,7 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_not_yet_valid_license_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "not_yet_valid"}
+        self.fake_runtime.get_last_error = lambda: {"code": 4003, "message": "License not yet valid", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
@@ -445,16 +499,25 @@ class ProdMainTests(unittest.TestCase):
 
     def test_infer_endpoint_maps_runtime_unlicensed_capability_after_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "active", "capabilities": ["other_cap"]}
+        self.fake_runtime.get_last_error = lambda: {"code": 4004, "message": "Capability not licensed", "status_code": 403}
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
         self.assertEqual(response.status_code, 403)
         self.assertEqual(body["code"], 4004)
 
-    def test_infer_endpoint_keeps_3001_for_non_license_acquire_failure(self):
+    def test_infer_endpoint_keeps_3001_for_non_runtime_categorized_acquire_failure(self):
         self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
-        self.fake_runtime.get_license_status = lambda: {"status": "active", "capabilities": ["face_detect"]}
+        upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
+        response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(body["code"], 3001)
+
+    def test_infer_endpoint_does_not_recheck_license_status_in_web_layer(self):
+        self.fake_runtime.acquire = lambda capability, timeout_ms=30000: None
+        self.fake_runtime.get_license_status = lambda: {"status": "expired"}
+        self.fake_runtime.get_last_error = lambda: None
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
         response = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
         body = json.loads(response.body)
@@ -475,7 +538,7 @@ class ProdMainTests(unittest.TestCase):
         self.assertEqual(body["ab_test"]["applied_version"], "v1.2.3")
         self.assertFalse(body["ab_test"]["selection_matches_runtime"])
 
-    def test_infer_endpoint_routes_raw_decoded_image_without_python_resize(self):
+    def test_infer_endpoint_preserves_original_image_shape_for_runtime(self):
         recorded = {}
 
         class _RecordingRuntime(_FakeRuntime):
@@ -488,15 +551,22 @@ class ProdMainTests(unittest.TestCase):
 
         self.fake_runtime = _RecordingRuntime()
         prod_main.get_runtime = lambda: self.fake_runtime
-        prod_main._decode_image = lambda data: _RecordedImage(width=5, height=4)
+        prod_main._decode_image = lambda data: prod_main.np.zeros((4, 5, 3), dtype=prod_main.np.uint8)
 
         upload = UploadFile(file=io.BytesIO(b"ok"), filename="x.bin")
-        asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
+        body = asyncio.run(prod_main.infer("face_detect", SimpleNamespace(headers={}), upload))
 
         self.assertEqual(recorded["width"], 5)
         self.assertEqual(recorded["height"], 4)
         self.assertEqual(recorded["channels"], 3)
         self.assertEqual(recorded["payload_len"], 5 * 4 * 3)
+        self.assertNotIn("preprocessed_size", body["result"])
+
+    def test_capability_diagnostics_include_build_metadata(self):
+        body = prod_main.capability_diagnostics()
+        details = body["loaded_capability_details"][0]
+        self.assertEqual(details["build_info"]["onnxruntime_package"], "gpu")
+        self.assertTrue(details["runtime_gpu_expected"])
 
     def test_admin_ab_tests_endpoint_requires_token_and_returns_data(self):
         body = prod_main.list_ab_tests(SimpleNamespace(headers={"Authorization": "Bearer test-token"}))

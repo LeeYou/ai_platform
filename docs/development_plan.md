@@ -1,7 +1,7 @@
 # 分阶段开发计划
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v2.2 | 2026-03-30**
+**文档版本：v2.3 | 2026-04-10**
 
 ---
 
@@ -36,26 +36,26 @@
 
 #### 工程目录
 
-- [ ] 创建完整工程目录结构
+- [x] 创建完整工程目录结构
   - `docs/design/`、`train/`、`test/`、`build/`、`cpp/`、`prod/`、`license/`、`deploy/`、`scripts/`
-- [ ] 在 `deploy/mount_template/` 下创建宿主机目录模板及 README 说明
-- [ ] 创建 `.gitignore`（覆盖 C++/Python/Node 常见忽略规则）
-- [ ] 创建 `.editorconfig`（UTF-8、LF 换行、2 空格缩进）
-- [ ] 创建 `.clang-format`（Google 风格，100 列限制）
+- [x] 在 `deploy/mount_template/` 下创建宿主机目录模板及 README 说明
+- [x] 创建 `.gitignore`（覆盖 C++/Python/Node 常见忽略规则）
+- [x] 创建 `.editorconfig`（UTF-8、LF 换行、2 空格缩进）
+- [x] 创建 `.clang-format`（Google 风格，100 列限制）
 
 #### C++ SDK 头文件
 
-- [ ] 创建 `cpp/sdk/ai_types.h`（AiHandle、AiImage、AiResult、AiErrorCode）
-- [ ] 创建 `cpp/sdk/ai_capability.h`（AiCreate/AiInit/AiInfer/AiReload/AiDestroy/AiFreeResult/AiGetAbiVersion）
-- [ ] 创建 `cpp/sdk/ai_runtime.h`（AiRuntimeInit/Acquire/Release/Reload/GetLicenseStatus/Destroy）
-- [ ] 创建 `cpp/CMakeLists.txt`（顶层，聚合所有子工程）
-- [ ] 创建 `cpp/cmake/CapabilityPlugin.cmake`（能力插件 CMake 宏模板）
-- [ ] 创建 `cpp/cmake/CompilerFlags.cmake`（统一编译选项）
+- [x] 创建 `cpp/sdk/ai_types.h`（AiHandle、AiImage、AiResult、AiErrorCode）
+- [x] 创建 `cpp/sdk/ai_capability.h`（AiCreate/AiInit/AiInfer/AiReload/AiDestroy/AiFreeResult/AiGetAbiVersion）
+- [x] 创建 `cpp/sdk/ai_runtime.h`（AiRuntimeInit/Acquire/Release/Reload/GetLicenseStatus/Destroy）
+- [x] 创建 `cpp/CMakeLists.txt`（顶层，聚合所有子工程）
+- [x] 创建 `cpp/cmake/CapabilityPlugin.cmake`（能力插件 CMake 宏模板）
+- [x] 创建 `cpp/cmake/CompilerFlags.cmake`（统一编译选项）
 
 #### 容器编排
 
-- [ ] 创建 `deploy/docker-compose.yml`（开发环境：train + test + license 三服务）
-- [ ] 创建 `deploy/docker-compose.prod.yml`（生产：prod 单服务）
+- [x] 创建 `deploy/docker-compose.yml`（开发环境：train + test + license 三服务）
+- [x] 创建 `deploy/docker-compose.prod.yml`（生产：prod 单服务）
 
 ### 里程碑验收
 
@@ -75,36 +75,36 @@
 
 #### 核心库
 
-- [ ] 实现机器指纹采集工具（C++ 跨平台命令行工具 `license_tool`）
+- [x] 实现机器指纹采集工具（C++ 跨平台命令行工具 `license_tool`）
   - Linux：读取 CPU/主板序列号（`/sys/class/dmi/id/`）、网卡 MAC（`/sys/class/net/`）
   - Windows：使用 WMI 查询硬件信息
   - SHA256 哈希组合
-- [ ] 实现 RSA-2048 密钥对生成工具（基于 OpenSSL 3.x）
-- [ ] 实现 License 签名/验签核心库（`license/tools/license_core/`）
+- [x] 实现 RSA-2048 密钥对生成工具（基于 OpenSSL 3.x）
+- [x] 实现 License 签名/验签核心库（`license/tools/license_core/`）
   - 生成 `license.bin`（签名后的 JSON 文件）
   - 验证签名、有效期、机器指纹
-- [ ] 单元测试（签名正确性、过期检测、机器指纹匹配/不匹配）
+- [x] 单元测试（签名正确性、过期检测、机器指纹匹配/不匹配）
 
 #### 授权管理后端
 
-- [ ] 数据库模型（SQLite）：Customer、License、KeyPair 表
-- [ ] API：创建客户、生成 License、查询列表、延期、吊销
-- [ ] API：到期预警查询（返回 30/15/7 天内到期的 License）
-- [ ] FastAPI 主程序 `license/backend/main.py`
+- [x] 数据库模型（SQLite）：Customer、License、KeyPair 表
+- [x] API：创建客户、生成 License、查询列表、延期、吊销
+- [x] API：到期预警查询（返回 30/15/7 天内到期的 License）
+- [x] FastAPI 主程序 `license/backend/main.py`
 
 #### 授权管理前端
 
-- [ ] Vue3 项目初始化（Element Plus）
-- [ ] 客户管理页面（CRUD）
-- [ ] 授权生成页面（能力勾选、有效期、机器指纹输入、下载 license.bin）
-- [ ] 授权列表页面（状态显示、颜色告警、操作按钮）
-- [ ] 到期提醒看板
+- [x] Vue3 项目初始化（Element Plus）
+- [x] 客户管理页面（CRUD）
+- [x] 授权生成页面（能力勾选、有效期、机器指纹输入、下载 license.bin）
+- [x] 授权列表页面（状态显示、颜色告警、操作按钮）
+- [x] 到期提醒看板
 
 #### 容器化
 
-- [ ] 编写 `license/Dockerfile`
-- [ ] 打包 `agilestar/ai-license-mgr:latest` 镜像
-- [ ] 在 docker-compose.yml 中添加 license 服务
+- [x] 编写 `license/Dockerfile`
+- [x] 打包 `agilestar/ai-license-mgr:latest` 镜像
+- [x] 在 docker-compose.yml 中添加 license 服务
 
 ### 里程碑验收
 
@@ -125,33 +125,33 @@
 
 #### 训练后端
 
-- [ ] FastAPI 主程序 `train/backend/main.py`
-- [ ] 能力配置 API（CRUD）
-- [ ] 训练任务 API（创建、启动、暂停、停止、查询状态）
-- [ ] Celery Worker 集成（Redis 作为 broker）
-- [ ] 实时日志推送（WebSocket + Redis Pub/Sub）
-- [ ] 模型包导出功能（PyTorch checkpoint → ONNX + manifest 生成）
+- [x] FastAPI 主程序 `train/backend/main.py`
+- [x] 能力配置 API（CRUD）
+- [x] 训练任务 API（创建、启动、暂停、停止、查询状态）
+- [x] Celery Worker 集成（Redis 作为 broker）
+- [x] 实时日志推送（WebSocket + Redis Pub/Sub）
+- [x] 模型包导出功能（PyTorch checkpoint → ONNX + manifest 生成）
 
 #### 训练脚本（首期：face_detect）
 
-- [ ] `train/scripts/face_detect/train.py`（标准命令行接口）
-- [ ] `train/scripts/face_detect/export.py`（导出 ONNX）
-- [ ] `train/scripts/face_detect/config.json`（默认超参数）
-- [ ] 确保日志输出格式符合规范（供后端日志解析）
+- [x] `train/scripts/face_detect/train.py`（标准命令行接口）
+- [x] `train/scripts/face_detect/export.py`（导出 ONNX）
+- [x] `train/scripts/face_detect/config.json`（默认超参数）
+- [x] 确保日志输出格式符合规范（供后端日志解析）
 
 #### 训练前端
 
-- [ ] Vue3 项目初始化
-- [ ] 数据集管理页面
-- [ ] 能力配置页面
-- [ ] 训练控制页面（启停、实时日志、loss 曲线）
-- [ ] 模型管理页面（版本列表、导出操作）
+- [x] Vue3 项目初始化
+- [x] 数据集管理页面
+- [x] 能力配置页面
+- [x] 训练控制页面（启停、实时日志、loss 曲线）
+- [x] 模型管理页面（版本列表、导出操作）
 
 #### 容器化
 
-- [ ] 编写 `train/Dockerfile`（基于 nvidia/cuda 镜像）
-- [ ] 打包 `agilestar/ai-train:latest` 镜像
-- [ ] 在 docker-compose.yml 中添加 train 服务及挂载配置
+- [x] 编写 `train/Dockerfile`（基于 nvidia/cuda 镜像）
+- [x] 打包 `agilestar/ai-train:latest` 镜像
+- [x] 在 docker-compose.yml 中添加 train 服务及挂载配置
 
 ### 里程碑验收
 
@@ -171,28 +171,28 @@
 
 #### Runtime 库
 
-- [ ] `cpp/runtime/capability_loader.cpp`（dlopen/dlsym 动态加载 SO，ABI 版本检查）
-- [ ] `cpp/runtime/instance_pool.cpp`（并发实例池，Acquire/Release，超时处理）
-- [ ] `cpp/runtime/license_checker.cpp`（调用 license_core 库，60 秒缓存）
-- [ ] `cpp/runtime/model_loader.cpp`（加载 manifest.json、校验 checksum）
-- [ ] 单元测试（Google Test）
+- [x] `cpp/runtime/capability_loader.cpp`（dlopen/dlsym 动态加载 SO，ABI 版本检查）
+- [x] `cpp/runtime/instance_pool.cpp`（并发实例池，Acquire/Release，超时处理）
+- [x] `cpp/runtime/license_checker.cpp`（调用 license_core 库，60 秒缓存）
+- [x] `cpp/runtime/model_loader.cpp`（加载 manifest.json、校验 checksum）
+- [x] 单元测试（Google Test）
 
 #### recapture_detect 能力插件（首期标杆）
 
-- [ ] `cpp/capabilities/recapture_detect/CMakeLists.txt`（使用 CapabilityPlugin.cmake 宏）
-- [ ] 实现 `AiCreate/AiInit/AiInfer/AiReload/AiDestroy/AiFreeResult/AiGetAbiVersion`
-- [ ] ONNXRuntime 推理集成（CPU 和 GPU 后端）
-- [ ] 图像预处理/后处理（依据 preprocess.json）
-- [ ] SO 内置 License 二层校验（AiInit 时验签，每 1000 次推理做时间戳轻量校验）
-- [ ] 功能测试（输出 JSON 结果格式验证）
+- [x] `cpp/capabilities/recapture_detect/CMakeLists.txt`（使用 CapabilityPlugin.cmake 宏）
+- [x] 实现 `AiCreate/AiInit/AiInfer/AiReload/AiDestroy/AiFreeResult/AiGetAbiVersion`
+- [x] ONNXRuntime 推理集成（CPU 和 GPU 后端）
+- [x] 图像预处理/后处理（依据 preprocess.json）
+- [x] SO 内置 License 二层校验（AiInit 时验签，每 1000 次推理做时间戳轻量校验）
+- [x] 功能测试（输出 JSON 结果格式验证）
 
 #### 编译子系统
 
-- [ ] 编写 `build/Dockerfile.linux_x86`（含 GCC12/CMake/ONNXRuntime）
-- [ ] 编译管理后端 API（触发编译、流式编译日志）
-- [ ] 简易编译管理 Web 页面
-- [ ] 打包 `agilestar/ai-builder-linux-x86:latest` 镜像
-- [ ] 验证 recapture_detect SO 编译并归档到 `libs/linux_x86_64/`
+- [x] 编写 `build/Dockerfile.linux_x86`（含 GCC12/CMake/ONNXRuntime）
+- [x] 编译管理后端 API（触发编译、流式编译日志）
+- [x] 简易编译管理 Web 页面
+- [x] 打包 `agilestar/ai-builder-linux-x86:latest` 镜像
+- [x] 验证 recapture_detect SO 编译并归档到 `libs/linux_x86_64/`
 
 ### 里程碑验收
 
@@ -207,13 +207,13 @@
 
 ### 任务清单
 
-- [ ] 测试后端 API（FastAPI + Python ONNXRuntime 推理器基类和 recapture_detect 实现）
-- [ ] 单样本测试 API（上传图片 → 推理 → 返回 JSON）
-- [ ] 批量测试 API（指定目录 → 异步批量推理 → 精度报告）
-- [ ] 版本对比 API
-- [ ] Vue3 前端：能力选择列表页、单样本测试页（结果可视化）、批量测试页（进度条+报告）
-- [ ] 编写 `test/Dockerfile`，打包 `agilestar/ai-test:latest` 镜像
-- [ ] 联调：模型包导出后在测试页面即可选中并测试
+- [x] 测试后端 API（FastAPI + Python ONNXRuntime 推理器基类和 recapture_detect 实现）
+- [x] 单样本测试 API（上传图片 → 推理 → 返回 JSON）
+- [x] 批量测试 API（指定目录 → 异步批量推理 → 精度报告）
+- [x] 版本对比 API
+- [x] Vue3 前端：能力选择列表页、单样本测试页（结果可视化）、批量测试页（进度条+报告）
+- [x] 编写 `test/Dockerfile`，打包 `agilestar/ai-test:latest` 镜像
+- [x] 联调：模型包导出后在测试页面即可选中并测试
 
 ### 里程碑验收
 
@@ -227,16 +227,16 @@
 
 ### 任务清单
 
-- [ ] 主 HTTP 服务 `prod/web_service/main.py`（FastAPI）
-- [ ] 实现资源加载优先级逻辑（宿主机挂载 > 镜像内置）
-- [ ] 实现推理路由和统一 JSON 响应
-- [ ] 实现 License 状态接口和健康检查接口
-- [ ] 实现热重载接口 `/api/v1/admin/reload`
-- [ ] GPU/CPU 自动选择启动脚本 `docker-entrypoint.sh`
-- [ ] 编写 `prod/Dockerfile`，打包 `agilestar/ai-prod:latest` 镜像
-- [ ] 自动生成 Swagger API 文档
-- [ ] 端到端验证：训练 → 编译 SO → 生产容器 → HTTP 推理请求
-- [ ] 创建 `deploy/mount_template/` 宿主机目录模板
+- [x] 主 HTTP 服务 `prod/web_service/main.py`（FastAPI）
+- [x] 实现资源加载优先级逻辑（宿主机挂载 > 镜像内置）
+- [x] 实现推理路由和统一 JSON 响应
+- [x] 实现 License 状态接口和健康检查接口
+- [x] 实现热重载接口 `/api/v1/admin/reload`
+- [x] GPU/CPU 自动选择启动脚本 `docker-entrypoint.sh`
+- [x] 编写 `prod/Dockerfile`，打包 `agilestar/ai-prod:latest` 镜像
+- [x] 自动生成 Swagger API 文档
+- [x] 端到端验证：训练 → 编译 SO → 生产容器 → HTTP 推理请求
+- [x] 创建 `deploy/mount_template/` 宿主机目录模板
 
 ### 里程碑验收
 
@@ -257,25 +257,23 @@
 
 #### 前端项目搭建
 
-- [ ] 初始化 `prod/frontend/` Vue3 + Vite 项目（Element Plus）
-- [ ] 创建 `prod/frontend/nginx.conf`（静态文件 + API 反向代理）
-- [ ] 配置 `prod/frontend/src/api/index.js`（axios 实例，含 normalizeErrorDetail 和 extractErrorMessage）
-- [ ] 配置 Vue Router 路由
+- [x] 初始化 `prod/frontend/` Vue3 + Vite 项目（Element Plus）
+- [x] 配置 `prod/frontend/src/api/index.js`（axios 实例，含 normalizeErrorDetail 和 extractErrorMessage）
+- [x] 配置 Vue Router 路由
 
 #### 页面开发
 
-- [ ] **Dashboard.vue**（仪表盘）：服务状态、能力统计、License 概况、GPU 状态、快捷入口
-- [ ] **ApiTest.vue**（API 测试）：选择能力、上传图片、配置参数、执行推理、结果展示（JSON + 可视化）
-- [ ] **Status.vue**（服务状态）：能力列表（loaded/unavailable）、License 详情、模型版本信息
-- [ ] **Admin.vue**（系统管理）：热重载操作（需 Admin Token 认证）
-- [ ] **NavMenu.vue**（导航组件）
+- [x] **Dashboard.vue**（仪表盘）：服务状态、能力统计、License 概况、GPU 状态、快捷入口
+- [x] **ApiTest.vue**（API 测试）：选择能力、上传图片、配置参数、执行推理、结果展示（JSON + 可视化）
+- [x] **Status.vue**（服务状态）：能力列表（loaded/unavailable）、License 详情、模型版本信息
+- [x] **Admin.vue**（系统管理）：热重载操作（需 Admin Token 认证）
+- [x] **NavMenu.vue**（导航组件）
 
 #### 容器化更新
 
-- [ ] 更新 `prod/Dockerfile`：增加 Node.js 构建阶段、nginx 安装
-- [ ] 创建 `prod/supervisord.conf`（管理 nginx + FastAPI）
-- [ ] 更新 `deploy/docker-compose.prod.yml`：端口映射调整
-- [ ] 更新 `docs/docker_operations_manual.md`
+- [x] 更新 `prod/Dockerfile`：增加 Node.js 构建阶段，前端通过 FastAPI StaticFiles 托管（无 nginx）
+- [x] 更新 `deploy/docker-compose.prod.yml`：端口映射为 8080:8080
+- [x] 更新 `docs/docker_operations_manual.md`
 
 ### 里程碑验收
 
@@ -295,30 +293,30 @@
 
 #### 编排引擎后端
 
-- [ ] 实现 Pipeline 定义模型（JSON Schema 校验）
-- [ ] 实现 Pipeline 存储（文件系统 JSON 文件）
-- [ ] 实现 Pipeline 执行引擎（步骤串行执行、条件分支、结果透传）
-- [ ] 实现简单表达式引擎（变量引用、JSONPath 提取、比较和逻辑运算）
-- [ ] Pipeline 管理 API：CRUD + validate
-- [ ] Pipeline 执行 API：`/api/v1/pipeline/{pipeline_id}/run`
-- [ ] 单元测试
+- [x] 实现 Pipeline 定义模型（JSON Schema 校验）
+- [x] 实现 Pipeline 存储（文件系统 JSON 文件）
+- [x] 实现 Pipeline 执行引擎（步骤串行执行、条件分支、结果透传）
+- [x] 实现简单表达式引擎（变量引用、JSONPath 提取、比较和逻辑运算）
+- [x] Pipeline 管理 API：CRUD + validate
+- [x] Pipeline 执行 API：`/api/v1/pipeline/{pipeline_id}/run`
+- [x] 单元测试
 
 #### 编排管理前端
 
-- [ ] **Pipelines.vue**（编排列表）：列表展示、新建/编辑/删除/启禁用
-- [ ] **PipelineEdit.vue**（编排编辑器）：步骤添加/删除/排序、能力选择、参数配置、条件设置、验证
-- [ ] **PipelineTest.vue**（编排测试）：选择 Pipeline、上传数据、执行、步骤级结果展示
+- [x] **Pipelines.vue**（编排列表）：列表展示、新建/编辑/删除/启禁用
+- [x] **PipelineEdit.vue**（编排编辑器）：步骤添加/删除/排序、能力选择、参数配置、条件设置、验证
+- [x] **PipelineTest.vue**（编排测试）：选择 Pipeline、上传数据、执行、步骤级结果展示
 
 #### 容器化更新
 
-- [ ] 更新 `deploy/docker-compose.prod.yml`：增加 pipelines 目录挂载
-- [ ] 创建 `deploy/mount_template/pipelines/` 目录模板
-- [ ] 更新 `docs/docker_operations_manual.md`
+- [x] 更新 `deploy/docker-compose.prod.yml`：增加 pipelines 目录挂载
+- [x] 创建 `deploy/mount_template/pipelines/` 目录模板
+- [x] 更新 `docs/docker_operations_manual.md`
 
 #### 预置 Pipeline 配置
 
-- [ ] 创建 `active_liveness_check.json`（指令活体：face_detect → face_liveness_action → recapture_detect）
-- [ ] 创建 `silent_liveness_check.json`（静默活体：face_detect → face_liveness_silent → recapture_detect）
+- [x] 创建 `active_liveness_check.json`（指令活体：face_detect → face_liveness_action → recapture_detect）
+- [x] 创建 `silent_liveness_check.json`（静默活体：face_detect → face_liveness_silent → recapture_detect）
 
 ### 里程碑验收
 

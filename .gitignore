@@ -115,3 +115,4 @@ secret*
 # --------------- Logs ---------------
 logs/
 *.log
+license/tools/build/

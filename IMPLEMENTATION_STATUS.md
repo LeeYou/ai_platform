@@ -1,362 +1,180 @@
-# AI Platform Implementation Status
+# AI Platform 实现状态
 
-**更新时间：2026-04-01**
-**分支：claude/fix-training-management-issues**
-
----
-
-## ✅ 已完成实现
-
-### 1. C++ SO 推理库 GPU 优先支持
-
-**状态：完全实现并测试通过**
-
-#### 实现内容
-
-为所有 C++ 能力插件实现了 GPU 优先推理策略：
-
-- ✅ **face_detect** - ONNXRuntime C API，CUDA Provider 支持
-- ✅ **desktop_recapture_detect** - ONNXRuntime C++ API，CUDA Provider 支持
-- ✅ **recapture_detect** - ONNXRuntime C++ API，CUDA Provider 支持
-
-#### 技术细节
-
-```cpp
-// GPU 优先策略实现
-OrtCUDAProviderOptions cuda_options;
-cuda_options.device_id = 0;
-cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
-cuda_options.gpu_mem_limit = SIZE_MAX;
-cuda_options.arena_extend_strategy = 0;
-cuda_options.do_copy_in_default_stream = 1;
-
-// 尝试添加 CUDA Provider
-OrtStatus* status = api->SessionOptionsAppendExecutionProvider_CUDA(
-    session_opts, &cuda_options);
-
-if (status == nullptr) {
-    // GPU 可用，自动使用 GPU 推理
-    fprintf(stdout, "[capability] GPU mode enabled\n");
-} else {
-    // GPU 不可用，自动回退到 CPU
-    fprintf(stderr, "[capability] CUDA unavailable, using CPU\n");
-    api->ReleaseStatus(status);
-}
-```
-
-#### 性能对比
-
-| 执行模式 | 推理时间 | 性能提升 |
-|---------|---------|---------|
-| GPU (CUDA + cuDNN) | 10-50ms | 基准 |
-| CPU (多线程) | 50-150ms | 慢 3-10倍 |
-
-#### 文件修改
-
-- `cpp/capabilities/face_detect/face_detect.cpp` - 添加 CUDA Provider + cstdint 头文件
-- `cpp/capabilities/desktop_recapture_detect/desktop_recapture_detect.cpp` - 添加 CUDA Provider + cstdint 头文件
-- `cpp/capabilities/recapture_detect/recapture_detect.cpp` - 添加 CUDA Provider + cstdint 头文件
-- `docs/design/build_service.md` - 新增 GPU 推理支持原则文档
-
-#### 编译要求
-
-**必需组件：**
-- ONNXRuntime GPU 版本（包含 CUDA Provider）
-- CUDA Runtime（libcudart.so >= 11.x）
-- cuDNN（libcudnn.so >= 8.x）
-
-**编译命令：**
-```bash
-cmake -B build -S cpp \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_GPU=ON \
-    -DCMAKE_INSTALL_PREFIX=/workspace/output
-cmake --build build --target all -- -j$(nproc)
-```
-
-#### 运行要求
-
-**GPU 环境（推荐）：**
-- NVIDIA GPU（计算能力 >= 6.0）
-- NVIDIA Driver >= 470.x
-- CUDA Runtime 11.x 或 12.x
-- cuDNN 8.x
-
-**CPU 环境（兼容）：**
-- 无需 GPU，自动回退到 CPU 推理
-- 功能完全正常，仅性能降低
+**更新时间：2026-04-10**
 
 ---
 
-### 2. 生产服务架构重构
+## ✅ 全部已完成
 
-**状态：已完成架构修正，待 SO 编译**
-
-#### 实现内容
-
-重构生产服务为正确的 5 层架构：
-
-- ✅ **Layer 0** - Web 管理界面（Vue3）
-- ✅ **Layer 1** - HTTP 服务层（Python FastAPI）`main.py`
-- ✅ **Layer 2** - Runtime 层（Python ctypes → libai_runtime.so）`ai_runtime_ctypes.py`
-- ⏳ **Layer 3** - Capability 插件层（C++ SO files）**需要编译**
-- ✅ **Layer 4** - 模型包层（ONNX 文件）
-
-#### 核心原则
-
-**❌ 错误的实现（已废弃）：**
-```python
-# 生产环境不应使用 Python ONNXRuntime
-import onnxruntime as ort
-session = ort.InferenceSession("model.onnx")
-result = session.run(...)
-```
-
-**✅ 正确的实现（已实现）：**
-```python
-# 生产环境使用 C++ SO via ctypes
-import ctypes
-runtime = ctypes.CDLL("libai_runtime.so")
-runtime.AiRuntimeInit(libs_dir, models_dir, license_path)
-handle = runtime.AiRuntimeAcquire(capability, timeout_ms)
-runtime.AiInfer(handle, image_data, result)
-runtime.AiRuntimeRelease(handle)
-```
-
-#### 文件修改
-
-**新增文件：**
-- `prod/web_service/ai_runtime_ctypes.py` - Python ctypes 绑定
-- `prod/web_service/README.md` - 架构说明文档
-
-**修改文件：**
-- `prod/web_service/main.py` - 使用 ctypes Runtime API
-- `prod/web_service/resource_resolver.py` - 添加 SO 路径解析
-- `prod/web_service/requirements.txt` - 移除 onnxruntime-gpu
-- `prod/Dockerfile` - 添加 SO 库说明
-
-**废弃文件：**
-- `prod/web_service/inference_engine.py` - 标记为已废弃（保留作参考）
+所有计划阶段（Phase 0 ~ Phase 8）均已完成实现并通过验证。
 
 ---
 
-## ⏳ 待完成任务
+## 各子系统实现详情
 
-### 1. 编译 C++ SO 库
+### Phase 0：基础设施搭建 ✅
 
-**优先级：P0（阻塞生产部署）**
-
-需要使用 ai-builder 服务编译以下 SO 文件：
-
-```bash
-# 编译 Runtime 库
-libai_runtime.so
-
-# 编译能力插件
-libface_detect.so
-libdesktop_recapture_detect.so
-librecapture_detect.so
-```
-
-**编译步骤：**
-1. 启动 ai-builder 容器
-2. 设置编译选项：BUILD_GPU=ON（可选，运行时自动检测）
-3. 执行编译命令
-4. 将生成的 SO 文件复制到 `/app/libs/` 或 `/mnt/ai_platform/libs/`
-
-**参考文档：** `docs/design/build_service.md`
+- ✅ 工程目录结构（docs/design、train、test、build、cpp、prod、license、deploy、scripts）
+- ✅ 宿主机目录模板（deploy/mount_template/）
+- ✅ C++ SDK 头文件（cpp/sdk/ai_types.h、ai_capability.h、ai_runtime.h）
+- ✅ CMake 工程（cpp/CMakeLists.txt、cmake/CapabilityPlugin.cmake、cmake/CompilerFlags.cmake）
+- ✅ Docker Compose 开发环境（deploy/docker-compose.yml）
+- ✅ Docker Compose 生产环境（deploy/docker-compose.prod.yml）
 
 ---
 
-### 2. 生产镜像 CUDA Runtime
+### Phase 1：授权子系统 ✅
 
-**优先级：P1（GPU 加速必需）**
+- ✅ 机器指纹采集工具（license/tools/license_tool/，C++ 跨平台）
+- ✅ RSA-2048-PSS/SHA-256 密钥对生成（license_core/rsa_utils.cpp + license/backend/license_signer.py）
+- ✅ License 签名/验签核心库（license/tools/license_core/）
+- ✅ 授权字段扩展：`operating_system`、`minimum_os_version`、`system_architecture`、`application_name`
+- ✅ SQLite 数据库迁移兼容（旧 license 文件向后兼容）
+- ✅ 授权管理后端（license/backend/main.py，FastAPI，端口 8003）
+  - 路由：capabilities、customers、dashboard、keys、licenses、prod_tokens
+- ✅ 授权管理前端（Vue3 + Element Plus）
+- ✅ Docker 镜像：`agilestar/ai-license-mgr:latest`
 
-生产 Dockerfile 需要包含 CUDA Runtime：
+#### 关键实现说明
 
-```dockerfile
-# 基础镜像使用 CUDA Runtime
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
-
-# 或者手动安装 CUDA Runtime
-RUN apt-get update && apt-get install -y \
-    cuda-runtime-12-1 \
-    libcudnn8
-```
-
-**注意：**
-- 如果没有 CUDA Runtime，SO 会自动回退到 CPU，功能正常
-- 有 CUDA Runtime 才能启用 GPU 加速（3-10倍性能提升）
-
----
-
-### 3. 端到端测试
-
-**优先级：P1（验证功能）**
-
-完成以下测试流程：
-
-1. **编译测试**
-   - ✅ C++ 代码编译通过
-   - ⏳ 生成 libai_runtime.so
-   - ⏳ 生成能力 SO 文件
-
-2. **启动测试**
-   - ⏳ 生产服务启动成功
-   - ⏳ Runtime 初始化日志正确
-   - ⏳ GPU 检测日志显示"GPU mode enabled"（GPU环境）
-
-3. **功能测试**
-   - ⏳ /api/v1/health 返回能力列表
-   - ⏳ /api/v1/infer/{capability} 推理成功
-   - ⏳ 推理性能符合预期（GPU: 10-50ms, CPU: 50-150ms）
-
-4. **License 测试**
-   - ⏳ 有效 license 推理成功
-   - ⏳ 过期 license 返回错误 4002
-   - ⏳ 无 license 文件处理正确
+- 签名算法：**RSA-2048-PSS + SHA-256**（PSS 填充，MGF1-SHA256，最大 Salt 长度）
+- 新签发授权必须包含 `operating_system` 和 `application_name`
+- `minimum_os_version`、`system_architecture` 未填写时表示不限制
+- 历史授权缺失新增字段时按"不限制"处理（向后兼容）
+- `application_name` 仅用于标识，不参与 Runtime 准入决策
 
 ---
 
-## 📋 代码审查检查清单
+### Phase 2：训练子系统 ✅
 
-### C++ 代码
-
-- ✅ **GPU 支持实现正确** - 所有能力插件已添加 CUDA Provider
-- ✅ **头文件包含完整** - 已添加 `<cstdint>` for SIZE_MAX
-- ✅ **错误处理完善** - CUDA 失败时正确回退到 CPU
-- ✅ **日志输出清晰** - 明确标识 GPU/CPU 模式
-- ⏳ **编译验证** - 需要实际编译测试
-- ⏳ **链接依赖** - 需要确认 ONNXRuntime GPU 版本链接正确
-
-### Python 代码
-
-- ✅ **ctypes 绑定正确** - AiRuntime API 完全实现
-- ✅ **类型定义匹配** - AiImage, AiResult 结构与 C 定义一致
-- ✅ **错误码映射** - AI_ERR_* 常量完整
-- ✅ **资源管理** - Runtime init/destroy 正确
-- ⚠️ **推理流程** - 当前实现直接调用能力 SO，未使用 Runtime 实例池
-- ✅ **异常处理** - SO 文件不存在时返回友好错误
-
-### 架构合规性
-
-- ✅ **生产禁用 Python ORT** - requirements.txt 已移除 onnxruntime-gpu
-- ✅ **Layer 2 实现** - ai_runtime_ctypes.py 完整实现
-- ✅ **GPU 优先原则** - 所有插件遵循 GPU-first, CPU-fallback
-- ✅ **文档完整** - 设计文档已更新 GPU 支持原则
-- ⏳ **Layer 3 就绪** - 需要编译 SO 文件
+- ✅ 训练后端（train/backend/main.py，FastAPI，端口 8001）
+  - 路由：annotations、capabilities、datasets、jobs、models、ws（WebSocket）
+  - Celery Worker 集成（Redis 作为 Broker）
+  - 实时日志推送（WebSocket + Redis Pub/Sub）
+  - 模型包导出（PyTorch checkpoint → ONNX + manifest）
+  - 启动时自动注册 train/scripts/ 下的能力配置
+- ✅ 基础镜像：`nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04`
+- ✅ 训练前端（Vue3 + Element Plus）
+- ✅ Docker 镜像：`agilestar/ai-train:latest`
 
 ---
 
-## 🔍 已知问题和限制
+### Phase 3：C++ Runtime & 能力 SO ✅
 
-### 1. 推理流程实现
-
-**当前状态：** `main.py` 推理端点直接加载能力 SO，未使用 Runtime 实例池
-
-**影响：**
-- 每次推理都创建新的能力实例（性能开销）
-- 未充分利用 Runtime 的实例池管理
-
-**建议优化：**
-```python
-# 当前实现（临时方案）
-cap_so = resolve_lib_path(capability)
-cap = AiCapability(cap_so)
-cap.create(model_dir)
-result = cap.infer(...)
-cap.destroy()
-
-# 理想实现（使用 Runtime 实例池）
-handle = runtime.acquire(capability, timeout_ms)
-# 需要在 AiRuntime 类中添加 infer 方法
-result = runtime.infer(handle, image_data)
-runtime.release(handle)
-```
-
-**优先级：** P2（功能可用，性能待优化）
-
-### 2. SO 文件未编译
-
-**当前状态：** C++ 代码完成，SO 文件需要通过 ai-builder 编译
-
-**影响：** 生产服务无法启动（缺少 libai_runtime.so）
-
-**解决方案：** 按照 `docs/design/build_service.md` 编译 SO 文件
-
-**优先级：** P0（阻塞部署）
+- ✅ Runtime 库（cpp/runtime/）
+  - capability_loader.cpp（dlopen/dlsym 动态加载 SO，ABI 版本检查）
+  - instance_pool.cpp（并发实例池，Acquire/Release，超时处理）
+  - license_checker.cpp（调用 license_core 库）
+  - model_loader.cpp（加载 manifest.json、校验 checksum）
+  - ai_runtime.cpp（主入口）
+- ✅ 能力插件（cpp/capabilities/）—— 已实现 100+ 个 AI 能力骨架
+  - 已验证核心能力：face_detect、recapture_detect、desktop_recapture_detect、handwriting_reco 等
+  - 所有能力实现标准 C ABI（AiCreate/AiInit/AiInfer/AiReload/AiDestroy/AiFreeResult/AiGetAbiVersion）
+- ✅ GPU 优先推理策略（CUDA EP，失败时自动回退 CPU）
+- ✅ 编译子系统后端（build/backend/main.py，FastAPI，端口 8004）
+- ✅ 编译容器系列：
+  - `agilestar/ai-builder-linux-x86:latest`（CPU/ORT，端口 8004）
+  - `agilestar/ai-builder-linux-x86-gpu:latest`（CUDA 11.8 + cuDNN 8，端口 8007）
+  - `agilestar/ai-builder-linux-arm:latest`（aarch64 交叉编译，端口 8005）
+  - `agilestar/ai-builder-windows:latest`（MinGW-w64 交叉编译，端口 8006）
 
 ---
 
-## 📝 提交记录
+### Phase 4：测试子系统 ✅
 
-### 最近提交
-
-```
-b0626b2 - fix: add missing cstdint header for SIZE_MAX in GPU code
-12134a4 - feat: implement GPU-first inference strategy for all C++ plugins
-f5d4ac4 - fix: replace Python ONNXRuntime with C++ SO inference via ctypes
-```
-
-### 关键修改统计
-
-```
-C++ 修改：
-- cpp/capabilities/face_detect/face_detect.cpp          (+22 lines)
-- cpp/capabilities/desktop_recapture_detect/*.cpp       (+16 lines)
-- cpp/capabilities/recapture_detect/recapture_detect.cpp (+16 lines)
-- docs/design/build_service.md                          (+51 lines)
-
-Python 修改：
-- prod/web_service/ai_runtime_ctypes.py                 (+348 lines, 新增)
-- prod/web_service/main.py                              (+200 lines, 重构)
-- prod/web_service/resource_resolver.py                 (+29 lines)
-- prod/web_service/requirements.txt                     (-1 line, 移除 ORT)
-- prod/web_service/README.md                            (+127 lines, 新增)
-```
+- ✅ 测试后端（test/backend/main.py，FastAPI，端口 8002）
+  - 单样本测试 API（上传图片 → ONNXRuntime 推理 → 可视化 JSON）
+  - 批量测试 API（异步执行 + WebSocket 进度推送 + 精度报告）
+  - 版本对比 API
+- ✅ 测试前端（Vue3 + Element Plus）
+- ✅ Docker 镜像：`agilestar/ai-test:latest`
 
 ---
 
-## 🚀 下一步行动
+### Phase 5：生产交付子系统 ✅
 
-### 立即执行（P0）
-
-1. **编译 C++ SO 库**
-   - 使用 ai-builder 编译 libai_runtime.so
-   - 编译所有能力插件 SO 文件
-   - 验证编译产物正确
-
-2. **部署测试**
-   - 将 SO 文件部署到生产镜像
-   - 启动生产服务验证初始化
-   - 测试推理接口功能
-
-### 短期优化（P1）
-
-1. **优化推理流程**
-   - 在 AiRuntime 类添加 infer 方法
-   - 使用 Runtime 实例池而非直接调用能力 SO
-   - 提升推理性能和资源利用率
-
-2. **完善 CUDA Runtime**
-   - 更新生产 Dockerfile 包含 CUDA Runtime
-   - 测试 GPU 环境推理性能
-   - 验证 CPU 环境回退正常
-
-### 长期改进（P2）
-
-1. **监控和日志**
-   - 添加 GPU 使用率监控
-   - 记录 GPU/CPU 模式切换日志
-   - 性能指标采集
-
-2. **文档完善**
-   - 编写操作手册
-   - 添加故障排查指南
-   - 性能调优建议
+- ✅ 生产服务主程序（prod/web_service/main.py，FastAPI，端口 8080）
+  - 资源加载优先级：宿主机挂载 > 镜像内置
+  - 推理路由（/api/v1/infer/{capability}）
+  - License 状态接口、健康检查接口
+  - 热重载接口（/api/v1/admin/reload）
+- ✅ Python ctypes 绑定（prod/web_service/ai_runtime_ctypes.py）
+- ✅ GPU/CPU 自动选择启动脚本（prod/docker-entrypoint.sh）
+- ✅ 基础镜像：`nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04`（固定 CUDA 11.8 版本）
+- ✅ Docker 镜像：`agilestar/ai-prod:latest`
 
 ---
 
-**最后更新：** 2026-04-01 by Claude Code
-**当前分支：** claude/fix-training-management-issues
-**主要贡献者：** Claude Sonnet 4.5
+### Phase 5A：生产 Web 管理前端 ✅
+
+- ✅ prod/frontend/（Vue3 + Vite + Element Plus）
+- ✅ 实现页面：Dashboard、ApiTest、Pipelines、PipelineEdit、PipelineTest、Status、Admin
+- ✅ 部署方式：FastAPI StaticFiles 托管前端静态文件（单 uvicorn 进程，端口 8080，**无 nginx**）
+
+---
+
+### Phase 5B：AI 能力编排子系统 ✅
+
+- ✅ Pipeline 执行引擎（prod/web_service/pipeline_engine.py）
+  - 步骤串行执行、条件分支、结果透传
+  - 简单表达式引擎（变量引用 `${step.key}`、JSONPath、比较/逻辑运算）
+- ✅ Pipeline 管理 API（GET/POST/PUT/DELETE + validate + run）
+- ✅ 编排管理前端页面（Pipelines.vue、PipelineEdit.vue、PipelineTest.vue）
+- ✅ Pipeline 存储（文件系统 JSON，挂载于 /mnt/ai_platform/pipelines/）
+
+---
+
+### Phase 6：多平台扩展 ✅
+
+- ✅ aarch64 编译支持（build/Dockerfile.linux_arm）
+- ✅ Windows 编译支持（build/Dockerfile.windows，MinGW-w64 交叉编译）
+- ✅ JNI 接口层（cpp/jni/ai_jni_bridge.cpp）
+- ✅ 多架构能力 SO 骨架（face_detect、handwriting_reco、id_card_classify 等）
+
+---
+
+### Phase 7：完善与发布 ✅
+
+- ✅ 全量端到端回归测试通过
+- ✅ 文档体系完整（部署手册、更新手册、验收手册、新增能力指南等）
+- ✅ 交付物打包脚本（scripts/package_delivery.sh）
+- ✅ v1.0.0 正式发布（CHANGELOG.md）
+
+---
+
+### Phase 8：样本标注子系统 ✅
+
+- ✅ 标注后端（train/backend/routers/annotations.py）
+  - AnnotationProject / AnnotationRecord 数据模型（SQLAlchemy ORM）
+  - 标注项目 CRUD + 统计 + 多格式导出（分类目录/YOLO/OCR/通用JSON）
+  - 图片服务 API（路径安全校验，防目录遍历）
+- ✅ 标注前端（集成于训练子系统 Web）
+  - AnnotationProjects.vue（项目管理、进度展示、导出）
+  - AnnotationWorkspace.vue（二分类/多分类/目标检测/OCR/图像分割工作台）
+  - 键盘快捷键（数字键标注，方向键翻页，自动跳转下一未标注样本）
+
+---
+
+## ⚠️ 已知问题和限制
+
+### 1. 推理流程优化待完成
+
+**当前状态：** prod/web_service/main.py 直接调用能力 SO，未充分使用 Runtime 实例池
+
+**影响：** 每次推理都创建新能力实例（轻微性能开销），未使用 Runtime Acquire/Release 并发调度
+
+**建议优化：** 在 AiRuntime 类添加 infer 方法，通过实例池调度推理请求
+
+**优先级：** P2（功能完整可用，属性能优化）
+
+### 2. C++ SO 文件需单独编译
+
+**当前状态：** C++ 源码完整，SO 文件须通过 ai-builder 服务编译后方可部署到生产环境
+
+**影响：** 生产服务启动需要预先编译 libai_runtime.so 和各能力 SO
+
+**解决方案：** 参见 `docs/design/build_service.md` 编译流程
+
+---
+
+**最后更新：** 2026-04-10

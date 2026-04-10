@@ -93,9 +93,47 @@ def get_licenses(
     return q.offset(skip).limit(limit).all()
 
 
-def get_expiring_licenses(db: Session, days: int) -> list[models.LicenseRecord]:
+def get_dashboard_stats(db: Session) -> dict:
     from datetime import timedelta
 
+    now = datetime.now(CST)
+    total_customers = db.query(models.Customer).count()
+    active_licenses = (
+        db.query(models.LicenseRecord)
+        .filter(models.LicenseRecord.status == "active")
+        .count()
+    )
+    cutoff_30 = now + timedelta(days=30)
+    expiring_30 = (
+        db.query(models.LicenseRecord)
+        .filter(
+            models.LicenseRecord.status == "active",
+            models.LicenseRecord.valid_until.isnot(None),
+            models.LicenseRecord.valid_until <= cutoff_30,
+            models.LicenseRecord.valid_until > now,
+        )
+        .count()
+    )
+    cutoff_7 = now + timedelta(days=7)
+    expiring_7 = (
+        db.query(models.LicenseRecord)
+        .filter(
+            models.LicenseRecord.status == "active",
+            models.LicenseRecord.valid_until.isnot(None),
+            models.LicenseRecord.valid_until <= cutoff_7,
+            models.LicenseRecord.valid_until > now,
+        )
+        .count()
+    )
+    return {
+        "total_customers": total_customers,
+        "active_licenses": active_licenses,
+        "expiring_30": expiring_30,
+        "expiring_7": expiring_7,
+    }
+
+
+def get_expiring_licenses(db: Session, days: int) -> list[models.LicenseRecord]:
     now = datetime.now(CST)
     cutoff = now + timedelta(days=days)
     return (
@@ -131,6 +169,10 @@ def create_license_record(
         key_pair_id=data.key_pair_id,
         license_type=data.license_type,
         capabilities=json.dumps(data.capabilities, ensure_ascii=False),
+        operating_system=data.operating_system,
+        minimum_os_version=data.minimum_os_version,
+        system_architecture=data.system_architecture,
+        application_name=data.application_name,
         machine_fingerprint=data.machine_fingerprint,
         valid_from=data.valid_from,
         valid_until=data.valid_until,

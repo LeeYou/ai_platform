@@ -42,6 +42,10 @@ class LicenseRecord(Base):
     )
     license_type: Mapped[str] = mapped_column(String(32), nullable=False)  # trial/commercial/permanent
     capabilities: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array as text
+    operating_system: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    minimum_os_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    system_architecture: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    application_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     machine_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

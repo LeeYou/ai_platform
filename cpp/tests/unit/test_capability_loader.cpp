@@ -66,6 +66,18 @@ protected:
           << "\"checksum\":{\"model_file\":\"" << checksum << "\",\"algorithm\":\"sha256\"}"
           << "}";
     }
+
+    void write_legacy_manifest(const std::string& capability,
+                               const std::string& version,
+                               const std::string& checksum = "") {
+        std::string path = tmpdir_ + "/manifest.json";
+        std::ofstream f(path);
+        f << "{"
+          << "\"capability\":\"" << capability << "\","
+          << "\"version\":\"" << version << "\","
+          << "\"checksum\":{\"model_file\":\"" << checksum << "\",\"algorithm\":\"sha256\"}"
+          << "}";
+    }
 };
 
 TEST_F(ModelLoaderTest, MissingManifestReturnsError) {
@@ -88,6 +100,12 @@ TEST_F(ModelLoaderTest, CapabilityMismatchReturnsError) {
 TEST_F(ModelLoaderTest, EmptyExpectedCapabilityAllowsAny) {
     write_manifest("any_cap", "2.0.0", "");
     int rc = agilestar_model_verify(tmpdir_.c_str(), "");
+    EXPECT_EQ(AI_OK, rc);
+}
+
+TEST_F(ModelLoaderTest, LegacyVersionManifestPasses) {
+    write_legacy_manifest("recapture_detect", "1.0.0", "");
+    int rc = agilestar_model_verify(tmpdir_.c_str(), "recapture_detect");
     EXPECT_EQ(AI_OK, rc);
 }
 

@@ -9,15 +9,19 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.17")
         message(STATUS "Found CUDA Toolkit: ${CUDAToolkit_VERSION} "
                        "(${CUDAToolkit_LIBRARY_DIR})")
     else()
-        message(WARNING "CUDA Toolkit not found. GPU support disabled.")
-        set(BUILD_GPU OFF CACHE BOOL "GPU support disabled (CUDA not found)" FORCE)
+        message(FATAL_ERROR
+            "CUDA Toolkit is required for the requested compile-time GPU features. "
+            "Use a GPU builder image with nvcc and /usr/local/cuda available."
+        )
     endif()
 else()
     find_package(CUDA QUIET)
     if(CUDA_FOUND)
         message(STATUS "Found CUDA: ${CUDA_VERSION}")
     else()
-        message(WARNING "CUDA not found. GPU support disabled.")
-        set(BUILD_GPU OFF CACHE BOOL "GPU support disabled (CUDA not found)" FORCE)
+        message(FATAL_ERROR
+            "CUDA Toolkit is required for the requested compile-time GPU features. "
+            "Use a GPU builder image with CUDA installed."
+        )
     endif()
 endif()

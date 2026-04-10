@@ -75,7 +75,7 @@ try:
 
     from database import Base, engine
     from key_store import ensure_private_keys_dir
-    from routers import capabilities, customers, keys, licenses, prod_tokens
+    from routers import capabilities, customers, dashboard, keys, licenses, prod_tokens
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -111,6 +111,20 @@ def _run_migrations(eng) -> None:
             )
             conn.commit()
             logger.info("Migration complete: key_pair_id added")
+
+        additional_columns = {
+            "operating_system": "ALTER TABLE license_records ADD COLUMN operating_system VARCHAR(32)",
+            "minimum_os_version": "ALTER TABLE license_records ADD COLUMN minimum_os_version VARCHAR(64)",
+            "system_architecture": "ALTER TABLE license_records ADD COLUMN system_architecture VARCHAR(64)",
+            "application_name": "ALTER TABLE license_records ADD COLUMN application_name VARCHAR(255)",
+        }
+        for column_name, statement in additional_columns.items():
+            if column_name in cols:
+                continue
+            logger.info("Migrating: adding %s column to license_records", column_name)
+            conn.execute(sqlalchemy.text(statement))
+            conn.commit()
+            logger.info("Migration complete: %s added", column_name)
 
 
 @asynccontextmanager
@@ -218,6 +232,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # API routers
 app.include_router(capabilities.router)
 app.include_router(customers.router)
+app.include_router(dashboard.router)
 app.include_router(licenses.router)
 app.include_router(keys.router)
 app.include_router(prod_tokens.router)

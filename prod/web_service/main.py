@@ -347,6 +347,7 @@ def _init_runtime() -> bool:
     if runtime:
         caps = runtime.get_capabilities()
         logger.info("Runtime loaded %d capabilities: %s", len(caps), [c["name"] for c in caps])
+        _log_runtime_capability_hints(runtime)
 
     ab_manager.reload()
     logger.info("A/B test manager loaded %d active tests", len(ab_manager.list_active_tests()))
@@ -487,6 +488,40 @@ def _decode_image(data: bytes) -> np.ndarray:
     return img
 
 
+def _load_capability_build_info(capability: str) -> dict[str, Any]:
+    from resource_resolver import resolve_lib_path
+
+    lib_path = resolve_lib_path(capability)
+    if not lib_path:
+        return {}
+
+    lib_dir = os.path.dirname(lib_path)
+    capability_root = os.path.dirname(lib_dir)
+    candidates = [
+        os.path.join(capability_root, "build_info.json"),
+        os.path.join(os.path.dirname(capability_root), "build_info.json"),
+    ]
+    for candidate in candidates:
+        try:
+            with open(candidate, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data["_path"] = candidate
+                return data
+        except Exception:
+            continue
+    return {}
+
+
+def _summarize_capability_runtime(capability: str) -> dict[str, Any]:
+    build_info = _load_capability_build_info(capability)
+    runtime_gpu_expected = build_info.get("onnxruntime_package") == "gpu"
+    return {
+        "build_info": build_info,
+        "runtime_gpu_expected": runtime_gpu_expected if build_info else None,
+    }
+
+
 def _success(
     capability: str,
     version: str,
@@ -520,33 +555,15 @@ def _error_response(
     )
 
 
-def _runtime_license_error_response(license_status: Optional[dict[str, Any]], capability: str) -> Optional[JSONResponse]:
-    if not license_status:
-        return None
-
-    status = str(license_status.get("status", "")).strip().lower()
-    capabilities = license_status.get("capabilities", []) or []
-
-    if status in ("active", "valid"):
-        if capabilities and capability not in capabilities and "*" not in capabilities:
-            return _error_response(4004, "Capability not licensed", capability, status_code=403)
-        return None
-
-    if status == "signature_invalid":
-        return _error_response(4005, "License signature invalid", capability, status_code=403)
-    if status == "not_yet_valid":
-        return _error_response(4003, "License not yet valid", capability, status_code=403)
-    if status == "expired":
-        return _error_response(4002, "License expired", capability, status_code=403)
-    if status == "invalid":
-        return _error_response(4001, "License invalid", capability, status_code=403)
-    return None
-
-
 def _acquire_failure_response(runtime: Any, capability: str) -> JSONResponse:
-    runtime_error = _runtime_license_error_response(_runtime_license_status(runtime), capability)
-    if runtime_error:
-        return runtime_error
+    runtime_error = runtime.get_last_error() if runtime and hasattr(runtime, "get_last_error") else None
+    if isinstance(runtime_error, dict) and runtime_error.get("code"):
+        return _error_response(
+            int(runtime_error["code"]),
+            str(runtime_error.get("message", "Inference failed")),
+            capability,
+            status_code=int(runtime_error.get("status_code", 403)),
+        )
     return _error_response(3001, "Instance pool timeout or capability not available", capability)
 
 
@@ -648,7 +665,13 @@ def _capability_diagnostics() -> dict:
         "pubkey_path": effective_pubkey_path,
         "pubkey_exists": os.path.exists(effective_pubkey_path),
         "loaded_capabilities": [cap.get("name", "") for cap in loaded_caps if cap.get("name")],
-        "loaded_capability_details": loaded_caps,
+        "loaded_capability_details": [
+            {
+                **cap,
+                **_summarize_capability_runtime(cap.get("name", "")),
+            }
+            for cap in loaded_caps
+        ],
         "discovered_model_capabilities": [
             cap.get("capability", "") for cap in discovered_caps if cap.get("capability")
         ],
@@ -686,6 +709,37 @@ def _detect_gpu_available() -> bool:
     except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired, OSError) as exc:
         logger.debug("nvidia-smi probe failed: %s", exc)
         return False
+
+
+def _log_runtime_capability_hints(runtime: Any) -> None:
+    gpu_available = _detect_gpu_available()
+    for cap_info in runtime.get_capabilities():
+        capability = cap_info.get("name", "")
+        if not capability:
+            continue
+        summary = _summarize_capability_runtime(capability)
+        build_info = summary["build_info"]
+        if build_info:
+            logger.info(
+                "Capability %s build info: builder=%s toolchain=%s onnxruntime=%s metadata=%s",
+                capability,
+                build_info.get("builder_image", "unknown"),
+                build_info.get("builder_toolchain_profile", "unknown"),
+                build_info.get("onnxruntime_package", "unknown"),
+                build_info.get("_path", ""),
+            )
+        else:
+            logger.warning(
+                "Capability %s build_info.json not found beside installed libraries; GPU-vs-CPU artifact source is unknown",
+                capability,
+            )
+        if gpu_available and build_info and build_info.get("onnxruntime_package") != "gpu":
+            logger.error(
+                "Capability %s is running on a GPU host but installed artifact metadata says onnxruntime_package=%s; "
+                "rebuild/reinstall this capability from the GPU builder to avoid slow CPU execution",
+                capability,
+                build_info.get("onnxruntime_package"),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +870,6 @@ async def infer(
         session_id = request.headers.get("X-Session-ID", "").strip() or None
         selected_version = ab_manager.get_version_for_request(capability, session_id)
 
-        t0 = time.perf_counter()
         handle = runtime.acquire(capability, timeout_ms=30000)
         if not handle:
             logger.warning("Failed to acquire instance for %s (pool exhausted or capability not found)", capability)
@@ -825,7 +878,9 @@ async def infer(
         try:
             height, width, channels = img.shape
             img_bytes = img.tobytes()
+            t0 = time.perf_counter()
             result = runtime.infer(handle, img_bytes, width, height, channels)
+            elapsed = (time.perf_counter() - t0) * 1000.0
 
             if result.get("error_code", 0) != AI_OK:
                 return _error_response(
@@ -834,7 +889,6 @@ async def infer(
                     capability
                 )
 
-            elapsed = (time.perf_counter() - t0) * 1000.0
             version = _get_runtime_capability_version(runtime, capability)
             ab_info = ab_manager.get_test_info(capability)
             if ab_info:
@@ -1028,7 +1082,7 @@ async def run_pipeline_endpoint(
             except Exception:
                 pass
 
-        result = execute_pipeline(p, raw, _infer_for_pipeline, None, global_opts)
+        result = execute_pipeline(p, raw, _infer_for_pipeline, global_opts)
         return result
 
 

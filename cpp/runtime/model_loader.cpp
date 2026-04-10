@@ -47,6 +47,12 @@ static std::string _jstr(const std::string& json, const std::string& key) {
     return json.substr(pos + 1, end - pos - 1);
 }
 
+static std::string _manifest_version(const std::string& json) {
+    std::string version = _jstr(json, "model_version");
+    if (!version.empty()) return version;
+    return _jstr(json, "version");
+}
+
 static std::string _jstr_nested(const std::string& json,
                                  const std::string& outer_key,
                                  const std::string& inner_key) {
@@ -126,7 +132,7 @@ int32_t load_and_verify_manifest(const std::string& model_dir,
 
     ModelManifest manifest;
     manifest.capability          = _jstr(json, "capability");
-    manifest.model_version       = _jstr(json, "model_version");
+    manifest.model_version       = _manifest_version(json);
     manifest.model_file_checksum = _jstr_nested(json, "checksum", "model_file");
 
     // Validate capability name

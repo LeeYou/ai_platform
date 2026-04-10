@@ -163,3 +163,139 @@ class DesktopRecaptureExportTests(unittest.TestCase):
 
         self.assertEqual(payload["model_version"], "v9.9.9")
         self.assertNotIn("version", payload)
+
+    def test_resolve_model_version_accepts_legacy_version_field(self):
+        original_models_root = build_main.MODELS_ROOT
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                build_main.MODELS_ROOT = temp_dir
+                model_dir = Path(temp_dir) / "desktop_recapture_detect" / "current"
+                model_dir.mkdir(parents=True, exist_ok=True)
+                (model_dir / "manifest.json").write_text(
+                    json.dumps({"capability": "desktop_recapture_detect", "version": "v1.2.3"}),
+                    encoding="utf-8",
+                )
+
+                self.assertEqual(build_main._resolve_model_version("desktop_recapture_detect"), "v1.2.3")
+        finally:
+            build_main.MODELS_ROOT = original_models_root
+
+
+class BuildGpuProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.original_cpp_source_dir = build_main.CPP_SOURCE_DIR
+        build_main.CPP_SOURCE_DIR = str(Path(self.tempdir.name) / "cpp")
+
+        runtime_gpu_dir = Path(build_main.CPP_SOURCE_DIR) / "capabilities" / "desktop_recapture_detect"
+        runtime_gpu_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_gpu_dir / "desktop_recapture_detect.cpp").write_text(
+            "OrtCUDAProviderOptions opts; session.AppendExecutionProvider_CUDA(opts);\n",
+            encoding="utf-8",
+        )
+
+        compile_gpu_dir = Path(build_main.CPP_SOURCE_DIR) / "capabilities" / "cuda_kernel_cap"
+        compile_gpu_dir.mkdir(parents=True, exist_ok=True)
+        (compile_gpu_dir / "kernel.cu").write_text("__global__ void kernel() {}\n", encoding="utf-8")
+
+        cpu_dir = Path(build_main.CPP_SOURCE_DIR) / "capabilities" / "cpu_only"
+        cpu_dir.mkdir(parents=True, exist_ok=True)
+        (cpu_dir / "cpu_only.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+
+    def tearDown(self):
+        build_main.CPP_SOURCE_DIR = self.original_cpp_source_dir
+        self.tempdir.cleanup()
+
+    def test_build_gpu_profile_marks_runtime_only_capability(self):
+        profile = build_main._build_gpu_profile("desktop_recapture_detect", ["-DBUILD_GPU=ON"])
+
+        self.assertTrue(profile["runtime_gpu_capable"])
+        self.assertEqual(profile["compile_gpu_mode"], "runtime_only")
+        self.assertFalse(profile["compile_time_gpu_required"])
+        self.assertTrue(profile["legacy_build_gpu_requested"])
+        self.assertEqual(profile["compile_gpu_features"], [])
+
+    def test_build_gpu_profile_marks_compile_time_gpu_capability(self):
+        profile = build_main._build_gpu_profile("cuda_kernel_cap", [])
+
+        self.assertFalse(profile["runtime_gpu_capable"])
+        self.assertEqual(profile["compile_gpu_mode"], "cuda_toolchain_required")
+        self.assertTrue(profile["compile_time_gpu_required"])
+
+    def test_validate_build_environment_rejects_missing_gpu_builder_dependencies(self):
+        original_probe = build_main._probe_builder_environment
+        build_main._probe_builder_environment = lambda: {
+            "builder_image": "cpu-builder",
+            "builder_toolchain_profile": "cpu-ort",
+            "cmake_version": "cmake version 3.22.1",
+            "compiler": "g++ 12.3.0",
+            "cuda_home": "/usr/local/cuda",
+            "cuda_home_exists": False,
+            "cuda_toolkit_available": False,
+            "nvcc_path": "",
+            "tensorrt_available": False,
+            "tensorrt_include": "",
+            "tensorrt_library": "",
+            "onnxruntime_root": "/usr/local",
+            "onnxruntime_package": "cpu",
+            "onnxruntime_cuda_provider_library": "",
+            "supports_compile_time_gpu_features": [],
+        }
+        try:
+            with self.assertRaises(build_main.HTTPException) as ctx:
+                build_main._validate_build_environment(
+                    "desktop_recapture_detect",
+                    ["-DENABLE_TENSORRT=ON"],
+                )
+        finally:
+            build_main._probe_builder_environment = original_probe
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("TensorRT", ctx.exception.detail)
+        self.assertIn("GPU builder", ctx.exception.detail)
+
+    def test_write_build_info_records_builder_and_gpu_contract(self):
+        original_probe = build_main._probe_builder_environment
+        original_run_command_output = build_main._run_command_output
+        build_main._probe_builder_environment = lambda: {
+            "builder_image": "agilestar/ai-builder-linux-x86-gpu:latest",
+            "builder_toolchain_profile": "cuda11.8-cudnn8",
+            "cmake_version": "cmake version 3.27.0",
+            "compiler": "g++ 12.3.0",
+            "cuda_home": "/usr/local/cuda",
+            "cuda_home_exists": True,
+            "cuda_toolkit_available": True,
+            "nvcc_path": "/usr/local/cuda/bin/nvcc",
+            "tensorrt_available": False,
+            "tensorrt_include": "",
+            "tensorrt_library": "",
+            "onnxruntime_root": "/usr/local",
+            "onnxruntime_package": "gpu",
+            "onnxruntime_cuda_provider_library": "/usr/local/lib/libonnxruntime_providers_cuda.so",
+            "supports_compile_time_gpu_features": ["ENABLE_CUDA_KERNELS"],
+        }
+        build_main._run_command_output = lambda args, cwd=None: "abc1234" if args[:3] == ["git", "rev-parse", "--short"] else ""
+
+        try:
+            with tempfile.TemporaryDirectory() as artifact_dir:
+                job = {
+                    "job_id": "job-1",
+                    "capability": "desktop_recapture_detect",
+                    "model_version": "v1.2.3",
+                    "trusted_pubkey_sha256": "f" * 64,
+                }
+                req = build_main.BuildRequest(capability="desktop_recapture_detect")
+                build_main._write_build_info(job, req, artifact_dir)
+                payload = json.loads(Path(artifact_dir, "build_info.json").read_text(encoding="utf-8"))
+        finally:
+            build_main._probe_builder_environment = original_probe
+            build_main._run_command_output = original_run_command_output
+
+        self.assertTrue(payload["gpu_enabled"])
+        self.assertTrue(payload["runtime_gpu_capable"])
+        self.assertEqual(payload["compile_gpu_mode"], "runtime_only")
+        self.assertEqual(payload["builder_image"], "agilestar/ai-builder-linux-x86-gpu:latest")
+        self.assertEqual(payload["builder_toolchain_profile"], "cuda11.8-cudnn8")
+        self.assertEqual(payload["onnxruntime_package"], "gpu")
+        self.assertTrue(payload["cuda_toolkit_available"])
+        self.assertFalse(payload["tensorrt_available"])

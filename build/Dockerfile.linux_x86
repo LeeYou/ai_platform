@@ -38,13 +38,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ONNXRuntime (CPU, latest stable)
 # ---------------------------------------------------------------------------
 ARG ONNXRUNTIME_VERSION=1.18.1
+ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64
 RUN curl -fsSL \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz" \
+    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
     -o /tmp/ort.tgz \
     && tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1 \
     && rm /tmp/ort.tgz
 
-ENV ONNXRUNTIME_ROOT=/usr/local
+ENV ONNXRUNTIME_ROOT=/usr/local \
+    BUILDER_IMAGE=agilestar/ai-builder-linux-x86:latest \
+    BUILDER_TOOLCHAIN_PROFILE=cpu-ort
 
 # ---------------------------------------------------------------------------
 # FastAPI build management backend

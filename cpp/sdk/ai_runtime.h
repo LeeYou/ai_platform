@@ -133,6 +133,24 @@ AI_EXPORT int32_t AiRuntimeReload(const char* capability_name);
 AI_EXPORT int32_t AiRuntimeGetLicenseStatus(char* buf, int32_t buf_len);
 
 /**
+ * 获取当前线程最近一次 AiRuntimeAcquire 失败的 Runtime 错误详情（JSON 字符串）。
+ *
+ * 返回格式示例：
+ * {
+ *   "code": 4002,
+ *   "message": "License expired",
+ *   "status_code": 403
+ * }
+ *
+ * 若当前线程没有记录的 Acquire 失败详情，则返回 0。
+ *
+ * @param buf     调用方分配的缓冲区
+ * @param buf_len 缓冲区长度（字节）
+ * @return 写入字节数（不含 '\0'）；buf_len 不足时返回所需大小（正整数）；无错误详情时返回 0
+ */
+AI_EXPORT int32_t AiRuntimeGetLastError(char* buf, int32_t buf_len);
+
+/**
  * Runtime 全局销毁（进程退出前调用一次）。
  * 等待所有正在执行的推理完成，销毁全部实例，卸载所有 SO。
  */

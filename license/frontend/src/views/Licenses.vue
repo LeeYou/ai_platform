@@ -34,6 +34,18 @@
         <el-table-column prop="license_type" label="类型" width="100">
           <template #default="{ row }"><el-tag size="small">{{ row.license_type }}</el-tag></template>
         </el-table-column>
+        <el-table-column prop="application_name" label="应用名称" width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.application_name || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="operating_system" label="操作系统" width="110">
+          <template #default="{ row }">{{ row.operating_system || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="minimum_os_version" label="最低系统版本" width="140">
+          <template #default="{ row }">{{ row.minimum_os_version || '不限制' }}</template>
+        </el-table-column>
+        <el-table-column prop="system_architecture" label="系统架构" width="120">
+          <template #default="{ row }">{{ row.system_architecture || '不限制' }}</template>
+        </el-table-column>
         <el-table-column prop="capabilities" label="能力" show-overflow-tooltip>
           <template #default="{ row }">{{ Array.isArray(row.capabilities) ? row.capabilities.join(', ') : row.capabilities }}</template>
         </el-table-column>

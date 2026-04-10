@@ -60,7 +60,6 @@ class PipelineEngineTests(unittest.TestCase):
             pipeline,
             b"image-bytes",
             lambda capability, image_bytes, options: {"label": "abc"},
-            lambda capability: None,
         )
 
         self.assertEqual(result["steps"][0]["status"], "success")
@@ -98,7 +97,6 @@ class PipelineEngineTests(unittest.TestCase):
             pipeline,
             b"image-bytes",
             fake_infer,
-            lambda capability: None,
         )
 
         self.assertEqual(calls, ["face_detect", "third_cap"])
@@ -128,7 +126,6 @@ class PipelineEngineTests(unittest.TestCase):
             pipeline,
             b"image-bytes",
             fake_infer,
-            lambda capability: None,
             global_options={"s1": {"threshold": 0.8}},
         )
 

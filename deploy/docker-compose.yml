@@ -10,6 +10,9 @@
 # 如需同时构建 ARM/Windows 交叉编译服务：
 #   docker compose --profile cross up -d --build
 #
+# 如需启动 GPU builder（CUDA devel / nvcc）：
+#   docker compose --profile gpu-build up -d --build build-gpu
+#
 # 仅启动 ARM 编译服务：
 #   docker compose --profile cross up -d --build build-arm
 #
@@ -64,6 +67,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - AI_LICENSE_DB=/app/data/license.db
+      - PRIVATE_KEYS_DIR=/app/data/private_keys
       - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
@@ -180,10 +184,52 @@ services:
       - LICENSE_SERVICE_URL=http://license:8003
       - TRAIN_SERVICE_URL=http://train:8001
       - BUILD_OUTPUT_DIR=/workspace/libs/linux_x86_64
+      - BUILDER_IMAGE=agilestar/ai-builder-linux-x86:latest
+      - BUILDER_TOOLCHAIN_PROFILE=cpu-ort
       - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
     depends_on:
       - license
       - train
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging: *default-logging
+
+  # ─── Linux x86_64 GPU 编译管理子系统（需 --profile gpu-build 才会启动）─────────
+  build-gpu:
+    image: agilestar/ai-builder-linux-x86-gpu:latest
+    profiles: ["gpu-build"]
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.linux_x86_gpu
+    container_name: ai-builder-gpu
+    <<: *default-restart
+    ports:
+      - "8007:8004"
+    volumes:
+      - /data/ai_platform/libs/linux_x86_64:/workspace/libs/linux_x86_64:rw
+      - /data/ai_platform/logs/build-gpu:/app/build/backend/data/build_logs:rw
+    environment:
+      - TZ=Asia/Shanghai
+      - LICENSE_SERVICE_URL=http://license:8003
+      - TRAIN_SERVICE_URL=http://train:8001
+      - BUILD_OUTPUT_DIR=/workspace/libs/linux_x86_64
+      - BUILDER_IMAGE=agilestar/ai-builder-linux-x86-gpu:latest
+      - BUILDER_TOOLCHAIN_PROFILE=cuda11.8-cudnn8
+      - AI_ADMIN_TOKEN=${AI_ADMIN_TOKEN:-changeme}
+    depends_on:
+      - license
+      - train
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
       interval: 30s

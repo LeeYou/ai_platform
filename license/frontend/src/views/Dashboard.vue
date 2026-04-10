@@ -64,7 +64,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getExpiringLicenses, getCustomers, getLicenses, extractErrorMessage } from '../api/index.js'
+import { getDashboardStats, getExpiringLicenses, extractErrorMessage } from '../api/index.js'
 import LicenseStatusTag from '../components/LicenseStatusTag.vue'
 
 const loading = ref(false)
@@ -85,17 +85,16 @@ function daysStyle(days) {
 async function loadData() {
   loading.value = true
   try {
-    const [customersRes, licensesRes, expiring30Res, expiring7Res] = await Promise.all([
-      getCustomers(1, 1),
-      getLicenses({ status: 'active', page: 1, size: 1 }),
+    const [statsRes, expiring30Res] = await Promise.all([
+      getDashboardStats(),
       getExpiringLicenses(30),
-      getExpiringLicenses(7),
     ])
-    stats.value.totalCustomers = customersRes.data?.total ?? 0
-    stats.value.activeLicenses = licensesRes.data?.total ?? 0
-    stats.value.expiring30 = expiring30Res.data?.total ?? (expiring30Res.data?.items?.length ?? 0)
-    stats.value.expiring7 = expiring7Res.data?.total ?? (expiring7Res.data?.items?.length ?? 0)
-    expiringList.value = expiring30Res.data?.items ?? expiring30Res.data ?? []
+    const s = statsRes.data
+    stats.value.totalCustomers = s.total_customers ?? 0
+    stats.value.activeLicenses = s.active_licenses ?? 0
+    stats.value.expiring30 = s.expiring_30 ?? 0
+    stats.value.expiring7 = s.expiring_7 ?? 0
+    expiringList.value = expiring30Res.data?.licenses ?? []
   } catch (e) {
     ElMessage.error('加载数据失败：' + extractErrorMessage(e))
   } finally {

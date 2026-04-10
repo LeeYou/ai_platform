@@ -23,6 +23,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from glob import glob
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
@@ -59,6 +60,23 @@ ALLOWED_ORIGINS = _parse_allowed_origins()
 ALLOWED_BUILD_TYPES = {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}
 # CMake -D args must match: -DVARNAME=VALUE (alphanumeric + underscore/dot/dash)
 CMAKE_ARG_RE = re.compile(r"^-D[A-Za-z_][A-Za-z0-9_]*(=[\w./-]*)?$")
+TRUTHY_CMAKE_VALUES = {"1", "ON", "TRUE", "YES"}
+RUNTIME_GPU_SOURCE_TOKENS = (
+    "AppendExecutionProvider_CUDA",
+    "SessionOptionsAppendExecutionProvider_CUDA",
+    "OrtCUDAProviderOptions",
+)
+COMPILE_GPU_SOURCE_TOKENS = (
+    "NvInfer",
+    "nvinfer",
+    "cuda_runtime.h",
+    "__global__",
+    "cudaMalloc",
+)
+COMPILE_GPU_CMAKE_FLAGS = {
+    "ENABLE_TENSORRT": "TensorRT",
+    "ENABLE_CUDA_KERNELS": "CUDA kernels",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +312,7 @@ def _resolve_model_version(capability: str) -> str | None:
             try:
                 with open(manifest_path, encoding="utf-8") as f:
                     manifest = json.load(f)
-                version = str(manifest.get("model_version", "")).strip()
+                version = str(manifest.get("model_version") or manifest.get("version") or "").strip()
                 if version:
                     versions[entry] = _safe_path_component(version, "unversioned")
             except Exception as exc:
@@ -336,19 +354,202 @@ def _run_command_output(args: list[str], cwd: str | None = None) -> str:
         return ""
 
 
+def _cmake_flag_enabled(extra_args: list[str] | None, name: str) -> bool:
+    bare = f"-D{name}"
+    prefix = f"-D{name}="
+    for arg in extra_args or []:
+        if arg == bare:
+            return True
+        if arg.startswith(prefix):
+            return arg.split("=", 1)[1].strip().upper() in TRUTHY_CMAKE_VALUES
+    return False
+
+
+def _capability_source_files(capability: str) -> list[str]:
+    safe_capability = _safe_path_component(capability, "")
+    if not safe_capability or safe_capability != capability:
+        return []
+    cap_root = os.path.realpath(os.path.join(CPP_SOURCE_DIR, "capabilities"))
+    cap_dir = os.path.realpath(os.path.join(cap_root, safe_capability))
+    if cap_dir != os.path.join(cap_root, safe_capability) or not os.path.isdir(cap_dir):
+        return []
+
+    result: list[str] = []
+    for root, _dirs, files in os.walk(cap_dir):
+        root = os.path.realpath(root)
+        if not root.startswith(cap_dir + os.sep) and root != cap_dir:
+            continue
+        for name in files:
+            if name.endswith((".c", ".cc", ".cpp", ".cxx", ".cu", ".h", ".hpp", ".hxx", ".cuh", ".txt")):
+                path = os.path.realpath(os.path.join(root, name))
+                if path.startswith(cap_dir + os.sep):
+                    result.append(path)
+    return result
+
+
+def _capability_supports_runtime_gpu(capability: str) -> bool:
+    for path in _capability_source_files(capability):
+        if not path.endswith((".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx")):
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except OSError:
+            continue
+        if any(token in content for token in RUNTIME_GPU_SOURCE_TOKENS):
+            return True
+    return False
+
+
+def _capability_requires_compile_gpu_toolchain(capability: str) -> bool:
+    for path in _capability_source_files(capability):
+        if path.endswith((".cu", ".cuh")):
+            return True
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except OSError:
+            continue
+        if any(token in content for token in COMPILE_GPU_SOURCE_TOKENS):
+            return True
+    return False
+
+
+def _probe_builder_environment() -> dict:
+    cuda_home = "/usr/local/cuda"
+    tensorrt_include_candidates = (
+        "/usr/include/NvInfer.h",
+        "/usr/local/tensorrt/include/NvInfer.h",
+        "/usr/local/TensorRT/include/NvInfer.h",
+        "/opt/tensorrt/include/NvInfer.h",
+    )
+    tensorrt_library_patterns = (
+        "/usr/lib*/**/libnvinfer.so*",
+        "/usr/local/tensorrt/lib*/libnvinfer.so*",
+        "/usr/local/TensorRT/lib*/libnvinfer.so*",
+        "/opt/tensorrt/lib*/libnvinfer.so*",
+    )
+    ort_cuda_provider = "/usr/local/lib/libonnxruntime_providers_cuda.so"
+
+    nvcc_path = shutil.which("nvcc") or ""
+    tensorrt_include = next((path for path in tensorrt_include_candidates if os.path.exists(path)), "")
+    tensorrt_library = ""
+    for pattern in tensorrt_library_patterns:
+        matches = sorted(glob(pattern, recursive=True))
+        if matches:
+            tensorrt_library = matches[0]
+            break
+
+    onnxruntime_package = "gpu" if os.path.exists(ort_cuda_provider) else "cpu"
+    cuda_toolkit_available = bool(nvcc_path and os.path.isdir(cuda_home))
+    tensorrt_available = bool(tensorrt_include and tensorrt_library)
+
+    supports_compile_time_gpu_features = []
+    if cuda_toolkit_available:
+        supports_compile_time_gpu_features.append("ENABLE_CUDA_KERNELS")
+    if cuda_toolkit_available and tensorrt_available and onnxruntime_package == "gpu":
+        supports_compile_time_gpu_features.append("ENABLE_TENSORRT")
+
+    return {
+        "builder_image": os.getenv("BUILDER_IMAGE", os.getenv("HOSTNAME", "unknown")),
+        "builder_toolchain_profile": os.getenv("BUILDER_TOOLCHAIN_PROFILE", "cpu-ort"),
+        "cmake_version": _run_command_output(["cmake", "--version"]),
+        "compiler": _run_command_output(["c++", "--version"]) or _run_command_output(["g++", "--version"]),
+        "cuda_home": cuda_home,
+        "cuda_home_exists": os.path.isdir(cuda_home),
+        "cuda_toolkit_available": cuda_toolkit_available,
+        "nvcc_path": nvcc_path,
+        "tensorrt_available": tensorrt_available,
+        "tensorrt_include": tensorrt_include,
+        "tensorrt_library": tensorrt_library,
+        "onnxruntime_root": os.getenv("ONNXRUNTIME_ROOT", "/usr/local"),
+        "onnxruntime_package": onnxruntime_package,
+        "onnxruntime_cuda_provider_library": ort_cuda_provider if os.path.exists(ort_cuda_provider) else "",
+        "supports_compile_time_gpu_features": supports_compile_time_gpu_features,
+    }
+
+
+def _build_gpu_profile(capability: str, extra_args: list[str] | None) -> dict:
+    compile_gpu_features = [
+        flag_name for flag_name in COMPILE_GPU_CMAKE_FLAGS
+        if _cmake_flag_enabled(extra_args, flag_name)
+    ]
+    runtime_gpu_capable = _capability_supports_runtime_gpu(capability)
+    compile_time_gpu_required = bool(compile_gpu_features) or _capability_requires_compile_gpu_toolchain(capability)
+
+    if compile_time_gpu_required:
+        compile_gpu_mode = "cuda_toolchain_required"
+    elif runtime_gpu_capable:
+        compile_gpu_mode = "runtime_only"
+    else:
+        compile_gpu_mode = "cpu_only"
+
+    return {
+        "runtime_gpu_capable": runtime_gpu_capable,
+        "compile_gpu_features": compile_gpu_features,
+        "compile_time_gpu_required": compile_time_gpu_required,
+        "compile_gpu_mode": compile_gpu_mode,
+        "legacy_build_gpu_requested": _cmake_flag_enabled(extra_args, "BUILD_GPU"),
+    }
+
+
+def _validate_build_environment(capability: str, extra_args: list[str] | None) -> tuple[dict, dict]:
+    builder_env = _probe_builder_environment()
+    gpu_profile = _build_gpu_profile(capability, extra_args)
+
+    missing: list[str] = []
+    compile_gpu_features = set(gpu_profile["compile_gpu_features"])
+
+    if "ENABLE_CUDA_KERNELS" in compile_gpu_features and not builder_env["cuda_toolkit_available"]:
+        missing.append("CUDA Toolkit (nvcc + /usr/local/cuda)")
+
+    if "ENABLE_TENSORRT" in compile_gpu_features:
+        if not builder_env["cuda_toolkit_available"]:
+            missing.append("CUDA Toolkit (TensorRT build requires CUDA Toolkit)")
+        if builder_env["onnxruntime_package"] != "gpu":
+            missing.append("ONNX Runtime GPU package")
+        if not builder_env["tensorrt_available"]:
+            missing.append("TensorRT headers/libs")
+
+    if missing:
+        missing_text = "，".join(dict.fromkeys(missing))
+        requested = ", ".join(sorted(COMPILE_GPU_CMAKE_FLAGS[name] for name in compile_gpu_features))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{capability} 请求了编译期 GPU 特性（{requested}），"
+                f"但当前 builder 缺少：{missing_text}。"
+                "请改用 GPU builder 镜像或移除对应编译期开关；"
+                "仅运行时 GPU 优先的能力无需传 -DBUILD_GPU=ON。"
+            ),
+        )
+
+    return builder_env, gpu_profile
+
+
 def _write_build_info(job: dict, req: BuildRequest, artifact_dir: str) -> None:
     import json
 
+    builder_env, gpu_profile = _validate_build_environment(job["capability"], req.extra_cmake_args or [])
     build_info = {
         "capability": job["capability"],
         "version": job.get("model_version") or "unversioned",
         "target_arch": req.platform,
         "build_type": req.build_type,
-        "gpu_enabled": "-DBUILD_GPU=ON" in (req.extra_cmake_args or []),
-        "cmake_version": _run_command_output(["cmake", "--version"]),
-        "compiler": _run_command_output(["c++", "--version"]) or _run_command_output(["g++", "--version"]),
+        "gpu_enabled": gpu_profile["runtime_gpu_capable"],
+        "runtime_gpu_capable": gpu_profile["runtime_gpu_capable"],
+        "compile_gpu_mode": gpu_profile["compile_gpu_mode"],
+        "compile_gpu_features": gpu_profile["compile_gpu_features"],
+        "build_gpu_toolchain": builder_env["cuda_toolkit_available"],
+        "builder_toolchain_profile": builder_env["builder_toolchain_profile"],
+        "builder_image": builder_env["builder_image"],
+        "cmake_version": builder_env["cmake_version"],
+        "compiler": builder_env["compiler"],
+        "onnxruntime_package": builder_env["onnxruntime_package"],
+        "cuda_toolkit_available": builder_env["cuda_toolkit_available"],
+        "tensorrt_available": builder_env["tensorrt_available"],
         "built_at": datetime.now(timezone.utc).isoformat(),
-        "built_by": os.getenv("BUILDER_IMAGE", os.getenv("HOSTNAME", "unknown")),
+        "built_by": builder_env["builder_image"],
         "git_commit": _run_command_output(["git", "rev-parse", "--short", "HEAD"], cwd=os.path.dirname(CPP_SOURCE_DIR)),
         "trusted_pubkey_sha256": job.get("trusted_pubkey_sha256"),
         "job_id": job["job_id"],
@@ -497,6 +698,7 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
     os.makedirs(build_dir, exist_ok=True)
     artifact_dir = _artifact_dir_for_job(job)
     os.makedirs(artifact_dir, exist_ok=True)
+    builder_env, gpu_profile = _validate_build_environment(job["capability"], req.extra_cmake_args or [])
 
     # Build argument lists — no shell expansion, safe from injection
     cmake_args = [
@@ -528,6 +730,23 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
 
     try:
         with open(log_path, "w", encoding="utf-8") as lf:
+            lf.write(
+                "# Build preflight\n"
+                f"# builder_image={builder_env['builder_image']}\n"
+                f"# builder_toolchain_profile={builder_env['builder_toolchain_profile']}\n"
+                f"# runtime_gpu_capable={gpu_profile['runtime_gpu_capable']}\n"
+                f"# compile_gpu_mode={gpu_profile['compile_gpu_mode']}\n"
+                f"# compile_gpu_features={','.join(gpu_profile['compile_gpu_features']) or '(none)'}\n"
+                f"# onnxruntime_package={builder_env['onnxruntime_package']}\n"
+                f"# cuda_toolkit_available={builder_env['cuda_toolkit_available']}\n"
+                f"# tensorrt_available={builder_env['tensorrt_available']}\n"
+            )
+            if gpu_profile["legacy_build_gpu_requested"]:
+                lf.write(
+                    "# note: -DBUILD_GPU=ON is compatibility-only; "
+                    "runtime GPU fallback is auto-detected by the capability.\n"
+                )
+            lf.flush()
             for args in [cmake_args, build_args, install_args]:
                 cmd_display = " ".join(shlex.quote(a) for a in args)
                 lf.write(f"\n$ {cmd_display}\n")
@@ -620,6 +839,8 @@ async def trigger_build(req: BuildRequest):
             status_code=400,
             detail="trusted_pubkey_sha256 必须是 64 位小写十六进制字符串",
         )
+
+    _validate_build_environment(req.capability, req.extra_cmake_args or [])
 
     # Resolve key_pair_id to public key fingerprint via license service
     key_pair_name = None
@@ -773,6 +994,11 @@ async def list_capabilities():
 @app.get("/api/v1/capabilities/diagnostics", tags=["capabilities"])
 async def capability_diagnostics():
     return await _get_capability_diagnostics()
+
+
+@app.get("/api/v1/builder/diagnostics", tags=["builder"])
+def builder_diagnostics():
+    return _probe_builder_environment()
 
 
 # ---------------------------------------------------------------------------

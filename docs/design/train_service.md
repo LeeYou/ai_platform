@@ -1,7 +1,7 @@
 # 训练子系统设计
 
 **北京爱知之星科技股份有限公司 (Agile Star)**  
-**文档版本：v1.1 | 2026-03-30**
+**文档版本：v1.2 | 2026-04-10**
 
 ---
 
@@ -16,7 +16,7 @@
 | 属性 | 值 |
 |------|-----|
 | 镜像名 | `agilestar/ai-train:latest` |
-| 基础镜像 | `nvidia/cuda:12.1-cudnn8-devel-ubuntu22.04` |
+| 基础镜像 | `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04` |
 | 服务端口 | 8001（Web 管理界面） |
 | 后端框架 | Python FastAPI + Celery（异步任务） |
 | 前端框架 | Vue3 + Element Plus |

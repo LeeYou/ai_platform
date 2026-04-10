@@ -53,8 +53,10 @@ AI_ERR_MODEL_CORRUPT = 2003
 AI_ERR_INFER_FAILED = 2004
 AI_ERR_LICENSE_INVALID = 4001
 AI_ERR_LICENSE_EXPIRED = 4002
-AI_ERR_LICENSE_MISMATCH = 4003
+AI_ERR_LICENSE_NOT_YET_VALID = 4003
 AI_ERR_CAP_NOT_LICENSED = 4004
+AI_ERR_LICENSE_MISMATCH = 4005
+AI_ERR_LICENSE_SIGNATURE_INVALID = 4006
 AI_ERR_INTERNAL = 5001
 
 
@@ -93,6 +95,10 @@ class AiRuntime:
         # int32_t AiRuntimeGetLicenseStatus(char* buf, int32_t buf_len)
         self._lib.AiRuntimeGetLicenseStatus.argtypes = [ctypes.c_char_p, ctypes.c_int32]
         self._lib.AiRuntimeGetLicenseStatus.restype = ctypes.c_int32
+
+        # int32_t AiRuntimeGetLastError(char* buf, int32_t buf_len)
+        self._lib.AiRuntimeGetLastError.argtypes = [ctypes.c_char_p, ctypes.c_int32]
+        self._lib.AiRuntimeGetLastError.restype = ctypes.c_int32
 
         # void AiRuntimeDestroy(void)
         self._lib.AiRuntimeDestroy.argtypes = []
@@ -198,6 +204,26 @@ class AiRuntime:
             return json.loads(license_json)
         except Exception as e:
             logger.error("Failed to parse license status JSON: %s", e)
+            return None
+
+    def get_last_error(self) -> Optional[dict[str, Any]]:
+        """Get the last acquire failure detail for the current thread."""
+        if not self._initialized:
+            return None
+
+        buf_size = self._lib.AiRuntimeGetLastError(None, 0)
+        if buf_size <= 0:
+            return None
+
+        buf = ctypes.create_string_buffer(buf_size + 1)
+        ret = self._lib.AiRuntimeGetLastError(buf, buf_size + 1)
+        if ret <= 0:
+            return None
+
+        try:
+            return json.loads(buf.value.decode("utf-8"))
+        except Exception as e:
+            logger.error("Failed to parse runtime last error JSON: %s", e)
             return None
 
     def infer(self, handle: AiHandle, image_data: bytes, width: int, height: int, channels: int = 3) -> dict[str, Any]:

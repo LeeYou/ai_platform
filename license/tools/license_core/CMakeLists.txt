@@ -15,6 +15,8 @@ target_include_directories(ai_license_core
 target_link_libraries(ai_license_core
     PUBLIC
         OpenSSL::Crypto
+    PRIVATE
+        nlohmann_json::nlohmann_json
 )
 
 target_compile_options(ai_license_core PRIVATE -Wall -Wextra)

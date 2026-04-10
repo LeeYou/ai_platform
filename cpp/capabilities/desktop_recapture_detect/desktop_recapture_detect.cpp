@@ -29,6 +29,10 @@
 #include <string>
 #include <vector>
 
+#ifdef ENABLE_TENSORRT
+#  include <sys/stat.h>
+#endif
+
 // ---------------------------------------------------------------------------
 // ONNXRuntime C++ API (optional: compiled without ORT in skeleton mode)
 // ---------------------------------------------------------------------------
@@ -56,7 +60,18 @@ struct DesktopRecaptureContext {
     bool  normalize    = true;
     float mean[3]      = {0.485f, 0.456f, 0.406f};
     float std_dev[3]   = {0.229f, 0.224f, 0.225f};
+    float transform_mul[3] = {
+        (1.0f / 255.0f) / 0.229f,
+        (1.0f / 255.0f) / 0.224f,
+        (1.0f / 255.0f) / 0.225f,
+    };
+    float transform_add[3] = {
+        -0.485f / 0.229f,
+        -0.456f / 0.224f,
+        -0.406f / 0.225f,
+    };
     int   target_color_format = 1;  // 0=BGR, 1=RGB
+    std::string execution_provider = "cpu";
 
     // Inference counter (for periodic license checks)
     std::atomic<uint64_t> infer_count{0};
@@ -69,6 +84,8 @@ struct DesktopRecaptureContext {
     std::vector<std::string>             output_names_storage;
     std::vector<const char*>             input_names;
     std::vector<const char*>             output_names;
+    // Pre-allocated preprocessing buffer (3 × H × W floats); avoids per-call heap allocation.
+    std::vector<float>                   tensor_buf;
 #endif
 };
 
@@ -227,8 +244,24 @@ static void _load_manifest_config(DesktopRecaptureContext* ctx) {
     std::string manifest_json;
     if (!_read_file(ctx->model_dir + "/manifest.json", manifest_json)) return;
     std::string parsed_version;
-    if (_jstr(manifest_json, "model_version", &parsed_version) && !parsed_version.empty()) {
+    if ((_jstr(manifest_json, "model_version", &parsed_version) ||
+         _jstr(manifest_json, "version", &parsed_version)) &&
+        !parsed_version.empty()) {
         ctx->model_version = parsed_version;
+    }
+}
+
+static void _refresh_preprocess_constants(DesktopRecaptureContext* ctx) {
+    if (!ctx) return;
+    for (int i = 0; i < 3; ++i) {
+        float denom = 1.0f;
+        float bias = 0.0f;
+        if (ctx->normalize) {
+            denom = std::fabs(ctx->std_dev[i]) < 1e-12f ? 1.0f : ctx->std_dev[i];
+            bias = -ctx->mean[i] / denom;
+        }
+        ctx->transform_mul[i] = ctx->scale / denom;
+        ctx->transform_add[i] = bias;
     }
 }
 
@@ -274,6 +307,7 @@ static void _load_preprocess_config(DesktopRecaptureContext* ctx) {
             ctx->target_color_format = 0;
         }
     }
+    _refresh_preprocess_constants(ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -301,23 +335,11 @@ static int _output_channel_to_source_channel(const DesktopRecaptureContext* ctx,
     return output_channel;
 }
 
-static float _transform_pixel(float pixel_value,
+// Write normalised NCHW float32 tensor into a caller-supplied buffer.
+// `buf` must have capacity of at least 3 * target_h * target_w floats.
+static void _preprocess_into(const AiImage* img,
                               const DesktopRecaptureContext* ctx,
-                              int output_channel) {
-    float value = pixel_value;
-    if (ctx) {
-        value *= ctx->scale;
-        if (ctx->normalize) {
-            float denom = ctx->std_dev[output_channel];
-            if (std::fabs(denom) < 1e-12f) denom = 1.0f;
-            value = (value - ctx->mean[output_channel]) / denom;
-        }
-    }
-    return value;
-}
-
-static std::vector<float> _preprocess(const AiImage* img,
-                                       const DesktopRecaptureContext* ctx) {
+                              float* buf) {
     int target_w = ctx->input_width;
     int target_h = ctx->input_height;
     int src_w = img->width;
@@ -325,61 +347,89 @@ static std::vector<float> _preprocess(const AiImage* img,
     int ch    = img->channels;
     int stride = img->stride > 0 ? img->stride : src_w * ch;
 
-    std::vector<float> out(3 * target_h * target_w);
+    const int plane_size = target_h * target_w;
+    float* out = buf;
+    const float* mul = ctx->transform_mul;
+    const float* add = ctx->transform_add;
+    int channel_map[3];
+    for (int c = 0; c < 3; ++c) {
+        int sc = _output_channel_to_source_channel(ctx, img, c);
+        channel_map[c] = sc < ch ? sc : 0;
+    }
 
-    // Fast path: when the caller has already resized the image to the target
-    // dimensions (e.g. via cv2.resize in Python), skip bilinear interpolation
-    // and only perform the normalization.  This is ~10–100× faster than the
-    // general bilinear path for large source images.
     if (src_w == target_w && src_h == target_h) {
         for (int y = 0; y < target_h; ++y) {
+            const uint8_t* row = img->data + y * stride;
             for (int x = 0; x < target_w; ++x) {
+                const int src_base = x * ch;
+                const int dst_offset = y * target_w + x;
                 for (int c = 0; c < 3; ++c) {
-                    int sc = _output_channel_to_source_channel(ctx, img, c);
-                    if (sc >= ch) sc = 0;
-                    float val = static_cast<float>(
-                        img->data[y * stride + x * ch + sc]);
-                    val = _transform_pixel(val, ctx, c);
-                    out[c * target_h * target_w + y * target_w + x] = val;
+                    out[c * plane_size + dst_offset] =
+                        static_cast<float>(row[src_base + channel_map[c]]) * mul[c] + add[c];
                 }
             }
         }
-        return out;
+        return;
+    }
+
+    std::vector<int> x0(target_w);
+    std::vector<int> x1(target_w);
+    std::vector<float> wx0(target_w);
+    std::vector<float> wx1(target_w);
+    for (int x = 0; x < target_w; ++x) {
+        float sx = (static_cast<float>(x) + 0.5f) * static_cast<float>(src_w) /
+                   static_cast<float>(target_w) - 0.5f;
+        sx = std::clamp(sx, 0.0f, static_cast<float>(src_w - 1));
+        int left = static_cast<int>(std::floor(sx));
+        int right = std::min(src_w - 1, left + 1);
+        float right_w = sx - static_cast<float>(left);
+        x0[x] = left;
+        x1[x] = right;
+        wx1[x] = right_w;
+        wx0[x] = 1.0f - right_w;
+    }
+
+    std::vector<int> y0(target_h);
+    std::vector<int> y1(target_h);
+    std::vector<float> wy0(target_h);
+    std::vector<float> wy1(target_h);
+    for (int y = 0; y < target_h; ++y) {
+        float sy = (static_cast<float>(y) + 0.5f) * static_cast<float>(src_h) /
+                   static_cast<float>(target_h) - 0.5f;
+        sy = std::clamp(sy, 0.0f, static_cast<float>(src_h - 1));
+        int top = static_cast<int>(std::floor(sy));
+        int bottom = std::min(src_h - 1, top + 1);
+        float bottom_w = sy - static_cast<float>(top);
+        y0[y] = top;
+        y1[y] = bottom;
+        wy1[y] = bottom_w;
+        wy0[y] = 1.0f - bottom_w;
     }
 
     for (int y = 0; y < target_h; ++y) {
+        const uint8_t* row0 = img->data + y0[y] * stride;
+        const uint8_t* row1 = img->data + y1[y] * stride;
+        const float top_w = wy0[y];
+        const float bottom_w = wy1[y];
         for (int x = 0; x < target_w; ++x) {
-            float sx = (x + 0.5f) * src_w  / target_w - 0.5f;
-            float sy = (y + 0.5f) * src_h / target_h - 0.5f;
-            int   x0 = std::max(0, static_cast<int>(sx));
-            int   y0 = std::max(0, static_cast<int>(sy));
-            int   x1 = std::min(src_w - 1, x0 + 1);
-            int   y1 = std::min(src_h - 1, y0 + 1);
-            float wx = sx - x0;
-            float wy = sy - y0;
-
+            const int left = x0[x] * ch;
+            const int right = x1[x] * ch;
+            const float left_w = wx0[x];
+            const float right_w = wx1[x];
+            const int dst_offset = y * target_w + x;
             for (int c = 0; c < 3; ++c) {
-                int sc = _output_channel_to_source_channel(ctx, img, c);
-                if (sc >= ch) sc = 0;
-
-                float p00 = static_cast<float>(
-                    img->data[y0 * stride + x0 * ch + sc]);
-                float p10 = static_cast<float>(
-                    img->data[y0 * stride + x1 * ch + sc]);
-                float p01 = static_cast<float>(
-                    img->data[y1 * stride + x0 * ch + sc]);
-                float p11 = static_cast<float>(
-                    img->data[y1 * stride + x1 * ch + sc]);
-                float val = (1 - wx) * (1 - wy) * p00
-                          + wx       * (1 - wy) * p10
-                          + (1 - wx) * wy        * p01
-                          + wx       * wy        * p11;
-                val = _transform_pixel(val, ctx, c);
-                out[c * target_h * target_w + y * target_w + x] = val;
+                const int sc = channel_map[c];
+                const float p00 = static_cast<float>(row0[left + sc]);
+                const float p10 = static_cast<float>(row0[right + sc]);
+                const float p01 = static_cast<float>(row1[left + sc]);
+                const float p11 = static_cast<float>(row1[right + sc]);
+                const float top = p00 * left_w + p10 * right_w;
+                const float bottom = p01 * left_w + p11 * right_w;
+                const float value = top * top_w + bottom * bottom_w;
+                out[c * plane_size + dst_offset] = value * mul[c] + add[c];
             }
         }
     }
-    return out;
 }
 #endif  // HAS_ORT
 
@@ -397,6 +447,7 @@ AI_EXPORT AiHandle AiCreate(const char* model_dir, const char* /*config_json*/) 
     ctx->model_dir = model_dir;
     _load_manifest_config(ctx);
     _load_preprocess_config(ctx);
+    _refresh_preprocess_constants(ctx);
 
     return static_cast<AiHandle>(ctx);
 }
@@ -410,23 +461,82 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
     ctx->session_opts.SetIntraOpNumThreads(1);
     ctx->session_opts.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
 
-    /* GPU-first strategy: Try CUDA, fallback to CPU */
-    try {
-        OrtCUDAProviderOptions cuda_options;
-        cuda_options.device_id = 0;
-        cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
-        // Use 0 (unlimited) instead of SIZE_MAX.  Passing SIZE_MAX causes ORT's
-        // CUDA-provider arena code to overflow when computing buffer sizes, which
-        // eventually throws std::length_error inside an ORT worker thread and calls
-        // std::terminate before our try/catch can intercept it.
-        cuda_options.gpu_mem_limit = 0;
-        cuda_options.arena_extend_strategy = 0;
-        cuda_options.do_copy_in_default_stream = 1;
-        ctx->session_opts.AppendExecutionProvider_CUDA(cuda_options);
-        std::fprintf(stdout, "[desktop_recapture_detect] GPU mode enabled (CUDA ExecutionProvider)\n");
-    } catch (const Ort::Exception& e) {
-        // CUDA unavailable, will use CPU automatically
-        std::fprintf(stderr, "[desktop_recapture_detect] CUDA unavailable (%s), using CPU\n", e.what());
+    // Determine which execution providers are compiled into this ORT binary.
+    // AppendExecutionProvider_CUDA / _TensorRT may silently succeed even when the
+    // provider is absent (ORT falls back to CPU without throwing), so we verify
+    // availability up-front and only add providers we know are present.
+    {
+        auto available = Ort::GetAvailableProviders();
+        auto has_ep = [&](const char* name) {
+            return std::any_of(available.begin(), available.end(),
+                               [name](const std::string& s) { return s == name; });
+        };
+
+        bool cuda_available = has_ep("CUDAExecutionProvider");
+        bool trt_available  = has_ep("TensorrtExecutionProvider");
+
+        if (!cuda_available && !trt_available) {
+            std::fprintf(stderr,
+                "[desktop_recapture_detect] Neither CUDA nor TensorRT EP found in this ORT binary "
+                "(available: CPU only). Inference will be slow. Rebuild with onnxruntime-gpu.\n");
+        }
+
+#ifdef ENABLE_TENSORRT
+        // TensorRT EP: lowest latency path — try first.
+        // Engine is compiled on first run and cached under <model_dir>/trt_cache.
+        if (trt_available) {
+            try {
+                std::string trt_cache = ctx->model_dir + "/trt_cache";
+                // Ensure cache directory exists using POSIX mkdir (755 perms).
+                ::mkdir(trt_cache.c_str(), 0755);
+
+                OrtTensorRTProviderOptions trt_opts{};
+                trt_opts.device_id                   = 0;
+                trt_opts.trt_fp16_enable             = 1;
+                trt_opts.trt_engine_cache_enable      = 1;
+                trt_opts.trt_engine_cache_path        = trt_cache.c_str();
+                trt_opts.trt_max_workspace_size       = 1ULL << 30;  // 1 GiB
+                ctx->session_opts.AppendExecutionProvider_TensorRT(trt_opts);
+                ctx->execution_provider = "tensorrt";
+                std::fprintf(stdout,
+                    "[desktop_recapture_detect] TensorRT EP registered (FP16, cache=%s)\n",
+                    trt_cache.c_str());
+            } catch (const Ort::Exception& e) {
+                std::fprintf(stderr,
+                    "[desktop_recapture_detect] TensorRT EP registration failed (%s), trying CUDA\n",
+                    e.what());
+            }
+        } else {
+            std::fprintf(stderr,
+                "[desktop_recapture_detect] TensorRT EP not available in this ORT binary "
+                "(built with ENABLE_TENSORRT but binary lacks the EP). Trying CUDA.\n");
+        }
+#endif  // ENABLE_TENSORRT
+
+        // CUDA EP: good GPU path; ORT handles H2D/D2H copies automatically.
+        if (cuda_available && ctx->execution_provider == "cpu") {
+            try {
+                OrtCUDAProviderOptions cuda_options;
+                cuda_options.device_id = 0;
+                cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
+                // Use 0 (unlimited) instead of SIZE_MAX.  Passing SIZE_MAX causes ORT's
+                // CUDA-provider arena code to overflow when computing buffer sizes, which
+                // eventually throws std::length_error inside an ORT worker thread and calls
+                // std::terminate before our try/catch can intercept it.
+                cuda_options.gpu_mem_limit = 0;
+                cuda_options.arena_extend_strategy = 0;
+                cuda_options.do_copy_in_default_stream = 1;
+                ctx->session_opts.AppendExecutionProvider_CUDA(cuda_options);
+                ctx->execution_provider = "cuda";
+                std::fprintf(stdout,
+                    "[desktop_recapture_detect] CUDA ExecutionProvider registered\n");
+            } catch (const Ort::Exception& e) {
+                ctx->execution_provider = "cpu";
+                std::fprintf(stderr,
+                    "[desktop_recapture_detect] CUDA EP registration failed (%s), using CPU\n",
+                    e.what());
+            }
+        }
     }
 
     try {
@@ -459,18 +569,21 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
     for (auto& s : ctx->input_names_storage)  ctx->input_names.push_back(s.c_str());
     for (auto& s : ctx->output_names_storage) ctx->output_names.push_back(s.c_str());
 
-    std::fprintf(stdout, "[desktop_recapture_detect] Model loaded: %s\n", model_path.c_str());
+    // Pre-allocate reusable preprocessing buffer (avoids per-call heap allocation).
+    ctx->tensor_buf.resize(static_cast<size_t>(ctx->input_width) *
+                           static_cast<size_t>(ctx->input_height) * 3);
+
+    std::fprintf(stdout, "[desktop_recapture_detect] Model loaded: %s (provider=%s)\n",
+                 model_path.c_str(), ctx->execution_provider.c_str());
 
     // Warm-up: run multiple dummy inferences so that CUDA JIT kernel compilation,
-    // cuDNN algorithm selection, and GPU memory arena allocation all happen at
-    // init time rather than on the first real request.  A single pass primes the
-    // kernels; additional passes cause the CUDA memory arena to reach its steady-
-    // state size so that it does not need to grow (and re-allocate) on the first
-    // real call after a period of GPU idle.
+    // cuDNN algorithm selection, TensorRT engine compilation/caching, and GPU
+    // memory arena allocation all happen at init time rather than on the first
+    // real request.  A single pass primes the kernels; additional passes cause
+    // the CUDA memory arena to reach its steady-state size so that it does not
+    // need to grow (and re-allocate) on the first real call after a period of
+    // GPU idle.
     {
-        size_t n = static_cast<size_t>(ctx->input_width) *
-                   static_cast<size_t>(ctx->input_height) * 3;
-        std::vector<float> dummy(n, 0.0f);
         std::array<int64_t, 4> sh = {1, 3,
             static_cast<int64_t>(ctx->input_height),
             static_cast<int64_t>(ctx->input_width)};
@@ -478,21 +591,23 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
 
         bool warmup_ok = true;
         for (int wi = 0; wi < 3; ++wi) {
+            // Reuse pre-allocated buffer, initialised to zero for warm-up.
+            std::fill(ctx->tensor_buf.begin(), ctx->tensor_buf.end(), 0.0f);
             Ort::Value wt = Ort::Value::CreateTensor<float>(
-                mi, dummy.data(), n, sh.data(), sh.size());
+                mi, ctx->tensor_buf.data(), ctx->tensor_buf.size(), sh.data(), sh.size());
             try {
                 ctx->session->Run(Ort::RunOptions{nullptr},
                                   ctx->input_names.data(), &wt, 1,
                                   ctx->output_names.data(), ctx->output_names.size());
             } catch (const std::exception& ex) {
                 std::fprintf(stderr,
-                    "[desktop_recapture_detect] GPU warm-up pass %d failed (non-fatal): %s\n",
+                    "[desktop_recapture_detect] Warm-up pass %d failed (non-fatal): %s\n",
                     wi + 1, ex.what());
                 warmup_ok = false;
                 break;
             } catch (...) {
                 std::fprintf(stderr,
-                    "[desktop_recapture_detect] GPU warm-up pass %d failed (non-fatal, unknown error)\n",
+                    "[desktop_recapture_detect] Warm-up pass %d failed (non-fatal, unknown error)\n",
                     wi + 1);
                 warmup_ok = false;
                 break;
@@ -500,7 +615,8 @@ AI_EXPORT int32_t AiInit(AiHandle handle) {
         }
         if (warmup_ok) {
             std::fprintf(stdout,
-                "[desktop_recapture_detect] GPU warm-up completed (3 passes).\n");
+                "[desktop_recapture_detect] Warm-up completed (3 passes, provider=%s).\n",
+                ctx->execution_provider.c_str());
         }
     }
 #else
@@ -521,9 +637,9 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
         return AI_ERR_LOAD_FAILED;
     }
 
-    std::vector<float> tensor_data;
+    // Use pre-allocated tensor buffer to avoid per-call heap allocation.
     try {
-        tensor_data = _preprocess(input, ctx);
+        _preprocess_into(input, ctx, ctx->tensor_buf.data());
     } catch (const std::exception& ex) {
         _set_result(output, AI_ERR_INFER_FAILED, nullptr, ex.what());
         return AI_ERR_INFER_FAILED;
@@ -537,8 +653,8 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
         Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
         mem_info,
-        tensor_data.data(),
-        tensor_data.size(),
+        ctx->tensor_buf.data(),
+        ctx->tensor_buf.size(),
         input_shape.data(),
         input_shape.size());
 
@@ -574,18 +690,21 @@ AI_EXPORT int32_t AiInfer(AiHandle handle, const AiImage* input, AiResult* outpu
     // Diagnostic log: helps operators verify model output and detect bias issues
     // (e.g. model always outputting positive logits regardless of input).
     std::fprintf(stdout,
-        "[desktop_recapture_detect] logit=%.4f prob_fake=%.4f is_fake=%s\n",
+        "[desktop_recapture_detect] provider=%s logit=%.4f prob_fake=%.4f is_fake=%s\n",
+        ctx->execution_provider.c_str(),
         static_cast<double>(logit),
         static_cast<double>(prob_fake),
         is_fake ? "true" : "false");
     char json_buf[256];
     std::snprintf(json_buf, sizeof(json_buf),
         "{\"is_fake\":%s,\"label\":\"%s\","
-        "\"score_real\":%.4f,\"score_fake\":%.4f}",
+        "\"score_real\":%.4f,\"score_fake\":%.4f,"
+        "\"execution_provider\":\"%s\"}",
         is_fake ? "true" : "false",
         is_fake ? "fake" : "real",
         static_cast<double>(prob_real),
-        static_cast<double>(prob_fake));
+        static_cast<double>(prob_fake),
+        ctx->execution_provider.c_str());
 
     _set_result(output, AI_OK, json_buf);
     return AI_OK;
@@ -616,6 +735,7 @@ AI_EXPORT int32_t AiReload(AiHandle handle, const char* new_model_dir) {
     ctx->output_names_storage  = std::move(new_ctx->output_names_storage);
     ctx->input_names           = std::move(new_ctx->input_names);
     ctx->output_names          = std::move(new_ctx->output_names);
+    ctx->tensor_buf            = std::move(new_ctx->tensor_buf);
 #endif
     ctx->model_dir       = new_ctx->model_dir;
     ctx->model_version   = new_ctx->model_version;
@@ -626,6 +746,9 @@ AI_EXPORT int32_t AiReload(AiHandle handle, const char* new_model_dir) {
     ctx->target_color_format = new_ctx->target_color_format;
     std::copy(new_ctx->mean, new_ctx->mean + 3, ctx->mean);
     std::copy(new_ctx->std_dev, new_ctx->std_dev + 3, ctx->std_dev);
+    std::copy(new_ctx->transform_mul, new_ctx->transform_mul + 3, ctx->transform_mul);
+    std::copy(new_ctx->transform_add, new_ctx->transform_add + 3, ctx->transform_add);
+    ctx->execution_provider = new_ctx->execution_provider;
     ctx->infer_count     = 0;
 
     AiDestroy(new_h);

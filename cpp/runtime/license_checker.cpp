@@ -14,6 +14,8 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -27,11 +29,16 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <sys/stat.h>
+
+#include <nlohmann/json.hpp>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 #if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
 #include <openssl/bio.h>
@@ -76,20 +83,22 @@ static std::string _derive_pubkey_path(const std::string& license_path) {
     return license_path.substr(0, slash + 1) + "pubkey.pem";
 }
 
-static std::string _json_escape(const std::string& value) {
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (char ch : value) {
-        switch (ch) {
-            case '\\': escaped += "\\\\"; break;
-            case '"':  escaped += "\\\""; break;
-            case '\n': escaped += "\\n"; break;
-            case '\r': escaped += "\\r"; break;
-            case '\t': escaped += "\\t"; break;
-            default:   escaped += ch; break;
+static std::string _html_unescape(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    size_t pos = 0;
+    while (pos < value.size()) {
+        if (value[pos] == '&') {
+            if (value.compare(pos, 5, "&amp;") == 0)  { out += '&';  pos += 5; continue; }
+            if (value.compare(pos, 4, "&lt;") == 0)   { out += '<';  pos += 4; continue; }
+            if (value.compare(pos, 4, "&gt;") == 0)   { out += '>';  pos += 4; continue; }
+            if (value.compare(pos, 6, "&quot;") == 0) { out += '"';  pos += 6; continue; }
+            if (value.compare(pos, 6, "&#039;") == 0) { out += '\''; pos += 6; continue; }
+            if (value.compare(pos, 6, "&apos;") == 0) { out += '\''; pos += 6; continue; }
         }
+        out += value[pos++];
     }
-    return escaped;
+    return out;
 }
 
 static std::string _trim_copy(const std::string& value) {
@@ -99,180 +108,323 @@ static std::string _trim_copy(const std::string& value) {
     return value.substr(begin, end - begin + 1);
 }
 
-static std::string _json_string(const std::string& json, const std::string& key) {
-    const std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return "";
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return "";
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return "";
-    auto end = json.find('"', pos + 1);
-    if (end == std::string::npos) return "";
-    return json.substr(pos + 1, end - pos - 1);
+static std::string _to_lower_copy(const std::string& value) {
+    std::string normalized = value;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return normalized;
 }
 
-static int32_t _compute_days_remaining(const std::string& iso_time) {
-    if (iso_time.empty() || iso_time == "null") return -1;
+static std::string _normalize_architecture(const std::string& value) {
+    const std::string normalized = _to_lower_copy(_trim_copy(value));
+    if (normalized == "amd64" || normalized == "x64") return "x86_64";
+    if (normalized == "aarch64") return "arm64";
+    if (normalized == "armhf") return "armv7";
+    return normalized;
+}
 
-    struct tm tm_value = {};
-    if (std::sscanf(iso_time.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d",
-                    &tm_value.tm_year,
-                    &tm_value.tm_mon,
-                    &tm_value.tm_mday,
-                    &tm_value.tm_hour,
-                    &tm_value.tm_min,
-                    &tm_value.tm_sec) < 3) {
-        return 0;
+static std::string _read_linux_version_id() {
+    std::string os_release;
+    if (!_read_file("/etc/os-release", os_release)) return "";
+
+    std::istringstream input(os_release);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.rfind("VERSION_ID=", 0) != 0) continue;
+        std::string value = _trim_copy(line.substr(std::strlen("VERSION_ID=")));
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+            value = value.substr(1, value.size() - 2);
+        }
+        return _trim_copy(value);
     }
+    return "";
+}
 
-    tm_value.tm_year -= 1900;
-    tm_value.tm_mon  -= 1;
-
-#ifdef _WIN32
-    time_t ts = _mkgmtime(&tm_value) - (8 * 3600);
+static std::string _detect_current_operating_system() {
+    const char* override_os = std::getenv("AI_OPERATING_SYSTEM");
+    if (override_os && override_os[0] != '\0') {
+        return _to_lower_copy(_trim_copy(override_os));
+    }
+#if defined(__ANDROID__)
+    return "android";
+#elif defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+    return "ios";
 #else
-    time_t ts = timegm(&tm_value) - (8 * 3600);
+    return "macos";
 #endif
-    const time_t now = time(nullptr);
-    const double diff_days = std::difftime(ts, now) / 86400.0;
-    return static_cast<int32_t>(std::floor(diff_days));
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "";
+#endif
 }
 
-static std::pair<bool, int32_t> _check_valid_from(const std::string& valid_from) {
-    if (valid_from.empty() || valid_from == "null") return {true, 0};
-    const int32_t days_until = _compute_days_remaining(valid_from);
-    if (days_until <= 0) return {true, 0};
-    return {false, days_until};
-}
-
-struct ParsedJsonObject {
-    std::unordered_map<std::string, std::string> values;
-};
-
-static bool _skip_ws(const std::string& json, size_t& pos) {
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) {
-        ++pos;
+static std::string _detect_current_architecture() {
+    const char* override_arch = std::getenv("AI_SYSTEM_ARCH");
+    if (override_arch && override_arch[0] != '\0') {
+        return _normalize_architecture(override_arch);
     }
-    return pos < json.size();
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__)
+    return "arm64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "armv7";
+#else
+    return "";
+#endif
 }
 
-static bool _parse_json_string_token(const std::string& json, size_t& pos, std::string& out) {
-    if (!_skip_ws(json, pos) || json[pos] != '"') return false;
-    ++pos;
-    out.clear();
-    while (pos < json.size()) {
-        const char ch = json[pos++];
-        if (ch == '"') return true;
-        if (ch == '\\') {
-            if (pos >= json.size()) return false;
-            const char esc = json[pos++];
-            switch (esc) {
-                case '"': out.push_back('"'); break;
-                case '\\': out.push_back('\\'); break;
-                case '/': out.push_back('/'); break;
-                case 'b': out.push_back('\b'); break;
-                case 'f': out.push_back('\f'); break;
-                case 'n': out.push_back('\n'); break;
-                case 'r': out.push_back('\r'); break;
-                case 't': out.push_back('\t'); break;
-                default: return false;
-            }
+static std::string _detect_current_os_version() {
+    const char* override_version = std::getenv("AI_OS_VERSION");
+    if (override_version && override_version[0] != '\0') {
+        return _trim_copy(override_version);
+    }
+#if defined(__linux__) && !defined(__ANDROID__)
+    return _read_linux_version_id();
+#else
+    return "";
+#endif
+}
+
+static std::vector<int> _extract_version_segments(const std::string& value) {
+    std::vector<int> segments;
+    std::string current;
+    const std::string trimmed = _trim_copy(value);
+    for (char ch : trimmed) {
+        if (std::isdigit(static_cast<unsigned char>(ch))) {
+            current.push_back(ch);
             continue;
         }
-        out.push_back(ch);
+        if (!current.empty()) {
+            segments.push_back(std::atoi(current.c_str()));
+            current.clear();
+        }
     }
-    return false;
+    if (!current.empty()) {
+        segments.push_back(std::atoi(current.c_str()));
+    }
+    return segments;
 }
 
-static bool _find_json_value_end(const std::string& json, size_t start, size_t& end) {
-    size_t pos = start;
-    if (!_skip_ws(json, pos)) return false;
-    start = pos;
+static bool _minimum_platform_version_satisfied(const std::string& current_version,
+                                                const std::string& minimum_required) {
+    const std::string required = _trim_copy(minimum_required);
+    if (required.empty()) return true;
 
-    if (json[pos] == '"') {
-        ++pos;
-        while (pos < json.size()) {
-            if (json[pos] == '\\') {
-                pos += 2;
-                continue;
-            }
-            if (json[pos] == '"') {
-                end = pos + 1;
-                return true;
-            }
-            ++pos;
-        }
-        return false;
+    const std::string current = _trim_copy(current_version);
+    if (current.empty()) return false;
+
+    const std::vector<int> current_segments = _extract_version_segments(current);
+    const std::vector<int> required_segments = _extract_version_segments(required);
+    if (current_segments.empty() || required_segments.empty()) {
+        return current == required;
     }
 
-    if (json[pos] == '{' || json[pos] == '[') {
-        const char open = json[pos];
-        const char close = (open == '{') ? '}' : ']';
-        int depth = 0;
-        bool in_string = false;
-        for (; pos < json.size(); ++pos) {
-            const char ch = json[pos];
-            if (in_string) {
-                if (ch == '\\') {
-                    ++pos;
-                    continue;
-                }
-                if (ch == '"') in_string = false;
-                continue;
-            }
-            if (ch == '"') {
-                in_string = true;
-                continue;
-            }
-            if (ch == open) {
-                ++depth;
-                continue;
-            }
-            if (ch == close) {
-                --depth;
-                if (depth == 0) {
-                    end = pos + 1;
-                    return true;
-                }
-            }
-        }
-        return false;
+    const size_t len = std::max(current_segments.size(), required_segments.size());
+    for (size_t i = 0; i < len; ++i) {
+        const int lhs = i < current_segments.size() ? current_segments[i] : 0;
+        const int rhs = i < required_segments.size() ? required_segments[i] : 0;
+        if (lhs < rhs) return false;
+        if (lhs > rhs) return true;
     }
-
-    while (pos < json.size() && json[pos] != ',' && json[pos] != '}') {
-        ++pos;
-    }
-    end = pos;
     return true;
 }
 
-static bool _parse_top_level_json_object(const std::string& json, ParsedJsonObject& parsed) {
-    parsed.values.clear();
-    size_t pos = 0;
-    if (!_skip_ws(json, pos) || json[pos] != '{') return false;
-    ++pos;
+struct ParsedTimestamp {
+    bool present = false;
+    bool valid = false;
+    int64_t unix_seconds = 0;
+};
 
-    while (true) {
-        if (!_skip_ws(json, pos)) return false;
-        if (json[pos] == '}') return true;
-
-        std::string key;
-        if (!_parse_json_string_token(json, pos, key)) return false;
-        if (!_skip_ws(json, pos) || json[pos] != ':') return false;
-        ++pos;
-
-        size_t value_start = pos;
-        size_t value_end = pos;
-        if (!_find_json_value_end(json, value_start, value_end)) return false;
-        parsed.values[key] = _trim_copy(json.substr(value_start, value_end - value_start));
-        pos = value_end;
-
-        if (!_skip_ws(json, pos)) return false;
-        if (json[pos] == '}') return true;
-        if (json[pos] != ',') return false;
-        ++pos;
+static ParsedTimestamp _parse_iso8601_timestamp(const std::string& iso_time) {
+    if (iso_time.empty() || iso_time == "null") {
+        return {false, true, 0};
     }
+    if (iso_time.size() < 19) {
+        return {true, false, 0};
+    }
+
+    const auto parse_int_segment = [&](size_t pos, size_t len, int* out) -> bool {
+        if (pos + len > iso_time.size()) return false;
+        int value = 0;
+        for (size_t i = pos; i < pos + len; ++i) {
+            const unsigned char ch = static_cast<unsigned char>(iso_time[i]);
+            if (!std::isdigit(ch)) return false;
+            value = value * 10 + (iso_time[i] - '0');
+        }
+        *out = value;
+        return true;
+    };
+
+    if (iso_time[4] != '-' || iso_time[7] != '-' || iso_time[10] != 'T' ||
+        iso_time[13] != ':' || iso_time[16] != ':') {
+        return {true, false, 0};
+    }
+
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    if (!parse_int_segment(0, 4, &year) ||
+        !parse_int_segment(5, 2, &month) ||
+        !parse_int_segment(8, 2, &day) ||
+        !parse_int_segment(11, 2, &hour) ||
+        !parse_int_segment(14, 2, &minute) ||
+        !parse_int_segment(17, 2, &second)) {
+        return {true, false, 0};
+    }
+
+    size_t pos = 19;
+    if (pos < iso_time.size() && iso_time[pos] == '.') {
+        ++pos;
+        while (pos < iso_time.size() && std::isdigit(static_cast<unsigned char>(iso_time[pos]))) {
+            ++pos;
+        }
+    }
+
+    int tz_offset_seconds = 8 * 3600;
+    if (pos < iso_time.size()) {
+        if (iso_time[pos] == 'Z') {
+            tz_offset_seconds = 0;
+            ++pos;
+        } else if (iso_time[pos] == '+' || iso_time[pos] == '-') {
+            const int sign = iso_time[pos] == '+' ? 1 : -1;
+            ++pos;
+            int tz_hour = 0;
+            int tz_minute = 0;
+            if (!parse_int_segment(pos, 2, &tz_hour)) {
+                return {true, false, 0};
+            }
+            pos += 2;
+            if (pos < iso_time.size() && iso_time[pos] == ':') {
+                ++pos;
+            }
+            if (!parse_int_segment(pos, 2, &tz_minute)) {
+                return {true, false, 0};
+            }
+            pos += 2;
+            tz_offset_seconds = sign * (tz_hour * 3600 + tz_minute * 60);
+        } else {
+            return {true, false, 0};
+        }
+    }
+
+    if (pos != iso_time.size()) {
+        return {true, false, 0};
+    }
+
+    struct tm tm_value = {};
+    tm_value.tm_year = year - 1900;
+    tm_value.tm_mon = month - 1;
+    tm_value.tm_mday = day;
+    tm_value.tm_hour = hour;
+    tm_value.tm_min = minute;
+    tm_value.tm_sec = second;
+    tm_value.tm_isdst = 0;
+
+#ifdef _WIN32
+    const time_t ts = _mkgmtime(&tm_value);
+#else
+    const time_t ts = timegm(&tm_value);
+#endif
+    if (ts == static_cast<time_t>(-1)) {
+        return {true, false, 0};
+    }
+    return {true, true, static_cast<int64_t>(ts) - tz_offset_seconds};
+}
+
+static int32_t _ceil_days_from_seconds(int64_t seconds) {
+    if (seconds <= 0) return 0;
+    return static_cast<int32_t>((seconds + 86399) / 86400);
+}
+
+struct SemVer {
+    int major = 0;
+    int minor = 0;
+    int patch = 0;
+    bool valid = false;
+};
+
+static SemVer _parse_semver(const std::string& version) {
+    std::string trimmed = _trim_copy(version);
+    if (trimmed.empty() || trimmed == "null") return {};
+    if (trimmed[0] == 'v' || trimmed[0] == 'V') {
+        trimmed.erase(trimmed.begin());
+    }
+
+    std::vector<int> parts;
+    parts.reserve(3);
+    size_t pos = 0;
+    while (pos < trimmed.size() && parts.size() < 3) {
+        size_t end = pos;
+        while (end < trimmed.size() && std::isdigit(static_cast<unsigned char>(trimmed[end]))) {
+            ++end;
+        }
+        if (end == pos) return {};
+        parts.push_back(std::atoi(trimmed.substr(pos, end - pos).c_str()));
+        if (end >= trimmed.size()) break;
+        if (trimmed[end] != '.') break;
+        pos = end + 1;
+    }
+
+    if (parts.empty()) return {};
+    while (parts.size() < 3) parts.push_back(0);
+    return {parts[0], parts[1], parts[2], true};
+}
+
+static int _compare_semver(const SemVer& lhs, const SemVer& rhs) {
+    if (lhs.major != rhs.major) return lhs.major < rhs.major ? -1 : 1;
+    if (lhs.minor != rhs.minor) return lhs.minor < rhs.minor ? -1 : 1;
+    if (lhs.patch != rhs.patch) return lhs.patch < rhs.patch ? -1 : 1;
+    return 0;
+}
+
+static bool _version_satisfies_constraint(const std::string& version, const std::string& constraint) {
+    std::string trimmed_constraint = _trim_copy(_html_unescape(constraint));
+    if (trimmed_constraint.empty() || trimmed_constraint == "null") return true;
+
+    const SemVer parsed_version = _parse_semver(version);
+    if (!parsed_version.valid) return false;
+
+    size_t pos = 0;
+    while (pos < trimmed_constraint.size()) {
+        size_t end = trimmed_constraint.find(',', pos);
+        std::string clause = _trim_copy(trimmed_constraint.substr(pos, end == std::string::npos ? std::string::npos : end - pos));
+        if (!clause.empty()) {
+            std::string op = "=";
+            if (clause.rfind(">=", 0) == 0 || clause.rfind("<=", 0) == 0 || clause.rfind("==", 0) == 0) {
+                op = clause.substr(0, 2);
+                clause = _trim_copy(clause.substr(2));
+            } else if (clause[0] == '>' || clause[0] == '<' || clause[0] == '=') {
+                op = clause.substr(0, 1);
+                clause = _trim_copy(clause.substr(1));
+            }
+
+            const SemVer target = _parse_semver(clause);
+            if (!target.valid) return false;
+
+            const int cmp = _compare_semver(parsed_version, target);
+            const bool matched =
+                (op == ">=" && cmp >= 0) ||
+                (op == "<=" && cmp <= 0) ||
+                (op == ">"  && cmp > 0) ||
+                (op == "<"  && cmp < 0) ||
+                ((op == "=" || op == "==") && cmp == 0);
+            if (!matched) return false;
+        }
+        if (end == std::string::npos) break;
+        pos = end + 1;
+    }
+    return true;
 }
 
 #if defined(AI_HAVE_OPENSSL) && AI_HAVE_OPENSSL
@@ -406,11 +558,23 @@ struct LicenseStatus {
     bool        not_yet_valid = false;
     bool        missing = false;
     bool        signature_invalid = false;
+    bool        machine_mismatch = false;
+    bool        operating_system_mismatch = false;
+    bool        os_version_mismatch = false;
+    bool        architecture_mismatch = false;
     std::string status = "invalid";
     std::string license_id;
     std::string valid_from;
     std::string valid_until;
+    std::string operating_system;
+    std::string minimum_os_version;
+    std::string system_architecture;
+    std::string application_name;
+    std::string machine_fingerprint;
+    std::string version_constraint;
+    std::string detected_os_version;
     int32_t     days_remaining = 0;
+    int32_t     max_instances = 4;
     std::vector<std::string> capabilities;
     std::string raw_json;
     int64_t     source_mtime = -1;
@@ -419,6 +583,77 @@ struct LicenseStatus {
     std::string last_error;
     std::chrono::steady_clock::time_point refreshed_monotonic{};
 };
+
+static std::string _environment_mismatch_reason(LicenseStatus& status) {
+    status.operating_system_mismatch = false;
+    status.os_version_mismatch = false;
+    status.architecture_mismatch = false;
+    status.detected_os_version.clear();
+
+    const std::string required_os = _to_lower_copy(_trim_copy(status.operating_system));
+    if (!required_os.empty()) {
+        const std::string current_os = _detect_current_operating_system();
+        if (current_os.empty() || current_os != required_os) {
+            status.operating_system_mismatch = true;
+            std::fprintf(stderr,
+                         "[LicenseChecker] OS check failed: detected=\"%s\", required=\"%s\"\n",
+                         current_os.empty() ? "(undetectable)" : current_os.c_str(),
+                         required_os.c_str());
+            return "Operating system not licensed";
+        }
+    }
+
+    const std::string required_arch = _normalize_architecture(status.system_architecture);
+    if (!required_arch.empty()) {
+        const std::string current_arch = _detect_current_architecture();
+        if (current_arch.empty() || current_arch != required_arch) {
+            status.architecture_mismatch = true;
+            std::fprintf(stderr,
+                         "[LicenseChecker] Architecture check failed: detected=\"%s\", required=\"%s\"\n",
+                         current_arch.empty() ? "(undetectable)" : current_arch.c_str(),
+                         required_arch.c_str());
+            return "System architecture not licensed";
+        }
+    }
+
+    const std::string current_version = _detect_current_os_version();
+    status.detected_os_version = current_version;
+    if (!_minimum_platform_version_satisfied(current_version, status.minimum_os_version)) {
+        status.os_version_mismatch = true;
+        std::fprintf(stderr,
+                     "[LicenseChecker] OS version check failed: detected=\"%s\", minimum_required=\"%s\"\n",
+                     current_version.empty() ? "(undetectable)" : current_version.c_str(),
+                     status.minimum_os_version.c_str());
+        return "Operating system version below license minimum";
+    }
+
+    return "";
+}
+
+static void _apply_environment_constraints(LicenseStatus& status) {
+    status.machine_mismatch = false;
+    const char* machine_fingerprint = std::getenv("AI_MACHINE_FINGERPRINT");
+    if (machine_fingerprint && machine_fingerprint[0] != '\0' &&
+        !status.machine_fingerprint.empty() &&
+        status.machine_fingerprint != machine_fingerprint) {
+        status.machine_mismatch = true;
+        status.last_error = "Machine fingerprint mismatch";
+        return;
+    }
+
+    const std::string mismatch_reason = _environment_mismatch_reason(status);
+    if (!mismatch_reason.empty()) {
+        status.last_error = mismatch_reason;
+        return;
+    }
+
+    if (status.last_error == "Machine fingerprint mismatch" ||
+        status.last_error == "Operating system not licensed" ||
+        status.last_error == "System architecture not licensed" ||
+        status.last_error == "Operating system version below license minimum") {
+        status.last_error.clear();
+    }
+}
 
 class LicenseCache {
 public:
@@ -472,52 +707,105 @@ public:
         return *snapshot;
     }
 
-    bool is_capability_licensed(const std::string& cap_name) {
+    bool is_capability_licensed(const std::string& cap_name, const std::string& cap_version) {
         const LicenseStatus status = get();
-        if (!status.valid || status.expired || status.not_yet_valid || status.signature_invalid || status.missing) {
+        if (!status.valid || status.expired || status.not_yet_valid || status.signature_invalid ||
+            status.missing || status.machine_mismatch || status.operating_system_mismatch ||
+            status.os_version_mismatch || status.architecture_mismatch) {
             return false;
         }
         for (const auto& licensed : status.capabilities) {
-            if (licensed == "*" || licensed == cap_name) return true;
+            if (licensed == "*" || licensed == cap_name) {
+                return _version_satisfies_constraint(cap_version, status.version_constraint);
+            }
         }
         return false;
     }
 
+    int32_t max_instances() {
+        const LicenseStatus status = get();
+        return status.max_instances > 0 ? status.max_instances : 1;
+    }
+
     std::string to_json() {
         const LicenseStatus status = get();
-        std::ostringstream os;
-        os << "{"
-           << "\"status\":\"" << _json_escape(status.status) << "\""
-           << ",\"license_id\":";
-        if (status.license_id.empty()) {
-            os << "null";
+        nlohmann::json j;
+        j["status"]          = status.status;
+        j["license_id"]          = status.license_id;
+        j["valid_from"]          = status.valid_from;
+        j["valid_until"]         = status.valid_until;
+        j["version_constraint"]  = status.version_constraint;
+        j["operating_system"]    = status.operating_system;
+        j["minimum_os_version"]  = status.minimum_os_version;
+        j["detected_os_version"] = status.detected_os_version;
+        j["system_architecture"] = status.system_architecture;
+        j["application_name"]    = status.application_name;
+        j["max_instances"]               = status.max_instances;
+        j["machine_mismatch"]            = status.machine_mismatch;
+        j["operating_system_mismatch"]   = status.operating_system_mismatch;
+        j["os_version_mismatch"]         = status.os_version_mismatch;
+        j["architecture_mismatch"]       = status.architecture_mismatch;
+        j["days_remaining"]              = status.days_remaining;
+        j["source_mtime"]                = status.source_mtime;
+        j["refreshed_at_ms"]             = status.refreshed_at_ms;
+        j["last_success_at_ms"]          = status.last_success_at_ms;
+        j["last_error"]                  = status.last_error;
+        j["capabilities"]                = status.capabilities;
+        return j.dump();
+    }
+
+    std::string failure_json(const std::string& cap_name, const std::string& cap_version) {
+        const LicenseStatus status = get();
+        int32_t code = 0;
+        std::string message;
+
+        if (status.signature_invalid) {
+            code = AI_ERR_LICENSE_SIGNATURE_INVALID;
+            message = "License signature invalid";
+        } else if (status.missing || status.status == "invalid") {
+            code = AI_ERR_LICENSE_INVALID;
+            message = "License invalid";
+        } else if (status.not_yet_valid) {
+            code = AI_ERR_LICENSE_NOT_YET_VALID;
+            message = "License not yet valid";
+        } else if (status.expired) {
+            code = AI_ERR_LICENSE_EXPIRED;
+            message = "License expired";
+        } else if (status.machine_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "Machine fingerprint mismatch";
+        } else if (status.operating_system_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "Operating system not licensed";
+        } else if (status.os_version_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "Operating system version below license minimum";
+        } else if (status.architecture_mismatch) {
+            code = AI_ERR_LICENSE_MISMATCH;
+            message = "System architecture not licensed";
         } else {
-            os << "\"" << _json_escape(status.license_id) << "\"";
+            bool capability_licensed = false;
+            for (const auto& licensed : status.capabilities) {
+                if (licensed == "*" || licensed == cap_name) {
+                    capability_licensed = true;
+                    break;
+                }
+            }
+            if (!capability_licensed) {
+                code = AI_ERR_CAP_NOT_LICENSED;
+                message = "Capability not licensed";
+            } else if (!_version_satisfies_constraint(cap_version, status.version_constraint)) {
+                code = AI_ERR_CAP_NOT_LICENSED;
+                message = "Capability version not licensed";
+            }
         }
-        os << ",\"valid_from\":";
-        if (status.valid_from.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.valid_from) << "\"";
-        }
-        os << ",\"valid_until\":";
-        if (status.valid_until.empty()) {
-            os << "null";
-        } else {
-            os << "\"" << _json_escape(status.valid_until) << "\"";
-        }
-        os << ",\"days_remaining\":" << status.days_remaining
-           << ",\"source_mtime\":" << status.source_mtime
-           << ",\"refreshed_at_ms\":" << status.refreshed_at_ms
-           << ",\"last_success_at_ms\":" << status.last_success_at_ms
-           << ",\"last_error\":\"" << _json_escape(status.last_error) << "\""
-           << ",\"capabilities\":[";
-        for (size_t i = 0; i < status.capabilities.size(); ++i) {
-            if (i > 0) os << ",";
-            os << "\"" << _json_escape(status.capabilities[i]) << "\"";
-        }
-        os << "]}";
-        return os.str();
+
+        if (code == 0) return "";
+        nlohmann::json j;
+        j["code"]        = code;
+        j["message"]     = message;
+        j["status_code"] = 403;
+        return j.dump();
     }
 
 private:
@@ -567,22 +855,52 @@ private:
             return;
         }
 
-        const auto [has_started, days_until_start] = _check_valid_from(status.valid_from);
-        if (!has_started) {
-            status.status = "not_yet_valid";
-            status.not_yet_valid = true;
-            status.days_remaining = -days_until_start;
+        if (status.machine_mismatch) {
+            status.status = "machine_mismatch";
+            return;
+        }
+        if (status.operating_system_mismatch || status.os_version_mismatch || status.architecture_mismatch) {
+            status.status = "environment_mismatch";
             return;
         }
 
-        const int32_t days = _compute_days_remaining(status.valid_until);
-        if (days < 0) {
+        const ParsedTimestamp valid_from = _parse_iso8601_timestamp(status.valid_from);
+        if (!valid_from.valid) {
+            status.status = "invalid";
+            return;
+        }
+        if (valid_from.present) {
+            const int64_t now = std::time(nullptr);
+            if (now < valid_from.unix_seconds) {
+                status.status = "not_yet_valid";
+                status.not_yet_valid = true;
+                status.days_remaining = -_ceil_days_from_seconds(valid_from.unix_seconds - now);
+                return;
+            }
+        }
+
+        const ParsedTimestamp valid_until = _parse_iso8601_timestamp(status.valid_until);
+        if (!valid_until.valid) {
+            status.status = "invalid";
+            return;
+        }
+        if (!valid_until.present) {
             status.status = "valid";
             status.valid = true;
             status.days_remaining = -1;
             return;
         }
-        if (days <= 0) {
+
+        const int64_t now = std::time(nullptr);
+        if (now > valid_until.unix_seconds) {
+            status.status = "expired";
+            status.expired = true;
+            status.days_remaining = 0;
+            return;
+        }
+
+        const int64_t remaining_seconds = valid_until.unix_seconds - now;
+        if (remaining_seconds < 0) {
             status.status = "expired";
             status.expired = true;
             status.days_remaining = 0;
@@ -591,7 +909,7 @@ private:
 
         status.status = "valid";
         status.valid = true;
-        status.days_remaining = days;
+        status.days_remaining = _ceil_days_from_seconds(remaining_seconds);
     }
 
     std::shared_ptr<LicenseStatus> build_snapshot() {
@@ -693,9 +1011,11 @@ private:
                 return next;
             }
 
-            const std::string json = content.substr(start);
-            ParsedJsonObject parsed;
-            if (!_parse_top_level_json_object(json, parsed)) {
+            const std::string json_str = content.substr(start);
+            nlohmann::json parsed;
+            try {
+                parsed = nlohmann::json::parse(json_str);
+            } catch (const nlohmann::json::exception&) {
                 *next = LicenseStatus{};
                 next->status = "invalid";
                 next->last_error = "failed to parse license json";
@@ -705,27 +1025,53 @@ private:
                 return next;
             }
 
+            const auto get_str = [&](const char* key) -> std::string {
+                auto it = parsed.find(key);
+                if (it == parsed.end() || it->is_null()) return "";
+                if (it->is_string()) return it->get<std::string>();
+                return "";
+            };
+
             next->capabilities.clear();
-            next->license_id = _json_string(json, "license_id");
-            next->valid_from = _json_string(json, "valid_from");
-            next->valid_until = _json_string(json, "valid_until");
-            next->raw_json = json;
+            next->license_id           = get_str("license_id");
+            next->valid_from           = get_str("valid_from");
+            next->valid_until          = get_str("valid_until");
+            next->operating_system     = get_str("operating_system");
+            next->minimum_os_version   = get_str("minimum_os_version");
+            next->system_architecture  = get_str("system_architecture");
+            next->application_name     = get_str("application_name");
+            next->machine_fingerprint  = get_str("machine_fingerprint");
+            next->version_constraint   = get_str("version_constraint");
+            next->max_instances        = 4;
+
+            auto max_it = parsed.find("max_instances");
+            if (max_it != parsed.end() && max_it->is_number_integer()) {
+                const int32_t v = max_it->get<int32_t>();
+                if (v > 0) {
+                    next->max_instances = v;
+                } else {
+                    std::fprintf(stderr,
+                                 "[LicenseChecker] Invalid max_instances value %d (expected positive int32); defaulting to %d.\n",
+                                 v, next->max_instances);
+                }
+            }
+
+            next->raw_json = json_str;
             next->source_mtime = license_mtime;
             next->signature_invalid = false;
             next->missing = false;
+            next->machine_mismatch = false;
+            next->operating_system_mismatch = false;
+            next->os_version_mismatch = false;
+            next->architecture_mismatch = false;
             next->last_error.clear();
 
-            const auto capabilities_it = parsed.values.find("capabilities");
-            if (capabilities_it != parsed.values.end()) {
-                const std::string& arr = capabilities_it->second;
-                size_t p = 0;
-                while (p < arr.size()) {
-                    auto q1 = arr.find('"', p);
-                    if (q1 == std::string::npos) break;
-                    auto q2 = arr.find('"', q1 + 1);
-                    if (q2 == std::string::npos) break;
-                    next->capabilities.push_back(arr.substr(q1 + 1, q2 - q1 - 1));
-                    p = q2 + 1;
+            auto caps_it = parsed.find("capabilities");
+            if (caps_it != parsed.end() && caps_it->is_array()) {
+                for (const auto& cap : *caps_it) {
+                    if (cap.is_string()) {
+                        next->capabilities.push_back(cap.get<std::string>());
+                    }
                 }
             }
 
@@ -741,8 +1087,8 @@ private:
                 return next;
             }
 
-            auto signature_it = parsed.values.find("signature");
-            if (signature_it == parsed.values.end()) {
+            auto sig_it = parsed.find("signature");
+            if (sig_it == parsed.end() || !sig_it->is_string()) {
                 next->signature_invalid = true;
                 next->status = "signature_invalid";
                 next->last_error = "signature missing";
@@ -752,27 +1098,15 @@ private:
                 return next;
             }
 
-            std::vector<std::string> keys;
-            keys.reserve(parsed.values.size());
-            for (const auto& item : parsed.values) {
-                if (item.first != "signature") keys.push_back(item.first);
-            }
-            std::sort(keys.begin(), keys.end());
+            // Rebuild canonical JSON (sorted keys, compact, non-ASCII as-is, no signature field)
+            // to match what the Python signer computes:
+            //   json.dumps(payload, sort_keys=True, separators=(",",":"), ensure_ascii=False)
+            nlohmann::json canonical_obj = parsed;
+            canonical_obj.erase("signature");
+            const std::string canonical = canonical_obj.dump(-1, ' ', false);
+            const std::string signature_b64 = sig_it->get<std::string>();
 
-            std::ostringstream canonical;
-            canonical << "{";
-            for (size_t i = 0; i < keys.size(); ++i) {
-                if (i > 0) canonical << ",";
-                canonical << "\"" << _json_escape(keys[i]) << "\":" << parsed.values[keys[i]];
-            }
-            canonical << "}";
-
-            std::string signature_b64 = signature_it->second;
-            if (signature_b64.size() >= 2 && signature_b64.front() == '"' && signature_b64.back() == '"') {
-                signature_b64 = signature_b64.substr(1, signature_b64.size() - 2);
-            }
-
-            if (!_verify_signature(canonical.str(), signature_b64, pubkey_pem)) {
+            if (!_verify_signature(canonical, signature_b64, pubkey_pem)) {
                 next->signature_invalid = true;
                 next->status = "signature_invalid";
                 next->last_error = "signature verification failed";
@@ -787,8 +1121,12 @@ private:
             }
 #endif
 
+            _apply_environment_constraints(*next);
+
             update_temporal_status(*next);
-            next->last_error.clear();
+            if (next->status == "valid") {
+                next->last_error.clear();
+            }
             next->last_success_at_ms = next->refreshed_at_ms;
 
             {
@@ -797,9 +1135,12 @@ private:
                 parsed_license_mtime_ = license_mtime;
             }
         } else {
+            _apply_environment_constraints(*next);
             update_temporal_status(*next);
             next->source_mtime = license_mtime;
-            next->last_error.clear();
+            if (next->status == "valid") {
+                next->last_error.clear();
+            }
         }
 
         std::fprintf(stdout,
@@ -834,9 +1175,12 @@ void agilestar_license_set_pubkey_path(const char* path) {
     agilestar::LicenseCache::instance().set_pubkey_path(path ? path : "");
 }
 
-bool agilestar_license_is_valid(const char* cap_name) {
+bool agilestar_license_is_valid(const char* cap_name, const char* cap_version) {
     if (cap_name) {
-        return agilestar::LicenseCache::instance().is_capability_licensed(cap_name);
+        return agilestar::LicenseCache::instance().is_capability_licensed(
+            cap_name,
+            cap_version ? cap_version : ""
+        );
     }
     return agilestar::LicenseCache::instance().get().valid;
 }
@@ -847,4 +1191,15 @@ int32_t agilestar_license_get_json(char* buf, int32_t buf_len) {
     if (!buf || buf_len <= needed) return needed;
     std::memcpy(buf, json.c_str(), static_cast<size_t>(needed) + 1);
     return needed;
+}
+
+int32_t agilestar_license_get_max_instances() {
+    return agilestar::LicenseCache::instance().max_instances();
+}
+
+std::string agilestar_license_get_failure_json(const char* cap_name, const char* cap_version) {
+    return agilestar::LicenseCache::instance().failure_json(
+        cap_name ? cap_name : "",
+        cap_version ? cap_version : ""
+    );
 }

@@ -69,7 +69,8 @@
         <div style="display:flex;align-items:center;gap:12px;">
           <span style="font-size:16px;font-weight:bold;">📋 推理结果</span>
           <el-tag :type="resultOk ? 'success' : 'danger'">{{ resultOk ? '成功' : '失败' }}</el-tag>
-          <el-tag v-if="inferTime !== null" type="info">耗时 {{ inferTime }} ms</el-tag>
+          <el-tag v-if="backendInferTime !== null" type="success">后端推理 {{ backendInferTime }} ms</el-tag>
+          <el-tag v-if="requestTime !== null" type="info">接口耗时 {{ requestTime }} ms</el-tag>
         </div>
       </template>
       <el-input
@@ -96,14 +97,16 @@ const running = ref(false)
 const result = ref(null)
 const resultOk = ref(false)
 const resultText = ref('')
-const inferTime = ref(null)
+const requestTime = ref(null)
+const backendInferTime = ref(null)
 const uploadRef = ref(null)
 
 function resetResult() {
   result.value = null
   resultOk.value = false
   resultText.value = ''
-  inferTime.value = null
+  requestTime.value = null
+  backendInferTime.value = null
 }
 
 function onFileChange(file) {
@@ -151,13 +154,16 @@ async function doInfer() {
 
   try {
     const res = await infer(capability.value, formData)
-    inferTime.value = Date.now() - startTime
+    requestTime.value = Date.now() - startTime
+    backendInferTime.value = typeof res.data?.inference_time_ms === 'number'
+      ? res.data.inference_time_ms
+      : null
     result.value = res.data
     resultOk.value = true
     resultText.value = JSON.stringify(res.data, null, 2)
     ElMessage.success('推理完成')
   } catch (e) {
-    inferTime.value = Date.now() - startTime
+    requestTime.value = Date.now() - startTime
     resultOk.value = false
     result.value = e?.response?.data || e.message
     resultText.value = JSON.stringify(result.value, null, 2)
