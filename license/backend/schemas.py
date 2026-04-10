@@ -202,5 +202,14 @@ class ProdAdminTokenUpdate(BaseModel):
     expires_at: Optional[datetime] = None
 
 
+# ─── Dashboard ───────────────────────────────────────────────────────────────
+
+class DashboardStats(BaseModel):
+    total_customers: int
+    active_licenses: int
+    expiring_30: int
+    expiring_7: int
+
+
 # Update forward references
 CustomerWithLicenses.model_rebuild()
