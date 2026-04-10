@@ -133,9 +133,7 @@ def get_dashboard_stats(db: Session) -> dict:
     }
 
 
-
-    from datetime import timedelta
-
+def get_expiring_licenses(db: Session, days: int) -> list[models.LicenseRecord]:
     now = datetime.now(CST)
     cutoff = now + timedelta(days=days)
     return (
