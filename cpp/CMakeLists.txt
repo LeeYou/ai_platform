@@ -32,6 +32,10 @@ option(BUILD_CAP_RECAPTURE_DETECT "构建 recapture_detect 能力插件" OFF)
 option(BUILD_CAP_ID_CARD_CLASSIFY "构建 id_card_classify 能力插件" OFF)
 option(BUILD_CAP_DESKTOP_RECAPTURE_DETECT "构建 desktop_recapture_detect 能力插件" OFF)
 
+# agface 系列（NCNN 后端，来自旧 ai_agface 推理库迁移）
+option(BUILD_ALL_AGFACE_CAPS      "构建所有 agface_* 能力插件（NCNN 后端）" OFF)
+option(BUILD_CAP_AGFACE_FACE_DETECT "构建 agface_face_detect 能力插件（NCNN RetinaFace）" OFF)
+
 # ---------------------------------------------------------------------------
 # 输出目录
 # ---------------------------------------------------------------------------
@@ -105,6 +109,23 @@ endif()
 
 if(BUILD_ALL_CAPS OR BUILD_CAP_DESKTOP_RECAPTURE_DETECT)
     add_subdirectory(capabilities/desktop_recapture_detect)
+endif()
+
+# agface 系列（NCNN 后端）——注意：不纳入 BUILD_ALL_CAPS，需显式开启，
+# 因为依赖 NCNN/OpenCV，避免在未配齐依赖的环境下意外失败。
+set(_AGFACE_ANY_CAP_ENABLED OFF)
+if(BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_DETECT)
+    set(_AGFACE_ANY_CAP_ENABLED ON)
+endif()
+
+if(_AGFACE_ANY_CAP_ENABLED
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/_agface_common/CMakeLists.txt")
+    add_subdirectory(capabilities/_agface_common)
+endif()
+
+if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_DETECT)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_face_detect/CMakeLists.txt")
+    add_subdirectory(capabilities/agface_face_detect)
 endif()
 
 # JNI 接口层

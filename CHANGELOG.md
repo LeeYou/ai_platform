@@ -3,6 +3,24 @@
 本文件基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
+## [Unreleased]
+
+### 新增 (Added)
+
+- **ai_agface 迁移（MVP）** — 旧人脸比对 SDK 合并入当前能力插件体系
+  - 新构建选项 `BUILD_CAP_AGFACE_FACE_DETECT` / `BUILD_ALL_AGFACE_CAPS`
+  - `add_capability_plugin()` 宏新增 `BACKEND ONNX|NCNN|NONE` 与 `EXTRA_LIBS` 关键字
+  - 新 FindModule：`cpp/cmake/FindNCNN.cmake`（支持 vendored / system / NCNN_ROOT 三级回退）
+  - 共享适配层 `cpp/capabilities/_agface_common/`（NcnnSession、InstancePool、
+    manifest.json 解析、AiImage→cv::Mat、AiResult JSON 填充）
+  - 首个能力插件 `cpp/capabilities/agface_face_detect/`（NCNN RetinaFace SSD 头），
+    完整实现 `@/cpp/sdk/ai_capability.h` 约定的 `Ai*` ABI
+  - 模型迁移脚本 `scripts/migrate_agface_face_detect_model.py`（生成标准
+    `<dst>/agface_face_detect/1.0.0/{detection.param,bin,manifest.json}`，含 sha256）
+  - Docker 基础镜像新增 `libncnn-dev/libncnn1 + libopencv + libomp` 依赖
+  - 迁移设计文档 `docs/design/agface_migration.md` —— 旧→新模块映射、丢弃清单、
+    验收命令、后续迁移计划
+
 ## [1.3.0] - 2026-03-31
 
 ### 新增 (Added)

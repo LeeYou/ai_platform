@@ -48,6 +48,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     tzdata \
+    # agface_* 能力插件（NCNN 后端）所需运行时依赖
+    libncnn1 \
+    libopencv-core4.5d libopencv-imgproc4.5d libopencv-imgcodecs4.5d \
+    libgomp1 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
