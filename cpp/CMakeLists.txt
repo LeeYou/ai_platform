@@ -34,7 +34,13 @@ option(BUILD_CAP_DESKTOP_RECAPTURE_DETECT "构建 desktop_recapture_detect 能�
 
 # agface 系列（NCNN 后端，来自旧 ai_agface 推理库迁移）
 option(BUILD_ALL_AGFACE_CAPS      "构建所有 agface_* 能力插件（NCNN 后端）" OFF)
-option(BUILD_CAP_AGFACE_FACE_DETECT "构建 agface_face_detect 能力插件（NCNN RetinaFace）" OFF)
+option(BUILD_CAP_AGFACE_FACE_DETECT             "构建 agface_face_detect 能力插件（NCNN RetinaFace）" OFF)
+option(BUILD_CAP_AGFACE_FACE_FEATURE_RESIDUAL256 "构建 agface_face_feature_residual256 能力插件（NCNN Residual 256-dim）" OFF)
+option(BUILD_CAP_AGFACE_FACE_FEATURE_GLINT512    "构建 agface_face_feature_glint512 能力插件（NCNN Glint360K-R34 512-dim）" OFF)
+option(BUILD_CAP_AGFACE_FACE_FEATURE_MOBILENET256 "构建 agface_face_feature_mobilenet256 能力插件（NCNN MobileFaceNet 256-dim）" OFF)
+option(BUILD_CAP_AGFACE_BAREHEAD                 "构建 agface_barehead 能力插件（NCNN 裸头检测）" OFF)
+option(BUILD_CAP_AGFACE_FAKE_PHOTO               "构建 agface_fake_photo 能力插件（NCNN 翻拍照检测）" OFF)
+option(BUILD_CAP_AGFACE_FACE_PROPERTY            "构建 agface_face_property 能力插件（NCNN 人脸属性）" OFF)
 
 # ---------------------------------------------------------------------------
 # 输出目录
@@ -114,7 +120,14 @@ endif()
 # agface 系列（NCNN 后端）——注意：不纳入 BUILD_ALL_CAPS，需显式开启，
 # 因为依赖 NCNN/OpenCV，避免在未配齐依赖的环境下意外失败。
 set(_AGFACE_ANY_CAP_ENABLED OFF)
-if(BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_DETECT)
+if(BUILD_ALL_AGFACE_CAPS
+   OR BUILD_CAP_AGFACE_FACE_DETECT
+   OR BUILD_CAP_AGFACE_FACE_FEATURE_RESIDUAL256
+   OR BUILD_CAP_AGFACE_FACE_FEATURE_GLINT512
+   OR BUILD_CAP_AGFACE_FACE_FEATURE_MOBILENET256
+   OR BUILD_CAP_AGFACE_BAREHEAD
+   OR BUILD_CAP_AGFACE_FAKE_PHOTO
+   OR BUILD_CAP_AGFACE_FACE_PROPERTY)
     set(_AGFACE_ANY_CAP_ENABLED ON)
 endif()
 
@@ -126,6 +139,36 @@ endif()
 if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_DETECT)
    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_face_detect/CMakeLists.txt")
     add_subdirectory(capabilities/agface_face_detect)
+endif()
+
+if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_FEATURE_RESIDUAL256)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_face_feature_residual256/CMakeLists.txt")
+    add_subdirectory(capabilities/agface_face_feature_residual256)
+endif()
+
+if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_FEATURE_GLINT512)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_face_feature_glint512/CMakeLists.txt")
+    add_subdirectory(capabilities/agface_face_feature_glint512)
+endif()
+
+if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_FEATURE_MOBILENET256)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_face_feature_mobilenet256/CMakeLists.txt")
+    add_subdirectory(capabilities/agface_face_feature_mobilenet256)
+endif()
+
+if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_BAREHEAD)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_barehead/CMakeLists.txt")
+    add_subdirectory(capabilities/agface_barehead)
+endif()
+
+if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FAKE_PHOTO)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_fake_photo/CMakeLists.txt")
+    add_subdirectory(capabilities/agface_fake_photo)
+endif()
+
+if((BUILD_ALL_AGFACE_CAPS OR BUILD_CAP_AGFACE_FACE_PROPERTY)
+   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/capabilities/agface_face_property/CMakeLists.txt")
+    add_subdirectory(capabilities/agface_face_property)
 endif()
 
 # JNI 接口层

@@ -135,12 +135,167 @@ cmake --build build-agface -j
    应见 `agface_face_detect` 状态 `loaded`。
 4. `POST /api/v1/infer/agface_face_detect`（multipart jpg）→ 返回 `{"faces":[...]}`。
 
-## 7. 下一步（第二轮）
+## 7. 第二轮（已完成）
 
-- `agface_face_align`（BACKEND=NONE，纯仿射）
-- `agface_face_feature_residual256`、`agface_face_feature_glint512`（BACKEND=NCNN）
-- `agface_face_compare`（BACKEND=NONE，余弦相似度）
-- 预置 pipeline `agface_face_compare_v1.json`（prod pipeline_engine）
-- JNI 兼容层 `libagface_jni.so` —— 保留旧 `com.agile.comparison.util.AgFace` 签名
-- 第三轮：`agface_face_property`、`agface_fake_photo`、`agface_barehead`、
-  `agface_face_feature_mobilenet256`
+### 7.1 新增能力插件
+
+- **`agface_face_feature_residual256`**（BACKEND=NCNN，256 维）。迁移自旧
+  `FaceFeatureResidual256` + `FaceFeatureBase::extract`。
+- **`agface_face_feature_glint512`**（BACKEND=NCNN，512 维）。迁移自旧
+  `FaceFeatureGlint512`。两个插件共享 `@/cpp/capabilities/_agface_common/include/agface/feature_plugin_impl.h`
+  的 Ai* ABI 骨架，差异（模型名/维度/输入色彩）**完全由各自的 manifest.json 驱动**。
+
+### 7.2 扩展的 `_agface_common`
+
+- **`face_align.h/.cpp`** — 5 点相似变换对齐到 112×112，闭合解 + 双线性重采样，
+  与旧 `face_feature_base.h::alignFace` 算法逐行等价。landmarks=nullptr 时使用
+  合成地标（便于客户端直接喂一张已粗裁剪的人脸图）。
+- **`feature_extract.h/.cpp`** — 通用特征提取：对齐 → NCNN 预处理 → forward →
+  L2 归一化，manifest 驱动差异。
+- **`feature_plugin_impl.h`** — 完整 Ai* ABI 模板头，供后续更多 feature 插件
+  一行 include 复用。
+- **`manifest.h`** 新增 `feature_dim` 字段 + 解析逻辑，供输出维度自检。
+
+### 7.3 特征插件输出 JSON
+
+```json
+{
+  "feature": [0.0123, -0.0456, ...],
+  "dim": 256,
+  "l2_normalized": true
+}
+```
+调用方可直接对两个向量做 **点积 = 余弦相似度**，然后套用旧平台的
+`calibrateScore` 分段映射（`(-1,0)→[0,10]`, `(0,0.3)→[10,30]`, `(0.3,0.5)→[30,60]`,
+`(0.5,0.7)→[60,85]`, `(0.7,1.0)→[85,100]`）得到 0-100 分的比对结果。
+
+### 7.4 新增模型迁移脚本
+
+`@/scripts/migrate_agface_face_feature_models.py`，支持 `--which residual256|glint512|all`：
+
+```bash
+python scripts/migrate_agface_face_feature_models.py \
+    --src "H:/work/训练数据/caffe-base/ai_agface" \
+    --dst "/data/ai_platform/models" \
+    --version 1.0.0 \
+    --which all
+```
+
+生成：
+```
+/data/ai_platform/models/
+  agface_face_feature_residual256/1.0.0/{model.param,model.bin,manifest.json}
+  agface_face_feature_glint512/1.0.0/{model.param,model.bin,manifest.json}
+```
+
+### 7.5 架构决策（重要）
+
+- **`agface_face_align` 作为独立能力暂不导出**：对齐已内化到 feature 插件中（
+  输入整张人脸 crop，内部对齐到 112×112 后提特征），外部无需再调一次 align。
+- **`agface_face_compare` 作为独立能力暂不导出**：当前 `Ai*` ABI 只接受
+  `AiImage + AiResult`，不适合"两 feature 向量进、一分数出"的纯计算调用；
+  客户端收到两份 feature 后自行计算点积 + 分数映射即可。
+- 若后续需要"一个 HTTP 调用完成整套比对"，应走 **composite capability** 方案
+  或扩展 `Ai*` ABI 增加"通用 JSON 输入"变体，均列入第三轮。
+
+## 8. 第三轮（已完成）
+
+### 8.1 新 feature 能力 `agface_face_feature_mobilenet256`
+
+- `cpp/capabilities/agface_face_feature_mobilenet256/` — MobileFaceNet 256 维，
+  output blob = `fc1`（与 residual256/glint512 的 `pre_fc1` 不同）。完全复用
+  `feature_plugin_impl.h`，插件 `.cpp` 仍为 14 行（define + include）。
+- 模型迁移脚本扩展：`--which all | residual256 | glint512 | mobilenet256`。
+- ABI 烟雾测试自动覆盖（同一个 `test_agface_feature_plugins.py`）。
+
+### 8.2 Python 层 composite：`POST /api/v1/agface/face_compare`
+
+替代旧 `agface_compare_jpg` 入口点，无需新 C++ 插件。流程：
+
+```
+image_a, image_b (multipart)
+    │
+    ├── [可选] agface_face_detect 选最大人脸 → 15% margin crop → JPEG 重编码
+    │
+    ├── agface_face_feature_<variant>.infer(image_a_crop) → feature_a (L2)
+    ├── agface_face_feature_<variant>.infer(image_b_crop) → feature_b (L2)
+    │
+    └── cosine = dot(a, b)                 (两向量已 L2 归一化)
+        score  = calibrate_score(cosine)    (与旧 SimilarityCalculator 分段映射一致)
+```
+
+实现：
+- `prod/web_service/agface_compare.py` —— 纯 Python 帮助模块（零额外依赖），
+  提供 `cosine_similarity` / `calibrate_score` / `pick_largest_face_bbox` /
+  `crop_image_to_bbox` / `compare_faces` 编排函数。
+- `prod/web_service/main.py` 新增 `/api/v1/agface/face_compare` FastAPI 端点 +
+  `_encode_image_jpeg` 工具函数。
+- Form 字段：
+  - `feature_model` ∈ `{residual256, glint512, mobilenet256}`（默认 glint512）
+  - `detector` = 能力名 / `"none"` / 空（跳过检测，适用于已 crop 的面部图）
+  - `margin_ratio` = 默认 `0.15`
+- 返回：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "total_time_ms": 42.18,
+  "feature_capability": "agface_face_feature_glint512",
+  "detector_capability": "agface_face_detect",
+  "faces": {"image_a": 1, "image_b": 1},
+  "cosine": 0.823456,
+  "score": 91.17,
+  "dim": 512,
+  "feature_a_sample": [0.0123, -0.0456, ...],   // 前 8 维
+  "feature_b_sample": [0.0138, -0.0441, ...]
+}
+```
+
+单元测试：`tests/prod/test_agface_compare.py` —— 不依赖 C++ 运行时，覆盖余弦
+计算、分段映射 6 个锚点、bbox 最大化、composite 编排（含 detector 开关）。
+
+### 8.3 架构决策回顾
+
+- **不做 C++ composite capability**：composite 逻辑属于编排层（Python），
+  放到 C++ 插件会让每次升级都要重新发 SO、也无法复用已有的 runtime 实例池。
+- **不扩展 `Ai*` ABI**：当前 ABI 专注于"单图像 → 单 JSON"的纯 GPU 计算单元，
+  用 Python 组合既简单又能复用 `_infer_for_pipeline` / 并发闸门 / A/B 测试。
+- **`detector=none` 模式**：让已有客户端代码（自己 crop）也能直接接入，
+  给 JNI 兼容层一个低耦合的落脚点。
+
+## 9. 第四轮（已完成）
+
+### 9.1 新增三类 legacy vision 能力插件
+
+- **`agface_barehead`** — 迁移旧 `barehead_module`，流程为：`FaceDetector` 取最大脸 →
+  `modelht` 三尺度输出 → 头顶区域命中概率聚合；无有效输出时退化到 legacy heuristic。
+- **`agface_fake_photo`** — 迁移旧 `fake_photo_module`，流程为：最大脸 → 三个 live 模型
+  (`model_1/2/3`) 加权估计真实人脸概率 → `1-real` 得到翻拍概率；再用
+  `yolov7s320face` 的 label=6 规则强提升翻拍判定。
+- **`agface_face_property`** — 迁移旧 `face_property_module`，聚合输出：
+  `angle / glasses / mask / facew / eyeclosed / hat / fake`。其中姿态优先用
+  `face_landmark_with_attention` mesh 结果，失败则退回 heuristic。
+
+### 9.2 `_agface_common` 扩展
+
+- **`vision_analysis_common.h/.cpp`** — 抽出旧 `vision_analysis_common` 的 heuristic：
+  `preprocessLegacyVisionImage`、`estimateHat/Mask/Glasses/EyeClosed/FakeLegacy`、
+  `buildAngleStringLegacy`。
+- **`legacy_vision_context.h/.cpp`** — 抽出三类能力共享的 NCNN 资源装配：
+  live 模型加载、`yolov7s320face` 属性检测、mesh 姿态、hat 三尺度输出解析。
+
+### 9.3 新增模型迁移脚本与测试
+
+- 新增 `@/scripts/migrate_agface_vision_models.py`，支持
+  `barehead | fake_photo | face_property | all`。
+- 新增 `tests/prod/test_agface_vision_plugins.py`，覆盖 `agface_barehead` /
+  `agface_fake_photo` / `agface_face_property` 的 ABI 烟雾测试。
+
+## 10. 第五轮（候选）
+
+- **JNI 兼容层** `libagface_jni.so`，保持旧 `com.agile.comparison.util.AgFace`
+  客户端签名不变，内部通过 HTTP → `/api/v1/agface/face_compare`（或直连
+  libai_runtime）落地，客户代码零改动。
+- 默认 feature 能力的选型评估（glint512 vs residual256 vs mobilenet256），
+  在真实数据集上跑 ROC / AUC 后在 manifest 里固化推荐版本。

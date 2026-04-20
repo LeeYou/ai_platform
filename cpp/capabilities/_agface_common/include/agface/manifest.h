@@ -60,6 +60,9 @@ struct NcnnManifest {
     int   min_face        = 40;
     int   max_image_dim   = 1200;
 
+    // 特征提取专用（feature 插件读取）
+    int   feature_dim     = 0;  // 0 表示未声明；>0 时启用维度自检
+
     // 解析后的绝对路径（由 loadFromDir 填充）
     std::string param_path;
     std::string bin_path;

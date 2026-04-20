@@ -7,6 +7,7 @@
 # Ignore CMake build output directories (NOT the top-level build/ subsystem source)
 cmake-build-*/
 cpp/build/
+cpp/build_*/
 license_build/build/
 CMakeCache.txt
 CMakeFiles/

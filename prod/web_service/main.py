@@ -113,6 +113,11 @@ try:
         save_pipeline,
         validate_pipeline,
     )
+    from agface_compare import (
+        ALLOWED_FEATURE_CAPABILITIES as _AGFACE_FEATURE_CAPS,
+        DEFAULT_DETECTOR_CAPABILITY as _AGFACE_DEFAULT_DETECTOR,
+        compare_faces as _agface_compare_faces,
+    )
 except Exception:
     logger.critical("Failed to import application modules:\n%s", traceback.format_exc())
     sys.exit(1)
@@ -486,6 +491,16 @@ def _decode_image(data: bytes) -> np.ndarray:
         raise HTTPException(status_code=400,
                             detail={"code": 1002, "message": "Image decode failed"})
     return img
+
+
+def _encode_image_jpeg(img: np.ndarray, quality: int = 95) -> bytes:
+    """Encode a BGR numpy image as JPEG bytes. Used by agface_compare crop path."""
+    import cv2  # type: ignore
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    if not ok:
+        raise HTTPException(status_code=500,
+                            detail={"code": 5001, "message": "JPEG encode failed"})
+    return bytes(buf)
 
 
 def _load_capability_build_info(capability: str) -> dict[str, Any]:
@@ -993,6 +1008,118 @@ async def reload_ab_tests(request: Request):
         "active_tests": len(ab_manager.list_active_tests()),
         "ab_tests": ab_manager.list_active_tests(),
     }
+
+
+# ---------------------------------------------------------------------------
+# agface composite: end-to-end face-compare
+# ---------------------------------------------------------------------------
+
+@app.post("/api/v1/agface/face_compare", tags=["agface"])
+async def agface_face_compare_endpoint(
+    request: Request,
+    image_a: UploadFile = File(..., description="First face image (jpg/png)"),
+    image_b: UploadFile = File(..., description="Second face image (jpg/png)"),
+    feature_model: Optional[str] = Form(
+        default="agface_face_feature_glint512",
+        description=f"Feature extractor capability; allowed: {_AGFACE_FEATURE_CAPS}",
+    ),
+    detector: Optional[str] = Form(
+        default=_AGFACE_DEFAULT_DETECTOR,
+        description=(
+            "Face detector capability used to crop the largest face before "
+            "feature extraction. Pass empty string or 'none' to skip detection "
+            "(useful when the caller has already cropped the face)."
+        ),
+    ),
+    margin_ratio: Optional[float] = Form(
+        default=0.15,
+        description="Padding ratio around the detected bbox (per side) before cropping.",
+    ),
+):
+    """End-to-end agface face-compare: detect → crop → feature × 2 → cosine + score.
+
+    Replaces the old `agface_compare_jpg` SDK entry point. Returns 0-100 score
+    using the original SimilarityCalculator piecewise-linear mapping, plus the
+    raw cosine similarity and a sample of each feature for debugging.
+    """
+    async with _acquire_infer_slot():
+        if feature_model not in _AGFACE_FEATURE_CAPS:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": 1001,
+                    "message": f"invalid feature_model; allowed: {list(_AGFACE_FEATURE_CAPS)}",
+                },
+            )
+
+        detector_cap: Optional[str] = detector
+        if detector_cap in (None, "", "none", "None"):
+            detector_cap = None
+
+        runtime = get_runtime()
+        if not runtime:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": 5001, "message": "Runtime not initialized"},
+            )
+        loaded = {cap.get("name", "") for cap in runtime.get_capabilities()}
+        if feature_model not in loaded:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": 2001,
+                    "message": f"feature capability '{feature_model}' is not loaded",
+                    "loaded": sorted(loaded),
+                },
+            )
+        if detector_cap and detector_cap not in loaded:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": 2001,
+                    "message": f"detector capability '{detector_cap}' is not loaded",
+                    "loaded": sorted(loaded),
+                },
+            )
+
+        raw_a = await image_a.read()
+        raw_b = await image_b.read()
+        _check_upload_size(raw_a)
+        _check_upload_size(raw_b)
+
+        t0 = time.perf_counter()
+        try:
+            result = _agface_compare_faces(
+                raw_a,
+                raw_b,
+                infer_fn=_infer_for_pipeline,
+                feature_capability=feature_model,
+                detector_capability=detector_cap,
+                decode_fn=_decode_image,
+                encode_fn=_encode_image_jpeg,
+                margin_ratio=float(margin_ratio or 0.15),
+            )
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": 1001, "message": str(exc)},
+            )
+        except Exception as exc:
+            logger.error("agface face_compare failed: %s", exc, exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail={"code": 5001, "message": "face compare failed"},
+            )
+        elapsed = round((time.perf_counter() - t0) * 1000.0, 2)
+
+        return {
+            "code": 0,
+            "message": "success",
+            "total_time_ms": elapsed,
+            **result,
+        }
 
 
 # ---------------------------------------------------------------------------

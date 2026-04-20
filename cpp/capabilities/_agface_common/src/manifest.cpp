@@ -87,6 +87,7 @@ bool loadManifestFromDir(const std::string& model_dir,
             out->min_face        = th.value("min_face", out->min_face);
             out->max_image_dim   = th.value("max_image_dim", out->max_image_dim);
         }
+        out->feature_dim = j.value("feature_dim", out->feature_dim);
     } catch (const std::exception& e) {
         return fail(std::string("manifest.json field extraction failed: ") + e.what());
     }

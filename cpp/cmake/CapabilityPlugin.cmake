@@ -110,14 +110,13 @@ function(add_capability_plugin)
                                 "or add cpp/third_party/ncnn submodule.")
         endif()
 
-        # OpenCV 作为 NCNN 能力的标准图像处理依赖（core/imgproc/imgcodecs）
-        find_package(OpenCV QUIET COMPONENTS core imgproc imgcodecs)
-        if(OpenCV_FOUND)
-            target_include_directories(${TARGET_NAME} PRIVATE ${OpenCV_INCLUDE_DIRS})
-            target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCV_LIBS})
+        # OpenCV 作为 NCNN 能力的标准图像处理依赖（legacy source / system package）
+        include(FindAgfaceOpenCV)
+        if(TARGET AgfaceOpenCV::OpenCV)
+            target_link_libraries(${TARGET_NAME} PRIVATE AgfaceOpenCV::OpenCV)
         else()
             message(FATAL_ERROR "add_capability_plugin(${CAP_NAME}): BACKEND=NCNN requires OpenCV "
-                                "(core/imgproc/imgcodecs). Install libopencv-dev or set OpenCV_DIR.")
+                                "(vendored cpp/third_party/opencv, AGFACE_OPENCV_SOURCE_DIR, or system OpenCV_DIR).")
         endif()
 
         target_compile_definitions(${TARGET_NAME} PRIVATE AI_BACKEND_NCNN=1)

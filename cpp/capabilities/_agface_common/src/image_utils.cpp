@@ -4,6 +4,16 @@
 
 namespace agface {
 
+#if defined(CV_VERSION_EPOCH) && (CV_VERSION_EPOCH == 2)
+static constexpr int kColorGray2Bgr = CV_GRAY2BGR;
+static constexpr int kColorRgb2Bgr = CV_RGB2BGR;
+static constexpr int kColorBgr2Gray = CV_BGR2GRAY;
+#else
+static constexpr int kColorGray2Bgr = cv::COLOR_GRAY2BGR;
+static constexpr int kColorRgb2Bgr = cv::COLOR_RGB2BGR;
+static constexpr int kColorBgr2Gray = cv::COLOR_BGR2GRAY;
+#endif
+
 // color_format 约定（与 ai_types.h 一致）：0=BGR，1=RGB，2=GRAY
 static constexpr int kColorBGR  = 0;
 static constexpr int kColorRGB  = 1;
@@ -36,24 +46,24 @@ bool aiImageToBgrMat(const AiImage* img, cv::Mat* out) {
                 // （避免调用方释放 AiImage.data 后 out 悬空）
                 *out = tight.clone();
             } else {  // 单通道当作灰度
-                cv::cvtColor(tight, *out, cv::COLOR_GRAY2BGR);
+                cv::cvtColor(tight, *out, kColorGray2Bgr);
             }
             break;
         case kColorRGB:
             if (img->channels == 3) {
-                cv::cvtColor(tight, *out, cv::COLOR_RGB2BGR);
+                cv::cvtColor(tight, *out, kColorRgb2Bgr);
             } else {
-                cv::cvtColor(tight, *out, cv::COLOR_GRAY2BGR);
+                cv::cvtColor(tight, *out, kColorGray2Bgr);
             }
             break;
         case kColorGRAY:
             if (img->channels == 1) {
-                cv::cvtColor(tight, *out, cv::COLOR_GRAY2BGR);
+                cv::cvtColor(tight, *out, kColorGray2Bgr);
             } else {
                 // 3 通道但声明为 GRAY —— 先转灰度再转 BGR
                 cv::Mat gray;
-                cv::cvtColor(tight, gray, cv::COLOR_BGR2GRAY);
-                cv::cvtColor(gray, *out, cv::COLOR_GRAY2BGR);
+                cv::cvtColor(tight, gray, kColorBgr2Gray);
+                cv::cvtColor(gray, *out, kColorGray2Bgr);
             }
             break;
         default:
@@ -61,7 +71,7 @@ bool aiImageToBgrMat(const AiImage* img, cv::Mat* out) {
             if (img->channels == 3) {
                 *out = tight.clone();
             } else {
-                cv::cvtColor(tight, *out, cv::COLOR_GRAY2BGR);
+                cv::cvtColor(tight, *out, kColorGray2Bgr);
             }
             break;
     }

@@ -18,6 +18,10 @@ add_library(agface_common STATIC
     src/manifest.cpp
     src/image_utils.cpp
     src/json_result.cpp
+    src/vision_analysis_common.cpp
+    src/legacy_vision_context.cpp
+    src/face_align.cpp
+    src/feature_extract.cpp
 )
 
 set_target_properties(agface_common PROPERTIES
@@ -49,9 +53,12 @@ else()
     message(FATAL_ERROR "agface_common requires NCNN::NCNN (install libncnn-dev, set NCNN_ROOT, or vendor cpp/third_party/ncnn)")
 endif()
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
-target_include_directories(agface_common PUBLIC ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(agface_common PUBLIC ${OpenCV_LIBS})
+include(FindAgfaceOpenCV)
+if(TARGET AgfaceOpenCV::OpenCV)
+    target_link_libraries(agface_common PUBLIC AgfaceOpenCV::OpenCV)
+else()
+    message(FATAL_ERROR "agface_common requires OpenCV (vendored cpp/third_party/opencv, AGFACE_OPENCV_SOURCE_DIR, or system OpenCV_DIR)")
+endif()
 
 # 统一编译选项
 if(COMMAND ai_target_apply_flags)

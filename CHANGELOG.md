@@ -7,6 +7,47 @@
 
 ### 新增 (Added)
 
+- **ai_agface 迁移（第四轮）** — 加入 barehead / fake_photo / face_property 三类 NCNN 能力
+  - 新能力插件 `cpp/capabilities/agface_barehead/`
+  - 新能力插件 `cpp/capabilities/agface_fake_photo/`
+  - 新能力插件 `cpp/capabilities/agface_face_property/`
+  - `_agface_common` 扩展：
+    - `vision_analysis_common.h/.cpp` — legacy heuristic 与图像预处理
+    - `legacy_vision_context.h/.cpp` — shared NCNN resource loading / live / attr / mesh / hat helpers
+  - 新构建选项 `BUILD_CAP_AGFACE_BAREHEAD` / `BUILD_CAP_AGFACE_FAKE_PHOTO` /
+    `BUILD_CAP_AGFACE_FACE_PROPERTY`
+  - 新模型迁移脚本 `scripts/migrate_agface_vision_models.py`
+  - 新 ABI 烟雾测试 `tests/prod/test_agface_vision_plugins.py`
+
+- **ai_agface 迁移（第三轮）** — 加入 MobileFaceNet + Python 端到端比对
+  - 新能力插件 `cpp/capabilities/agface_face_feature_mobilenet256/`
+    （NCNN MobileFaceNet 256 维，output blob 为 `fc1`；复用 `feature_plugin_impl.h`）
+  - 构建选项 `BUILD_CAP_AGFACE_FACE_FEATURE_MOBILENET256`
+  - 模型迁移脚本 `scripts/migrate_agface_face_feature_models.py` 扩展 `--which mobilenet256`
+  - **新 HTTP 端点 `POST /api/v1/agface/face_compare`** — 端到端两图比对，
+    编排 `agface_face_detect`（可选）→ 取最大人脸 crop → `agface_face_feature_*` ×2 →
+    cosine + 分段映射 0-100 分。替代旧 `agface_compare_jpg` SDK 入口
+  - 新模块 `prod/web_service/agface_compare.py` —— 纯 Python 零依赖编排层，
+    提供 `cosine_similarity` / `calibrate_score` / `pick_largest_face_bbox` /
+    `crop_image_to_bbox` / `compare_faces`
+  - `prod/web_service/main.py` 新增 `_encode_image_jpeg` 辅助函数
+  - 单元测试 `tests/prod/test_agface_compare.py`（6 个分段锚点 + 编排路径）
+  - 烟雾测试 `tests/prod/test_agface_feature_plugins.py` 扩展覆盖 mobilenet256
+
+- **ai_agface 迁移（第二轮）** — 加入人脸特征提取能力
+  - 新能力插件 `cpp/capabilities/agface_face_feature_residual256/`（NCNN Residual 256 维）
+  - 新能力插件 `cpp/capabilities/agface_face_feature_glint512/`（NCNN Glint360K-R34 512 维）
+  - `_agface_common` 扩展：
+    - `face_align.h/.cpp` — 5 点相似变换对齐到 112×112（闭合解 + 双线性，与旧算法等价）
+    - `feature_extract.h/.cpp` — 共用特征提取流水（对齐 → 预处理 → forward → L2 归一化）
+    - `feature_plugin_impl.h` — 全套 `Ai*` ABI 模板头，feature 插件单 `#include` 复用
+    - `manifest.h` 新增 `feature_dim` 字段（输出维度自检）
+  - 新构建选项 `BUILD_CAP_AGFACE_FACE_FEATURE_RESIDUAL256` / `BUILD_CAP_AGFACE_FACE_FEATURE_GLINT512`
+  - 模型迁移脚本 `scripts/migrate_agface_face_feature_models.py`（`--which` 选 residual256/glint512/all）
+  - 烟雾测试 `tests/prod/test_agface_feature_plugins.py`（ABI 版本 / NULL 安全 / manifest 容错）
+  - 架构决策：`agface_face_align` 内化到 feature 插件；`agface_face_compare` 由客户端做点积 + 分段映射；
+    composite capability 与 JNI 兼容层列入第三轮
+
 - **ai_agface 迁移（MVP）** — 旧人脸比对 SDK 合并入当前能力插件体系
   - 新构建选项 `BUILD_CAP_AGFACE_FACE_DETECT` / `BUILD_ALL_AGFACE_CAPS`
   - `add_capability_plugin()` 宏新增 `BACKEND ONNX|NCNN|NONE` 与 `EXTRA_LIBS` 关键字
