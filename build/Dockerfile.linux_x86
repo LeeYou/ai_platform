@@ -30,8 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     python3 \
     python3-pip \
-    # NCNN CPU 推理库 + OpenCV（agface_* 能力插件迁移自 ai_agface 依赖）
-    libncnn-dev \
+    # OpenCV + OpenMP（NCNN 由仓库内 cpp/third_party/ncnn 提供）
     libopencv-dev \
     libomp-dev \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 \
