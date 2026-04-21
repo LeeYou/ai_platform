@@ -84,6 +84,7 @@ RUN pip install --no-cache-dir -r build/backend/requirements.txt
 
 COPY build/backend/ build/backend/
 COPY cpp/ cpp/
+RUN test -f /app/cpp/third_party/ncnn/CMakeLists.txt
 COPY --from=frontend-builder /app/build/frontend/dist build/frontend/dist
 
 # Ensure log directory exists
