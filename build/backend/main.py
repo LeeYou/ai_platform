@@ -79,6 +79,10 @@ COMPILE_GPU_CMAKE_FLAGS = {
 }
 
 
+def _is_agface_capability(capability: str) -> bool:
+    return capability.startswith("agface_")
+
+
 # ---------------------------------------------------------------------------
 # Logging setup — MUST run before any third-party imports so that
 # import errors are captured in the log file.
@@ -401,6 +405,75 @@ def _capability_supports_runtime_gpu(capability: str) -> bool:
     return False
 
 
+def _first_existing_file(candidates: list[str]) -> str:
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+def _first_matching_glob(patterns: tuple[str, ...]) -> str:
+    for pattern in patterns:
+        matches = sorted(glob(pattern, recursive=True))
+        if matches:
+            return matches[0]
+    return ""
+
+
+def _probe_ncnn_environment() -> dict:
+    vendored_dir = os.path.realpath(os.path.join(CPP_SOURCE_DIR, "third_party", "ncnn"))
+    vendored_cmakelists = os.path.join(vendored_dir, "CMakeLists.txt")
+    ncnn_root = os.getenv("NCNN_ROOT", "").strip()
+
+    include_candidates = [
+        os.path.join(ncnn_root, "include", "ncnn", "net.h") if ncnn_root else "",
+        os.path.join(ncnn_root, "include", "net.h") if ncnn_root else "",
+        "/usr/local/include/ncnn/net.h",
+        "/usr/local/include/net.h",
+        "/usr/include/ncnn/net.h",
+        "/usr/include/net.h",
+        "/usr/include/x86_64-linux-gnu/ncnn/net.h",
+    ]
+    library_patterns = tuple(
+        pattern for pattern in (
+            os.path.join(ncnn_root, "lib", "libncnn.so*") if ncnn_root else "",
+            os.path.join(ncnn_root, "lib64", "libncnn.so*") if ncnn_root else "",
+            "/usr/local/lib/libncnn.so*",
+            "/usr/local/lib64/libncnn.so*",
+            "/usr/lib/libncnn.so*",
+            "/usr/lib64/libncnn.so*",
+            "/usr/lib/x86_64-linux-gnu/libncnn.so*",
+        ) if pattern
+    )
+    config_candidates = [
+        os.path.join(ncnn_root, "lib", "cmake", "ncnn", "ncnnConfig.cmake") if ncnn_root else "",
+        os.path.join(ncnn_root, "lib64", "cmake", "ncnn", "ncnnConfig.cmake") if ncnn_root else "",
+        "/usr/local/lib/cmake/ncnn/ncnnConfig.cmake",
+        "/usr/local/lib64/cmake/ncnn/ncnnConfig.cmake",
+        "/usr/lib/cmake/ncnn/ncnnConfig.cmake",
+        "/usr/lib64/cmake/ncnn/ncnnConfig.cmake",
+        "/usr/lib/x86_64-linux-gnu/cmake/ncnn/ncnnConfig.cmake",
+    ]
+
+    system_ncnn_header = _first_existing_file(include_candidates)
+    system_ncnn_library = _first_matching_glob(library_patterns)
+    ncnn_config = _first_existing_file(config_candidates)
+    vendored_ncnn_available = os.path.isfile(vendored_cmakelists)
+    system_ncnn_available = bool((system_ncnn_header and system_ncnn_library) or ncnn_config)
+
+    return {
+        "vendored_ncnn_dir": vendored_dir,
+        "vendored_ncnn_cmakelists": vendored_cmakelists,
+        "vendored_ncnn_available": vendored_ncnn_available,
+        "ncnn_root": ncnn_root,
+        "system_ncnn_header": system_ncnn_header,
+        "system_ncnn_library": system_ncnn_library,
+        "ncnn_config": ncnn_config,
+        "system_ncnn_available": system_ncnn_available,
+        "ncnn_available": vendored_ncnn_available or system_ncnn_available,
+    }
+
+
 def _capability_requires_compile_gpu_toolchain(capability: str) -> bool:
     for path in _capability_source_files(capability):
         if path.endswith((".cu", ".cuh")):
@@ -450,6 +523,8 @@ def _probe_builder_environment() -> dict:
     if cuda_toolkit_available and tensorrt_available and onnxruntime_package == "gpu":
         supports_compile_time_gpu_features.append("ENABLE_TENSORRT")
 
+    ncnn_env = _probe_ncnn_environment()
+
     return {
         "builder_image": os.getenv("BUILDER_IMAGE", os.getenv("HOSTNAME", "unknown")),
         "builder_toolchain_profile": os.getenv("BUILDER_TOOLCHAIN_PROFILE", "cpu-ort"),
@@ -466,6 +541,15 @@ def _probe_builder_environment() -> dict:
         "onnxruntime_package": onnxruntime_package,
         "onnxruntime_cuda_provider_library": ort_cuda_provider if os.path.exists(ort_cuda_provider) else "",
         "supports_compile_time_gpu_features": supports_compile_time_gpu_features,
+        "vendored_ncnn_dir": ncnn_env["vendored_ncnn_dir"],
+        "vendored_ncnn_cmakelists": ncnn_env["vendored_ncnn_cmakelists"],
+        "vendored_ncnn_available": ncnn_env["vendored_ncnn_available"],
+        "ncnn_root": ncnn_env["ncnn_root"],
+        "system_ncnn_header": ncnn_env["system_ncnn_header"],
+        "system_ncnn_library": ncnn_env["system_ncnn_library"],
+        "ncnn_config": ncnn_env["ncnn_config"],
+        "system_ncnn_available": ncnn_env["system_ncnn_available"],
+        "ncnn_available": ncnn_env["ncnn_available"],
     }
 
 
@@ -510,6 +594,20 @@ def _validate_build_environment(capability: str, extra_args: list[str] | None) -
             missing.append("ONNX Runtime GPU package")
         if not builder_env["tensorrt_available"]:
             missing.append("TensorRT headers/libs")
+
+    if _is_agface_capability(capability) and not builder_env["ncnn_available"]:
+        vendored_hint = builder_env["vendored_ncnn_cmakelists"]
+        ncnn_root_hint = builder_env["ncnn_root"] or "<unset>"
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{capability} 依赖 NCNN，但当前 builder 未检测到可用 NCNN。"
+                f"未发现 vendored NCNN: {vendored_hint}；"
+                f"NCNN_ROOT={ncnn_root_hint}；"
+                "请确认 builder 中包含 cpp/third_party/ncnn，或安装系统 ncnn（header+library / ncnnConfig.cmake），"
+                "或显式设置 NCNN_ROOT 后重试。"
+            ),
+        )
 
     if missing:
         missing_text = "，".join(dict.fromkeys(missing))
@@ -740,6 +838,13 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
                 f"# onnxruntime_package={builder_env['onnxruntime_package']}\n"
                 f"# cuda_toolkit_available={builder_env['cuda_toolkit_available']}\n"
                 f"# tensorrt_available={builder_env['tensorrt_available']}\n"
+                f"# ncnn_available={builder_env['ncnn_available']}\n"
+                f"# vendored_ncnn_available={builder_env['vendored_ncnn_available']}\n"
+                f"# vendored_ncnn_cmakelists={builder_env['vendored_ncnn_cmakelists']}\n"
+                f"# ncnn_root={builder_env['ncnn_root'] or '(unset)'}\n"
+                f"# system_ncnn_header={builder_env['system_ncnn_header'] or '(not found)'}\n"
+                f"# system_ncnn_library={builder_env['system_ncnn_library'] or '(not found)'}\n"
+                f"# ncnn_config={builder_env['ncnn_config'] or '(not found)'}\n"
             )
             if gpu_profile["legacy_build_gpu_requested"]:
                 lf.write(
