@@ -42,9 +42,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---------------------------------------------------------------------------
 ARG ONNXRUNTIME_VERSION=1.18.1
 ARG ONNXRUNTIME_PACKAGE=onnxruntime-linux-x64
-RUN curl -fsSL \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
-    -o /tmp/ort.tgz \
+ARG GITHUB_HTTPS_PROXY=
+ARG GITHUB_HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG https_proxy=
+ARG HTTP_PROXY=
+ARG http_proxy=
+RUN github_proxy="${GITHUB_HTTPS_PROXY:-${GITHUB_HTTP_PROXY:-${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}}}" \
+    && ort_url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE}-${ONNXRUNTIME_VERSION}.tgz" \
+    && if [ -n "${github_proxy}" ]; then \
+        curl --http1.1 --retry 8 --retry-all-errors --retry-delay 5 -x "${github_proxy}" -fsSL "${ort_url}" -o /tmp/ort.tgz; \
+    else \
+        curl --http1.1 --retry 8 --retry-all-errors --retry-delay 5 -fsSL "${ort_url}" -o /tmp/ort.tgz; \
+    fi \
     && tar -xzf /tmp/ort.tgz -C /usr/local --strip-components=1 \
     && rm /tmp/ort.tgz
 

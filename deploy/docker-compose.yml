@@ -172,6 +172,13 @@ services:
     build:
       context: ..
       dockerfile: build/Dockerfile.linux_x86
+      args:
+        GITHUB_HTTPS_PROXY: ${GITHUB_HTTPS_PROXY:-}
+        GITHUB_HTTP_PROXY: ${GITHUB_HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        https_proxy: ${https_proxy:-}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        http_proxy: ${http_proxy:-}
     container_name: ai-builder
     <<: *default-restart
     ports:
@@ -205,6 +212,13 @@ services:
     build:
       context: ..
       dockerfile: build/Dockerfile.linux_x86_gpu
+      args:
+        GITHUB_HTTPS_PROXY: ${GITHUB_HTTPS_PROXY:-}
+        GITHUB_HTTP_PROXY: ${GITHUB_HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        https_proxy: ${https_proxy:-}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        http_proxy: ${http_proxy:-}
     container_name: ai-builder-gpu
     <<: *default-restart
     ports:
@@ -245,6 +259,13 @@ services:
     build:
       context: ..
       dockerfile: build/Dockerfile.linux_arm
+      args:
+        GITHUB_HTTPS_PROXY: ${GITHUB_HTTPS_PROXY:-}
+        GITHUB_HTTP_PROXY: ${GITHUB_HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        https_proxy: ${https_proxy:-}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        http_proxy: ${http_proxy:-}
     container_name: ai-builder-arm
     <<: *default-restart
     ports:
@@ -276,6 +297,13 @@ services:
     build:
       context: ..
       dockerfile: build/Dockerfile.windows
+      args:
+        GITHUB_HTTPS_PROXY: ${GITHUB_HTTPS_PROXY:-}
+        GITHUB_HTTP_PROXY: ${GITHUB_HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        https_proxy: ${https_proxy:-}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        http_proxy: ${http_proxy:-}
     container_name: ai-builder-windows
     <<: *default-restart
     ports:

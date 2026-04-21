@@ -42,9 +42,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ONNXRuntime (CPU, Windows x64)
 # ---------------------------------------------------------------------------
 ARG ONNXRUNTIME_VERSION=1.18.1
-RUN curl -fsSL \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip" \
-    -o /tmp/ort.zip \
+ARG GITHUB_HTTPS_PROXY=
+ARG GITHUB_HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG https_proxy=
+ARG HTTP_PROXY=
+ARG http_proxy=
+RUN github_proxy="${GITHUB_HTTPS_PROXY:-${GITHUB_HTTP_PROXY:-${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}}}" \
+    && ort_url="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip" \
+    && if [ -n "${github_proxy}" ]; then \
+        curl --http1.1 --retry 8 --retry-all-errors --retry-delay 5 -x "${github_proxy}" -fsSL "${ort_url}" -o /tmp/ort.zip; \
+    else \
+        curl --http1.1 --retry 8 --retry-all-errors --retry-delay 5 -fsSL "${ort_url}" -o /tmp/ort.zip; \
+    fi \
     && mkdir -p /opt/onnxruntime-win-x64 \
     && unzip -q /tmp/ort.zip -d /opt \
     && mv /opt/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}/* /opt/onnxruntime-win-x64/ \
