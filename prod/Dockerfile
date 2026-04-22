@@ -49,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
     # agface_* 能力插件（NCNN 后端）所需运行时依赖
-    libopencv-core4.5d libopencv-imgproc4.5d libopencv-imgcodecs4.5d \
+    libopencv-core4.5d libopencv-imgproc4.5d libopencv-imgcodecs4.5d libopencv-highgui4.5d \
     libgomp1 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3 /usr/bin/python \
@@ -89,7 +89,11 @@ RUN set -eux; \
     rm /tmp/ort.tgz
 RUN ldconfig \
     && ldconfig -p | grep -q "libcublasLt.so.11" \
-    && ldconfig -p | grep -q "libcudnn.so.8"
+    && ldconfig -p | grep -q "libcudnn.so.8" \
+    && ldconfig -p | grep -q "libopencv_core.so.4.5d" \
+    && ldconfig -p | grep -q "libopencv_imgproc.so.4.5d" \
+    && ldconfig -p | grep -q "libopencv_imgcodecs.so.4.5d" \
+    && ldconfig -p | grep -q "libopencv_highgui.so.4.5d"
 
 # ---------------------------------------------------------------------------
 # Web service source
