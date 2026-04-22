@@ -20,6 +20,7 @@ add_library(agface_common STATIC
     src/json_result.cpp
     src/vision_analysis_common.cpp
     src/legacy_vision_context.cpp
+    src/face_detector.cpp
     src/face_align.cpp
     src/feature_extract.cpp
 )
