@@ -41,6 +41,18 @@ if(EXISTS "${_NCNN_VENDORED_DIR}/CMakeLists.txt" AND NOT NCNN_DISABLE_VENDORED)
     add_subdirectory("${_NCNN_VENDORED_DIR}" third_party_ncnn EXCLUDE_FROM_ALL)
 
     if(TARGET ncnn)
+        set(_NCNN_VENDORED_INCLUDE_ROOT "${CMAKE_BINARY_DIR}/ncnn_vendored_include")
+        file(MAKE_DIRECTORY "${_NCNN_VENDORED_INCLUDE_ROOT}")
+        if(NOT EXISTS "${_NCNN_VENDORED_INCLUDE_ROOT}/ncnn")
+            file(CREATE_LINK
+                "${_NCNN_VENDORED_DIR}/src"
+                "${_NCNN_VENDORED_INCLUDE_ROOT}/ncnn"
+                SYMBOLIC
+                COPY_ON_ERROR
+            )
+        endif()
+        set_property(TARGET ncnn APPEND PROPERTY
+            INTERFACE_INCLUDE_DIRECTORIES "${_NCNN_VENDORED_INCLUDE_ROOT}")
         add_library(NCNN::NCNN ALIAS ncnn)
         set(NCNN_FOUND TRUE)
         message(STATUS "FindNCNN: configured NCNN::NCNN from vendored source")
