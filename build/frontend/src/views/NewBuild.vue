@@ -193,6 +193,8 @@ import {
   getCapabilityDiagnostics,
   getBuilderDiagnostics,
   getKeyPairs,
+  getBuild,
+  getBuildLogs,
   triggerBuild,
   connectBuildWs,
   extractErrorMessage,
@@ -353,6 +355,29 @@ async function loadBuilderDiagnostics() {
   }
 }
 
+async function refreshBuildStatus(jobId) {
+  try {
+    const res = await getBuild(jobId)
+    currentBuild.value = res.data
+  } catch {
+    // ignore refresh failures to preserve current UI state
+  }
+}
+
+async function refreshBuildLogs(jobId) {
+  try {
+    const res = await getBuildLogs(jobId)
+    if (typeof res.data === 'string') {
+      logText.value = res.data
+      await nextTick()
+      const ta = logArea.value?.$el?.querySelector('textarea')
+      if (ta) ta.scrollTop = ta.scrollHeight
+    }
+  } catch {
+    // ignore log refresh failures
+  }
+}
+
 function streamLogs(jobId) {
   const ws = connectBuildWs(jobId)
   ws.onmessage = (ev) => {
@@ -365,7 +390,8 @@ function streamLogs(jobId) {
           if (ta) ta.scrollTop = ta.scrollHeight
         })
       } else if (msg.type === 'done') {
-        currentBuild.value = { ...currentBuild.value, status: msg.status || 'done' }
+        refreshBuildStatus(jobId)
+        refreshBuildLogs(jobId)
         ws.close()
       }
     } catch { /* ignore parse errors */ }
@@ -373,10 +399,9 @@ function streamLogs(jobId) {
   ws.onerror = () => {
     logText.value += '\n[WebSocket 连接错误]\n'
   }
-  ws.onclose = () => {
-    if (currentBuild.value?.status === 'running' || currentBuild.value?.status === 'pending') {
-      currentBuild.value = { ...currentBuild.value, status: 'done' }
-    }
+  ws.onclose = async () => {
+    await refreshBuildStatus(jobId)
+    await refreshBuildLogs(jobId)
   }
 }
 

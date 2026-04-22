@@ -734,6 +734,43 @@ def _update_current_symlink(job: dict) -> None:
     logger.info("Build %s: updated current symlink to %s", job["job_id"], relative_target)
 
 
+def _append_build_log(log_path: str, text: str) -> None:
+    try:
+        with open(log_path, "a", encoding="utf-8") as lf:
+            lf.write(text)
+            if not text.endswith("\n"):
+                lf.write("\n")
+            lf.flush()
+    except OSError as exc:
+        logger.warning("Failed to append build log %s: %s", log_path, exc)
+
+
+def _find_capability_artifact(artifact_dir: str, capability: str) -> str:
+    lib_dir = os.path.join(artifact_dir, "lib")
+    if not os.path.isdir(lib_dir):
+        return ""
+
+    candidates = []
+    prefix = f"lib{capability}.so"
+    for name in os.listdir(lib_dir):
+        if name == prefix or name.startswith(prefix + "."):
+            full_path = os.path.join(lib_dir, name)
+            if os.path.isfile(full_path):
+                candidates.append(full_path)
+
+    if not candidates:
+        return ""
+
+    return sorted(
+        candidates,
+        key=lambda path: (
+            os.path.basename(path) != prefix,
+            len(os.path.basename(path)),
+            os.path.basename(path),
+        ),
+    )[0]
+
+
 def _create_lib_symlinks(artifact_dir: str, job_id: str) -> None:
     """Create standard library symlinks (libfoo.so -> libfoo.so.1 -> libfoo.so.1.0.0)."""
     lib_dir = os.path.join(artifact_dir, "lib")
@@ -867,6 +904,14 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
                     lf.flush()
                 await proc.wait()
                 if proc.returncode != 0:
+                    _append_build_log(
+                        log_path,
+                        (
+                            "\n# Build failed\n"
+                            f"# failed_command={cmd_display}\n"
+                            f"# exit_code={proc.returncode}\n"
+                        ),
+                    )
                     job["status"] = "failed"
                     job["error_msg"] = f"Build command failed: {cmd_display}"
                     job["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -876,15 +921,32 @@ async def _run_build(job_id: str, req: BuildRequest) -> None:
 
         # Create library symlinks after successful build
         _create_lib_symlinks(artifact_dir, job_id)
+        primary_artifact = _find_capability_artifact(artifact_dir, job["capability"])
+        if not primary_artifact:
+            raise RuntimeError(
+                f"Build finished but no capability artifact was installed for {job['capability']} under {os.path.join(artifact_dir, 'lib')}"
+            )
         _write_build_info(job, req, artifact_dir)
         if req.mark_as_current:
             _update_current_symlink(job)
+
+        _append_build_log(
+            log_path,
+            (
+                "\n# Build result\n"
+                f"# artifact_dir={artifact_dir}\n"
+                f"# primary_artifact={primary_artifact}\n"
+                f"# current_symlink_updated={'yes' if req.mark_as_current else 'no'}\n"
+                "# build_status=done\n"
+            ),
+        )
 
         job["status"] = "done"
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
         _persist_jobs()
         logger.info("Build %s completed successfully", job_id)
     except Exception as exc:
+        _append_build_log(log_path, f"\n# Build failed\n# error={exc}\n")
         job["status"] = "failed"
         job["error_msg"] = str(exc)
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
