@@ -100,6 +100,7 @@ try:
         PUBKEY_PATH,
         TRUSTED_PUBKEY_SHA256,
         list_available_capabilities,
+        list_runtime_so_candidates,
         resolve_libs_dir,
         resolve_model_dir,
         resolve_models_dir,
@@ -662,14 +663,22 @@ def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dic
 def _capability_diagnostics() -> dict:
     runtime = get_runtime()
     runtime_so_path = resolve_runtime_so_path()
+    runtime_so_candidates = list_runtime_so_candidates()
     libs_dir = resolve_libs_dir()
     models_dir = resolve_models_dir()
     effective_pubkey_path = _resolve_effective_pubkey_path()
     discovered_caps = list_available_capabilities()
     loaded_caps = runtime.get_capabilities() if runtime else []
+    loaded_capability_names = [cap.get("name", "") for cap in loaded_caps if cap.get("name")]
+    discovered_model_capability_names = [
+        cap.get("capability", "") for cap in discovered_caps if cap.get("capability")
+    ]
+    loaded_set = set(loaded_capability_names)
+    discovered_set = set(discovered_model_capability_names)
     return {
         "runtime_initialized": bool(runtime),
         "runtime_so_path": runtime_so_path,
+        "runtime_so_candidates": runtime_so_candidates,
         "runtime_so_found": bool(runtime_so_path and os.path.exists(runtime_so_path)),
         "libs_dir": libs_dir,
         "libs_dir_exists": os.path.isdir(libs_dir),
@@ -679,7 +688,7 @@ def _capability_diagnostics() -> dict:
         "license_exists": os.path.exists(LICENSE_PATH),
         "pubkey_path": effective_pubkey_path,
         "pubkey_exists": os.path.exists(effective_pubkey_path),
-        "loaded_capabilities": [cap.get("name", "") for cap in loaded_caps if cap.get("name")],
+        "loaded_capabilities": loaded_capability_names,
         "loaded_capability_details": [
             {
                 **cap,
@@ -687,9 +696,9 @@ def _capability_diagnostics() -> dict:
             }
             for cap in loaded_caps
         ],
-        "discovered_model_capabilities": [
-            cap.get("capability", "") for cap in discovered_caps if cap.get("capability")
-        ],
+        "discovered_model_capabilities": discovered_model_capability_names,
+        "discovered_but_not_loaded": sorted(discovered_set - loaded_set),
+        "loaded_without_models": sorted(loaded_set - discovered_set),
         "discovered_models": [
             {
                 "capability": cap.get("capability", ""),

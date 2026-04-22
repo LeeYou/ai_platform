@@ -5,6 +5,7 @@ Copyright © 2026 北京爱知之星科技股份有限公司 (Agile Star). agile
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
@@ -74,6 +75,75 @@ def resolve_lib_path(capability: str) -> str | None:
     return None
 
 
+def _dedupe_paths(paths: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for path in paths:
+        normalized = os.path.normpath(path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(path)
+    return result
+
+
+def _iter_runtime_so_candidates_for_base(base: str) -> list[str]:
+    candidates: list[str] = []
+
+    nested_root = os.path.join(base, "libs", "linux_x86_64")
+    if os.path.isdir(nested_root):
+        for entry in sorted(os.listdir(nested_root)):
+            entry_path = os.path.join(nested_root, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            current_path = os.path.join(entry_path, "current", "lib", "libai_runtime.so")
+            direct_path = os.path.join(entry_path, "lib", "libai_runtime.so")
+            if os.path.exists(current_path):
+                candidates.append(current_path)
+            if os.path.exists(direct_path):
+                candidates.append(direct_path)
+
+    libs_root = os.path.join(base, "libs")
+    if os.path.isdir(libs_root):
+        for entry in sorted(os.listdir(libs_root)):
+            if entry == "linux_x86_64":
+                continue
+            entry_path = os.path.join(libs_root, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            current_path = os.path.join(entry_path, "current", "lib", "libai_runtime.so")
+            direct_path = os.path.join(entry_path, "lib", "libai_runtime.so")
+            if os.path.exists(current_path):
+                candidates.append(current_path)
+            if os.path.exists(direct_path):
+                candidates.append(direct_path)
+
+        flat_path = os.path.join(libs_root, "libai_runtime.so")
+        if os.path.exists(flat_path):
+            candidates.append(flat_path)
+
+    return _dedupe_paths(candidates)
+
+
+def list_runtime_so_candidates() -> list[str]:
+    env_path = os.getenv("AI_RUNTIME_SO_PATH", "").strip()
+    if env_path and os.path.exists(env_path):
+        return [env_path]
+
+    candidates: list[str] = []
+    for base in (MOUNT_ROOT, BUILTIN_ROOT):
+        candidates.extend(_iter_runtime_so_candidates_for_base(base))
+    return _dedupe_paths(candidates)
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def resolve_runtime_so_path() -> str | None:
     """Return path to libai_runtime.so — mount takes priority over built-in.
 
@@ -83,38 +153,37 @@ def resolve_runtime_so_path() -> str | None:
     3. Flattened mount (docker-compose.prod.yml): /libs/<capability>/lib/libai_runtime.so
     4. Current symlink/dir: /libs/<capability>/current/lib/libai_runtime.so
     """
-    for base in (MOUNT_ROOT, BUILTIN_ROOT):
-        # Try nested structure (builder outputs libai_runtime.so alongside each capability SO)
-        libs_x86_64 = os.path.join(base, "libs", "linux_x86_64")
-        if os.path.isdir(libs_x86_64):
-            for cap_dir in os.listdir(libs_x86_64):
-                nested_path = os.path.join(libs_x86_64, cap_dir, "lib", "libai_runtime.so")
-                if os.path.exists(nested_path):
-                    return nested_path
+    candidates = list_runtime_so_candidates()
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
 
-        # Try flattened mount structure (linux_x86_64 already at mount root)
-        libs_dir = os.path.join(base, "libs")
-        if os.path.isdir(libs_dir):
-            # Scan capability subdirectories directly under libs/
-            for entry in os.listdir(libs_dir):
-                entry_path = os.path.join(libs_dir, entry)
-                # Skip if it's the linux_x86_64 dir (already handled above)
-                if entry == "linux_x86_64" or not os.path.isdir(entry_path):
-                    continue
-                flattened_path = os.path.join(entry_path, "lib", "libai_runtime.so")
-                if os.path.exists(flattened_path):
-                    return flattened_path
+    hash_counts: dict[str, int] = {}
+    candidate_hashes: dict[str, str] = {}
+    for path in candidates:
+        try:
+            file_hash = _sha256_file(path)
+        except OSError:
+            file_hash = f"missing:{path}"
+        candidate_hashes[path] = file_hash
+        hash_counts[file_hash] = hash_counts.get(file_hash, 0) + 1
 
-                current_path = os.path.join(entry_path, "current", "lib", "libai_runtime.so")
-                if os.path.exists(current_path):
-                    return current_path
+    def _score(path: str) -> tuple[int, int, float, str]:
+        normalized = os.path.normpath(path)
+        current_bonus = 1 if f"{os.sep}current{os.sep}" in normalized else 0
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0.0
+        return (
+            hash_counts.get(candidate_hashes[path], 0),
+            current_bonus,
+            mtime,
+            normalized,
+        )
 
-        # Try flat structure
-        flat_path = os.path.join(base, "libs", "libai_runtime.so")
-        if os.path.exists(flat_path):
-            return flat_path
-
-    return None
+    return sorted(candidates, key=_score, reverse=True)[0]
 
 
 def resolve_libs_dir() -> str:
