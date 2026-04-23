@@ -112,16 +112,16 @@ export function getPipeline(id) {
   return http.get(`/pipelines/${id}`)
 }
 
-export function createPipeline(data) {
-  return http.post('/pipelines', data)
+export function createPipeline(data, token = getAdminToken()) {
+  return http.post('/pipelines', data, withAdminHeaders({}, token))
 }
 
-export function updatePipeline(id, data) {
-  return http.put(`/pipelines/${id}`, data)
+export function updatePipeline(id, data, token = getAdminToken()) {
+  return http.put(`/pipelines/${id}`, data, withAdminHeaders({}, token))
 }
 
-export function deletePipeline(id) {
-  return http.delete(`/pipelines/${id}`)
+export function deletePipeline(id, token = getAdminToken()) {
+  return http.delete(`/pipelines/${id}`, withAdminHeaders({}, token))
 }
 
 export function validatePipeline(id) {
