@@ -98,6 +98,18 @@
 **/*.onnx
 **/*.h5
 
+# 允许本地 data/ai_platform 资源作为可选内置交付内容进入构建上下文
+!data/
+!data/ai_platform/
+!data/ai_platform/libs/
+!data/ai_platform/libs/**
+!data/ai_platform/models/
+!data/ai_platform/models/**
+!data/ai_platform/licenses/
+!data/ai_platform/licenses/**
+!data/ai_platform/pipelines/
+!data/ai_platform/pipelines/**
+
 # 测试文件（可选：如果镜像中不需要运行测试）
 # **/tests
 # **/*_test.py

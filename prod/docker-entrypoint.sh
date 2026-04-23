@@ -51,6 +51,14 @@ else
     export AI_PUBKEY_PATH="${AI_PUBKEY_PATH:-/app/licenses/pubkey.pem}"
 fi
 
+if [ -d "/mnt/ai_platform/pipelines" ]; then
+    export PIPELINE_DIR="/mnt/ai_platform/pipelines"
+    echo "[ai-prod] Using mounted pipelines: ${PIPELINE_DIR}"
+else
+    export PIPELINE_DIR="${PIPELINE_DIR:-/app/pipelines}"
+    echo "[ai-prod] Using built-in pipelines: ${PIPELINE_DIR}"
+fi
+
 # ---------------------------------------------------------------------------
 # Start service
 # ---------------------------------------------------------------------------

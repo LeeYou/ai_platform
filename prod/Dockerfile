@@ -16,6 +16,17 @@ RUN cd prod/frontend \
     && npm install \
     && npm run build
 
+# ─── Stage 1.5: Optional bundled resources ───────────────────────────────────
+FROM alpine:3.20 AS bundled-resources
+
+WORKDIR /src
+COPY . /src/
+RUN mkdir -p /out/app/models /out/app/libs /out/app/licenses /out/app/pipelines \
+    && if [ -d /src/data/ai_platform/models ]; then cp -a /src/data/ai_platform/models/. /out/app/models/; fi \
+    && if [ -d /src/data/ai_platform/libs ]; then cp -a /src/data/ai_platform/libs/. /out/app/libs/; fi \
+    && if [ -d /src/data/ai_platform/licenses ]; then cp -a /src/data/ai_platform/licenses/. /out/app/licenses/; fi \
+    && if [ -d /src/data/ai_platform/pipelines ]; then cp -a /src/data/ai_platform/pipelines/. /out/app/pipelines/; fi
+
 # ─── Stage 2: Runtime ──────────────────────────────────────────────────────
 # Production service must ship a fixed CUDA 11.8 runtime so the delivered
 # customer image has a consistent GPU-capable environment.
@@ -120,7 +131,8 @@ COPY --from=frontend-builder /app/prod/frontend/dist prod/frontend/dist
 # Models must be trained/exported and placed in:
 #   - Built-in path: /app/models/
 #   - Mount path:    /mnt/ai_platform/models/
-RUN mkdir -p /app/models /app/libs /app/licenses /mnt/ai_platform /mnt/ai_platform/pipelines
+RUN mkdir -p /app/models /app/libs /app/licenses /app/pipelines /mnt/ai_platform /mnt/ai_platform/pipelines
+COPY --from=bundled-resources /out/app/ /app/
 
 # ---------------------------------------------------------------------------
 # Runtime environment
