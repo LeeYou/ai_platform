@@ -59,9 +59,11 @@
                 {{ licData.valid ? '有效' : '无效/过期' }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="到期时间">{{ licData.expiry || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="到期时间">{{ licenseExpiryDisplay }}</el-descriptions-item>
             <el-descriptions-item label="剩余天数">
-              <span v-if="licData.days != null">{{ licData.days }} 天</span>
+              <el-tag v-if="licData.days != null" :type="licenseDaysTagType">
+                {{ licenseDaysDisplay }}
+              </el-tag>
               <span v-else>—</span>
             </el-descriptions-item>
             <el-descriptions-item label="许可类型">{{ licData.type || '—' }}</el-descriptions-item>
@@ -122,6 +124,25 @@ const healthLoading = ref(false)
 const licData = ref({ valid: false, expiry: '', days: null, type: '' })
 const healthData = ref({ ok: false, gpu: false, version: '', uptime: '' })
 const showDiagnostics = computed(() => !loading.value && (capabilities.value.length === 0 || !healthData.value.ok))
+
+const licenseExpiryDisplay = computed(() => {
+  if (licData.value.expiry) return licData.value.expiry
+  if (licData.value.valid && licData.value.days === -1) return '长期有效'
+  return '—'
+})
+
+const licenseDaysDisplay = computed(() => {
+  if (licData.value.days === -1) return '长期有效'
+  if (licData.value.days != null) return `${licData.value.days} 天`
+  return '—'
+})
+
+const licenseDaysTagType = computed(() => {
+  if (licData.value.days === -1) return 'success'
+  if (licData.value.days > 30) return 'success'
+  if (licData.value.days > 7) return 'warning'
+  return 'danger'
+})
 
 onMounted(async () => {
   loading.value = true

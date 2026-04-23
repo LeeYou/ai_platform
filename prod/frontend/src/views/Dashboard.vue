@@ -3,7 +3,7 @@
     <el-row :gutter="20" style="margin-bottom:20px;">
       <el-col :span="6">
         <el-card shadow="hover">
-          <template #header><span>💓 服务状态</span></template>
+          <template #header><span> 服务状态</span></template>
           <div style="text-align:center;">
             <el-tag :type="healthOk ? 'success' : 'danger'" size="large">
               {{ healthOk ? '正常运行' : '异常' }}
@@ -13,13 +13,13 @@
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover">
-          <template #header><span>🧠 已加载能力</span></template>
+          <template #header><span> 已加载能力</span></template>
           <div style="font-size:32px;font-weight:bold;text-align:center;">{{ capCount }}</div>
         </el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover">
-          <template #header><span>📜 许可证状态</span></template>
+          <template #header><span> 许可证状态</span></template>
           <div style="text-align:center;">
             <el-tag :type="licenseValid ? 'success' : 'danger'" size="large">
               {{ licenseValid ? '有效' : '无效/过期' }}
@@ -29,7 +29,7 @@
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover">
-          <template #header><span>🖥️ GPU 状态</span></template>
+          <template #header><span> GPU 状态</span></template>
           <div style="text-align:center;">
             <el-tag :type="gpuAvailable ? 'success' : 'info'" size="large">
               {{ gpuAvailable ? 'GPU 可用' : '仅 CPU' }}
@@ -42,12 +42,12 @@
     <el-row :gutter="20" style="margin-bottom:20px;">
       <el-col :span="12">
         <el-card shadow="hover">
-          <template #header><span>📜 许可证信息</span></template>
+          <template #header><span> 许可证信息</span></template>
           <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="到期时间">{{ licenseExpiry || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="到期时间">{{ licenseExpiryDisplay }}</el-descriptions-item>
             <el-descriptions-item label="剩余天数">
-              <el-tag :type="licenseDays > 30 ? 'success' : licenseDays > 7 ? 'warning' : 'danger'" v-if="licenseDays !== null">
-                {{ licenseDays }} 天
+              <el-tag :type="licenseDaysTagType" v-if="licenseDays !== null">
+                {{ licenseDaysDisplay }}
               </el-tag>
               <span v-else>—</span>
             </el-descriptions-item>
@@ -57,7 +57,7 @@
       </el-col>
       <el-col :span="12">
         <el-card shadow="hover">
-          <template #header><span>⚡ 快捷操作</span></template>
+          <template #header><span> 快捷操作</span></template>
           <el-button type="primary" @click="$router.push('/api-test')">
             <el-icon><SetUp /></el-icon>
             API 推理测试
@@ -77,7 +77,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { getHealth, getCapabilities, getLicense, extractErrorMessage } from '../api/index.js'
 import { ElMessage } from 'element-plus'
 
@@ -88,6 +88,25 @@ const licenseExpiry = ref('')
 const licenseDays = ref(null)
 const licenseType = ref('')
 const gpuAvailable = ref(false)
+
+const licenseExpiryDisplay = computed(() => {
+  if (licenseExpiry.value) return licenseExpiry.value
+  if (licenseValid.value && licenseDays.value === -1) return '长期有效'
+  return '—'
+})
+
+const licenseDaysDisplay = computed(() => {
+  if (licenseDays.value === -1) return '长期有效'
+  if (licenseDays.value !== null) return `${licenseDays.value} 天`
+  return '—'
+})
+
+const licenseDaysTagType = computed(() => {
+  if (licenseDays.value === -1) return 'success'
+  if (licenseDays.value > 30) return 'success'
+  if (licenseDays.value > 7) return 'warning'
+  return 'danger'
+})
 
 onMounted(async () => {
   try {
