@@ -660,6 +660,101 @@ def _infer_for_pipeline(capability: str, image_bytes: bytes, _opts: dict) -> dic
         runtime.release(handle)
 
 
+def _infer_subcapability(capability: str, image_bytes: bytes) -> dict[str, Any]:
+    _validate_capability_name(capability)
+    runtime = get_runtime()
+    if not runtime:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": 5001, "message": "Runtime not initialized"},
+        )
+
+    handle = runtime.acquire(capability, timeout_ms=30000)
+    if not handle:
+        response = _acquire_failure_response(runtime, capability)
+        body = json.loads(response.body)
+        raise HTTPException(status_code=response.status_code, detail=body)
+
+    try:
+        img = _decode_image(image_bytes)
+        height, width, channels = img.shape
+        infer_result = runtime.infer(handle, img.tobytes(), width, height, channels)
+        return {
+            "capability": capability,
+            "model_version": _get_runtime_capability_version(runtime, capability),
+            "error_code": int(infer_result.get("error_code", AI_OK)),
+            "error_msg": str(infer_result.get("error_msg", "")),
+            "result": infer_result.get("result", {}),
+        }
+    finally:
+        runtime.release(handle)
+
+
+def _ensure_capabilities_loaded(required_capabilities: list[str]) -> None:
+    runtime = get_runtime()
+    if not runtime:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": 5001, "message": "Runtime not initialized"},
+        )
+
+    loaded = {cap.get("name", "") for cap in runtime.get_capabilities()}
+    missing = [cap for cap in required_capabilities if cap not in loaded]
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": 2001,
+                "message": f"required capabilities are not loaded: {missing}",
+                "missing": missing,
+                "loaded": sorted(loaded),
+            },
+        )
+
+
+def _is_no_face_subresult(subresult: dict[str, Any]) -> bool:
+    payload = subresult.get("result") if isinstance(subresult, dict) else None
+    if not isinstance(payload, dict):
+        return False
+    message = str(payload.get("message", "")).strip().lower()
+    return payload.get("status") == 0 and message == "no face"
+
+
+def _compute_face_area_ratio(face_bbox: Any, image_width: int, image_height: int) -> Optional[float]:
+    if image_width <= 0 or image_height <= 0:
+        return None
+    if not isinstance(face_bbox, (list, tuple)) or len(face_bbox) != 4:
+        return None
+
+    try:
+        bbox_width = float(face_bbox[2])
+        bbox_height = float(face_bbox[3])
+    except (TypeError, ValueError):
+        return None
+
+    if bbox_width <= 0.0 or bbox_height <= 0.0:
+        return None
+
+    ratio = (bbox_width * bbox_height) / float(image_width * image_height)
+    return round(max(0.0, min(1.0, ratio)), 6)
+
+
+def _max_face_area_ratio(image_width: int, image_height: int, subresults: list[dict[str, Any]]) -> Optional[float]:
+    ratios = [
+        ratio
+        for ratio in (
+            _compute_face_area_ratio(
+                subresult.get("result", {}).get("face_bbox") if isinstance(subresult.get("result"), dict) else None,
+                image_width,
+                image_height,
+            )
+            for subresult in subresults
+        )
+        if ratio is not None
+    ]
+    return max(ratios) if ratios else None
+
+
 def _capability_diagnostics() -> dict:
     runtime = get_runtime()
     runtime_so_path = resolve_runtime_so_path()
@@ -862,6 +957,142 @@ def license_status():
 # ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
+
+@app.post("/api/v1/infer/detect_fake_photo", tags=["inference"])
+async def detect_fake_photo_endpoint(
+    request: Request,
+    image: UploadFile = File(...),
+):
+    """Application-layer fake photo detection.
+
+    Flow:
+      1. Run `agface_fake_photo`
+      2. If it judges the image as real person, run `desktop_recapture_detect`
+      3. Return both sub-results plus the maximum detected face area ratio
+    """
+    del request
+    async with _acquire_infer_slot():
+        _ensure_capabilities_loaded(["agface_fake_photo"])
+
+        raw = await image.read()
+        _check_upload_size(raw)
+        decoded = _decode_image(raw)
+        image_height, image_width = decoded.shape[:2]
+
+        t0 = time.perf_counter()
+        agface_result = _infer_subcapability("agface_fake_photo", raw)
+
+        agface_payload = agface_result.get("result", {}) if isinstance(agface_result.get("result"), dict) else {}
+        is_real_person = agface_result.get("error_code") == AI_OK and agface_payload.get("result") == 0
+
+        desktop_result: Optional[dict[str, Any]] = None
+        desktop_executed = False
+        desktop_skip_reason: Optional[str] = None
+
+        if is_real_person:
+            _ensure_capabilities_loaded(["desktop_recapture_detect"])
+            desktop_result = _infer_subcapability("desktop_recapture_detect", raw)
+            desktop_executed = True
+        elif _is_no_face_subresult(agface_result):
+            desktop_skip_reason = "agface_fake_photo detected no face"
+        else:
+            desktop_skip_reason = "agface_fake_photo already classified as fake photo"
+
+        max_face_area_ratio = _max_face_area_ratio(
+            image_width,
+            image_height,
+            [sub for sub in [agface_result, desktop_result] if sub],
+        )
+
+        final_is_fake: Optional[bool] = None
+        final_label = "unknown"
+        decision_source: Optional[str] = None
+
+        if agface_result.get("error_code") == AI_OK and agface_payload.get("result") == 1:
+            final_is_fake = True
+            final_label = "fake"
+            decision_source = "agface_fake_photo"
+        elif desktop_result and desktop_result.get("error_code") == AI_OK:
+            desktop_payload = desktop_result.get("result", {}) if isinstance(desktop_result.get("result"), dict) else {}
+            final_is_fake = bool(desktop_payload.get("is_fake"))
+            final_label = str(desktop_payload.get("label", "fake" if final_is_fake else "real"))
+            decision_source = "desktop_recapture_detect"
+        elif _is_no_face_subresult(agface_result):
+            final_label = "no_face"
+
+        elapsed = round((time.perf_counter() - t0) * 1000.0, 2)
+        return _success(
+            "detect_fake_photo",
+            "composite",
+            {
+                "final_is_fake": final_is_fake,
+                "final_label": final_label,
+                "decision_source": decision_source,
+                "max_face_area_ratio": max_face_area_ratio,
+                "agface_fake_photo": agface_result,
+                "desktop_recapture_detect": desktop_result,
+                "desktop_recapture_executed": desktop_executed,
+                "desktop_recapture_skip_reason": desktop_skip_reason,
+            },
+            elapsed,
+        )
+
+
+@app.post("/api/v1/infer/detect_face_property", tags=["inference"])
+async def detect_face_property_endpoint(
+    request: Request,
+    image: UploadFile = File(...),
+):
+    """Application-layer face property aggregation.
+
+    Flow:
+      1. Run `agface_face_property`
+      2. Run `agface_barehead`
+      3. Return both sub-results plus the maximum detected face area ratio
+    """
+    del request
+    async with _acquire_infer_slot():
+        _ensure_capabilities_loaded(["agface_face_property", "agface_barehead"])
+
+        raw = await image.read()
+        _check_upload_size(raw)
+        decoded = _decode_image(raw)
+        image_height, image_width = decoded.shape[:2]
+
+        t0 = time.perf_counter()
+        face_property_result = _infer_subcapability("agface_face_property", raw)
+        barehead_result = _infer_subcapability("agface_barehead", raw)
+        max_face_area_ratio = _max_face_area_ratio(
+            image_width,
+            image_height,
+            [face_property_result, barehead_result],
+        )
+
+        face_property_payload = face_property_result.get("result", {}) if isinstance(face_property_result.get("result"), dict) else {}
+        barehead_payload = barehead_result.get("result", {}) if isinstance(barehead_result.get("result"), dict) else {}
+
+        elapsed = round((time.perf_counter() - t0) * 1000.0, 2)
+        return _success(
+            "detect_face_property",
+            "composite",
+            {
+                "max_face_area_ratio": max_face_area_ratio,
+                "summary": {
+                    "angle": face_property_payload.get("angle"),
+                    "glasses": face_property_payload.get("glasses"),
+                    "mask": face_property_payload.get("mask"),
+                    "eyeclosed": face_property_payload.get("eyeclosed"),
+                    "hat": face_property_payload.get("hat"),
+                    "fake": face_property_payload.get("fake"),
+                    "is_barehead": True if barehead_payload.get("result") == 1 else False if barehead_payload.get("result") == 0 else None,
+                    "barehead_confidence": barehead_payload.get("confidence"),
+                },
+                "agface_face_property": face_property_result,
+                "agface_barehead": barehead_result,
+            },
+            elapsed,
+        )
+
 
 @app.post("/api/v1/infer/{capability}", tags=["inference"])
 async def infer(
